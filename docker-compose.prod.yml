@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build: ./backend
+    restart: always
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATABASE_URL=sqlite:///data/media_fetch.db
+      - DOWNLOAD_DIR=/media
+    volumes:
+      - ./media:/media
+      - backend_data:/app/data
+
+  celery_worker:
+    build: ./backend
+    restart: always
+    command: celery -A app.tasks.download_tasks.celery_app worker --loglevel=info --concurrency=3
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATABASE_URL=sqlite:///data/media_fetch.db
+      - DOWNLOAD_DIR=/media
+    volumes:
+      - ./media:/media
+      - backend_data:/app/data
+
+  frontend:
+    build: ./frontend
+    restart: always
+    ports:
+      - "3000:80"
+
+volumes:
+  redis_data:
+  backend_data:

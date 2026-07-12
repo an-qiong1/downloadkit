@@ -1,0 +1,61 @@
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+.pytest_cache/
+
+# ── Node.js ─────────────────────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# ── Docker ──────────────────────────────────────────────────────────────
+config/
+
+# ── Download artifacts ──────────────────────────────────────────────────
+downloads/
+media/
+
+# ── Logs ────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Database ────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── IDE / Editor ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── AI Agent tooling ────────────────────────────────────────────────────
+.omo/
+.workbuddy/
+.playwright-mcp/
+.learnings/
+.trae/
+.opencode/
+
+# ── Credentials / secrets ──────────────────────────────────────────────
+*.cookies.json
+.env
+backend/.env
+backend/data/
+
+# ── Temp files ──────────────────────────────────────────────────────────
+*.bak
+*.tmp
+video_url.txt

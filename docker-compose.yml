@@ -1,0 +1,84 @@
+# =============================================================================
+# DownloadKit Docker Compose
+# Target: 飞牛OS (Debian 12) NAS — 192.168.10.11
+# =============================================================================
+#
+# ── 部署步骤 ───────────────────────────────────────────────────────────────
+# 1. 把项目传到 NAS:
+#    rsync -avz --exclude='.venv' --exclude='__pycache__' --exclude='.git' \
+#      ./ wuyang@192.168.10.11:/vol1/1000/影视/docker/downloadkit/
+#
+# 2. SSH 到 NAS 执行:
+#    cd /vol1/1000/影视/docker/downloadkit
+#    docker compose up -d --build
+#
+# 3. 访问: http://192.168.10.11:8765
+#
+# ── 更新 ──────────────────────────────────────────────────────────────────
+#    rsync 重新同步代码后:
+#    docker compose up -d --build --force-recreate
+#
+# ── 日志 ───────────────────────────────────────────────────────────────────
+#    docker compose logs -f
+# ──────────────────────────────────────────────────────────────────────────
+
+services:
+  downloadkit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: downloadkit:latest
+    container_name: downloadkit
+    restart: unless-stopped
+
+    # ── 端口 ──────────────────────────────────────────────────────────────
+    ports:
+      - "8765:8765"
+
+    # ── 持久化卷 ──────────────────────────────────────────────────────────
+    volumes:
+      # 配置/Cookie/history.db — Docker 命名卷，与本地数据完全隔离
+      - downloadkit_config:/root/.downloadkit
+      # 下载文件存放目录（NAS 共享存储，bind mount 方便直读）
+      - ./downloads:/app/downloads
+
+    # ── 环境变量 ──────────────────────────────────────────────────────────
+    environment:
+      - TZ=Asia/Shanghai
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - PYTHONIOENCODING=utf-8
+      # 容器标记：让后端知道运行在容器中（影响"打开目录"行为）
+      - RUNNING_IN_CONTAINER=1
+      # NAS 路径配置（用于"打开目录"弹窗展示路径信息）
+      - NAS_BASE_URL=http://192.168.10.11:5666
+      - NAS_FILES_PATH=/vol1/1000/影视/docker/downloadkit/downloads
+      - NAS_SMB_PATH=\\192.168.10.11\影视\docker\downloadkit\downloads
+
+    # ── 资源限制 ──────────────────────────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 128M
+
+    # ── 健康检查 ──────────────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    # ── 日志 ──────────────────────────────────────────────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  downloadkit_config:
