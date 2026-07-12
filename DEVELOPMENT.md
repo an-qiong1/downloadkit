@@ -58,7 +58,6 @@ downloadkit/
 │   ├── playlist.py          # 歌单解析
 │   ├── download_queue.py    # 下载队列
 │   ├── history.py           # 下载历史
-│   ├── movie.py             # 影视搜索
 │   ├── motion_photo.py      # 实况照片
 │   ├── utils.py             # 工具函数
 │   ├── logger.py            # 日志配置

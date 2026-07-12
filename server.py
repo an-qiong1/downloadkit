@@ -47,12 +47,10 @@ from downloadkit.xiaohongshu import parse_xiaohongshu, download_xhs_content, Xhs
 from downloadkit.download_queue import download_queue, TaskStatus, DownloadTask
 from downloadkit.history import download_history
 from downloadkit.exceptions import CancelException, PauseException
-from downloadkit.movie import MovieSource
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DownloadKit", description="Multi-platform resource downloader")
-movie_source = MovieSource()
 
 # Add CORS middleware
 app.add_middleware(
@@ -114,11 +112,6 @@ class BatchDownloadRequest(BaseModel):
     quality: str = "best"  # best, 1080, 720, 480
     rename_strategy: str | None = None  # 文件重名策略 (skip/overwrite/rename)，None则从配置读取
     merge_motion_photo: bool | None = None  # 是否合并实况照片（None时从配置读取）
-
-class MovieDownloadRequest(BaseModel):
-    url: str  # 视频播放地址
-    title: str  # 视频标题
-    source: str = ""  # 来源
 
 class SettingsUpdateRequest(BaseModel):
     general: dict | None = None
@@ -1096,7 +1089,7 @@ async def api_queue_status():
             task_info = {
                 "task_id": task_id,
                 "title": info.get("filename", "").replace(".mp3", "").replace(".mp4", ""),
-                "platform": "douyin" if "video_douyin" in task_id else "movie" if "movie_" in task_id else "music",
+                "platform": "douyin" if "video_douyin" in task_id else "music",
                 "status": status,
                 "progress": 1.0 if status == "completed" else 0.0,
                 "filename": info.get("filename", ""),
@@ -1175,211 +1168,6 @@ async def api_retry_download(task_id: str):
                 return {"status": "retried", "new_task_id": result["task_id"]}
     
     raise HTTPException(400, "无法重试此任务")
-
-
-# --- 影视API ---
-@app.get("/api/movie/sources")
-async def api_movie_sources():
-    """获取可用的影视源列表"""
-    return {"sources": movie_source.get_sources()}
-
-@app.get("/api/movie/search")
-async def api_movie_search(keyword: str = Query(...), source: str = Query(None)):
-    """搜索影视"""
-    try:
-        results = await movie_source.search(keyword, source=source)
-        return {
-            "results": [
-                {
-                    "vod_id": m.vod_id,
-                    "vod_name": m.vod_name,
-                    "vod_pic": m.vod_pic,
-                    "vod_year": m.vod_year,
-                    "vod_area": m.vod_area,
-                    "vod_class": m.vod_class,
-                    "type_name": m.type_name,
-                    "source": source or movie_source.get_sources()[0],
-                }
-                for m in results
-            ]
-        }
-    except Exception as e:
-        raise HTTPException(400, f"搜索失败: {str(e)}")
-
-@app.get("/api/movie/{vod_id}")
-async def api_movie_detail(vod_id: str, source: str = Query(None)):
-    """获取影视详情"""
-    try:
-        movie = None
-        
-        if source:
-            # 指定了源，只从该源获取
-            movie = await movie_source.get_detail(vod_id, source=source)
-        else:
-            # 未指定源，尝试所有源，返回第一个成功的
-            for src_name in movie_source.get_sources():
-                try:
-                    movie = await movie_source.get_detail(vod_id, source=src_name)
-                    if movie:
-                        source = src_name  # 记录成功获取的源
-                        break
-                except Exception as e:
-                    logger.debug(f"从 {src_name} 获取详情失败: {e}")
-                    continue
-        
-        if not movie:
-            raise HTTPException(404, "未找到影视信息")
-        
-        # 解析剧集（只解析当前源的剧集）
-        play_sources = movie_source.parse_episodes(movie.vod_play_url)
-        all_episodes = []
-        for ps in play_sources:
-            all_episodes.append({
-                "name": ps.name,
-                "source": source or "",
-                "episodes": [{"name": ep.name, "url": ep.url} for ep in ps.episodes]
-            })
-        
-        return {
-            "vod_id": movie.vod_id,
-            "vod_name": movie.vod_name,
-            "vod_pic": movie.vod_pic,
-            "vod_year": movie.vod_year,
-            "vod_area": movie.vod_area,
-            "vod_class": movie.vod_class,
-            "vod_actor": movie.vod_actor,
-            "vod_director": movie.vod_director,
-            "vod_content": movie.vod_content,
-            "type_name": movie.type_name,
-            "vod_play_from": movie.vod_play_from,
-            "episodes": all_episodes,
-            "source": source or "",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(400, f"获取详情失败: {str(e)}")
-
-@app.get("/api/movie/category/{category}")
-async def api_movie_category(category: str, page: int = Query(1), source: str = Query(None)):
-    """获取分类列表"""
-    try:
-        results = await movie_source.get_category(category, page=page, source=source)
-        return {
-            "results": [
-                {
-                    "vod_id": m.vod_id,
-                    "vod_name": m.vod_name,
-                    "vod_pic": m.vod_pic,
-                    "vod_year": m.vod_year,
-                    "vod_area": m.vod_area,
-                    "vod_class": m.vod_class,
-                    "type_name": m.type_name,
-                    "source": source or movie_source.get_sources()[0],
-                }
-                for m in results
-            ]
-        }
-    except Exception as e:
-        raise HTTPException(400, f"获取分类失败: {str(e)}")
-
-
-@app.post("/api/movie/download")
-async def api_movie_download(req: MovieDownloadRequest):
-    """下载影视视频"""
-    import yt_dlp
-    
-    task_id = f"movie_{int(time.time())}"
-    _downloads[task_id] = {"status": "downloading", "filename": "", "files": []}
-    
-    # 定义下载函数，接收 DownloadTask 参数
-    async def _download_func(task: DownloadTask):
-        try:
-            # 创建下载目录
-            download_dir = get_download_subdir('videos')
-            safe_title = sanitize_filename(req.title)
-            
-            # 配置yt-dlp选项
-            ydl_opts = {
-                'outtmpl': str(download_dir / f'{safe_title}.%(ext)s'),
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,
-            }
-            
-            # 如果是m3u8链接，使用ffmpeg下载
-            if '.m3u8' in req.url or '/m3u8' in req.url:
-                output_file = download_dir / f'{safe_title}.mp4'
-                cmd = [
-                    'ffmpeg', '-y',
-                    '-i', req.url,
-                    '-c', 'copy',
-                    '-bsf:a', 'aac_adtstoasc',
-                    str(output_file)
-                ]
-                
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                stdout, stderr = await process.communicate()
-                
-                if process.returncode == 0 and output_file.exists():
-                    task.status = TaskStatus.COMPLETED
-                    task.progress = 1.0
-                    task.filename = output_file.name
-                    _downloads[task_id] = {
-                        "status": "done",
-                        "filename": output_file.name,
-                        "files": [output_file.name]
-                    }
-                else:
-                    raise Exception(f"FFmpeg下载失败: {stderr.decode()[:200]}")
-            else:
-                # 使用yt-dlp下载
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([req.url])
-                
-                # 查找下载的文件
-                files = list(download_dir.glob(f'{safe_title}.*'))
-                if files:
-                    filename = files[0].name
-                    task.status = TaskStatus.COMPLETED
-                    task.progress = 1.0
-                    task.filename = filename
-                    _downloads[task_id] = {
-                        "status": "done",
-                        "filename": filename,
-                        "files": [filename]
-                    }
-                else:
-                    raise Exception("下载完成但未找到文件")
-                    
-        except CancelException:
-            _downloads[task_id] = {"status": "cancelled"}
-            raise
-        except PauseException:
-            _downloads[task_id] = {"status": "paused"}
-            raise
-        except Exception as e:
-            task.status = TaskStatus.FAILED
-            task.error = str(e)
-            _downloads[task_id] = {"status": "failed", "error": str(e)}
-            logger.error(f"影视下载失败: {e}")
-            raise
-    
-    # 通过队列管理任务
-    task_title = f"影视 - {req.title}"
-    await download_queue.add_task(
-        task_id=task_id,
-        url=req.url,
-        platform="movie",
-        title=task_title,
-        download_func=_download_func
-    )
-    
-    return {"task_id": task_id}
 
 
 # ========== 设置接口 ==========

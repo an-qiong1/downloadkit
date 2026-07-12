@@ -6,13 +6,11 @@ import {
   UnorderedListOutlined,
   PlaySquareOutlined,
   SettingOutlined,
-  GlobalOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import DownloadCenter from './pages/DownloadCenter'
 import BatchDownload from './pages/BatchDownload'
-import MovieSearch from './pages/MovieSearch'
 import TaskManager from './pages/TaskManager'
 import MediaLibrary from './pages/MediaLibrary'
 import Settings from './pages/Settings'
@@ -23,7 +21,6 @@ const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: '仪表盘' },
   { key: '/download', icon: <DownloadOutlined />, label: '下载中心' },
   { key: '/download/batch', icon: <DownloadOutlined />, label: '批量下载' },
-  { key: '/movie', icon: <GlobalOutlined />, label: '影视搜索' },
   { key: '/tasks', icon: <UnorderedListOutlined />, label: '下载管理' },
   { key: '/library', icon: <PlaySquareOutlined />, label: '媒体库' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
@@ -58,7 +55,6 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/download" element={<DownloadCenter />} />
             <Route path="/download/batch" element={<BatchDownload />} />
-            <Route path="/movie" element={<MovieSearch />} />
             <Route path="/tasks" element={<TaskManager />} />
             <Route path="/library" element={<MediaLibrary />} />
             <Route path="/settings" element={<Settings />} />

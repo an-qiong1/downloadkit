@@ -11,7 +11,6 @@
 - **音乐下载**：网易云音乐、QQ 音乐，支持单曲/批量/歌单导入，MP3 格式带 ID3 标签
 - **视频下载**：抖音、B站、YouTube、小红书，无水印下载
 - **实况照片**：Google Motion Photo 生成，兼容小米/OPPO/三星等设备相册
-- **影视搜索**：多源影视搜索和在线播放
 - **下载队列**：任务队列管理，支持暂停/恢复/重试/取消
 - **下载历史**：SQLite 持久化存储，支持搜索和清理
 - **CLI**：命令行工具，支持交互和非交互模式
@@ -89,7 +88,6 @@ pip install -e ".[dev]"
 | 视频下载 | ✅ | - |
 | 实况照片 | - | `Pillow`, `moviepy` |
 | 浏览器解析 | - | `playwright` |
-| 影视搜索 | ✅ | - |
 
 ## 下载原理
 
@@ -112,7 +110,6 @@ downloadkit/          # 核心 Python 库
 ├── bilibili.py       # B站解析
 ├── youtube.py        # YouTube解析
 ├── xiaohongshu.py    # 小红书解析
-├── movie.py          # 影视搜索
 ├── motion_photo.py   # 实况照片生成
 ├── history.py        # 下载历史(SQLite)
 ├── file_manager.py   # 安全文件管理
