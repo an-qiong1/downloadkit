@@ -28,6 +28,12 @@
   托盘菜单提供「显示主窗口 / 退出」；未开启该开关时关闭仍等于退出，
   原行为不变。exe 实测 `build/test-exe-tray.py`（注册表读写、托盘创建、
   WM_CLOSE 两种关闭路径、红线复核）
+- 新手使用说明（图文）`docs/使用说明.md`：覆盖启动、扫码登录、订阅、
+  自动检查、下载目录、开机启动与托盘、常见问题，4 张实测截图存
+  `docs/images/`；README 顶部给入口（小白不会自己去翻 docs/）
+- 静态资源引用一致性测试 `tests/test_static_refs.py`：扫描 9 个 JS 文件
+  约 190 处按 ID 取元素的写法，断言目标真的存在于 index.html，
+  再配关键锚点 ID 与 1.5 两个开关的两侧齐全性检查
 
 ### 优化
 - 项目合并：Windows 桌面版与 NAS Docker 版统一到一个仓库
@@ -38,6 +44,13 @@
 - PyInstaller `excludes` 误排除 PIL/Pillow（按「大而无用的库」一刀切），
   导致 exe 内托盘图标、实况照片、抖音图片处理全部拿不到 Pillow
   （`run.py` / `motion_photo` / `douyin` 三处引用一并受影响）
+- 歌单「全部下载」点了毫无反应：`music.js` 里 `downloadPlaylistSongs()`
+  引用了根本不存在的 `#playlist-clear-btn`，`null.style` 抛 TypeError，
+  而这行排在 `state.songs = songs` / `renderResults()` **之前**，
+  整个批量下载分支一次都没执行过。静态读代码看不出来，只有真点一次
+  才会暴露——已修复并用 `tests/test_static_refs.py` 钉死防止复发
+- 两处过期注释仍写「增量下载（A4 尚未实现）」，而 A4 早已实现：
+  `server.py` 订阅分组的依赖链、`subscription_service.py` 抓列表的说明
 - 抖音浏览器启动失败时未释放 playwright driver，轮询每失败一次就泄漏
   一个进程
 - 安装包版本号写成 1.0.0，与项目版本无关

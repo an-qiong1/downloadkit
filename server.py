@@ -1495,7 +1495,9 @@ async def api_douyin_logout():
 # 这是产品的核心能力：订阅抖音创作者，自动发现并下载新作品。
 #
 # 依赖链：
-#   登录（/api/douyin/login/*）→ 订阅本组接口 → 增量下载（A4 尚未实现）
+#   登录（/api/douyin/login/*）→ 订阅本组接口 → 增量下载（A4，已实现：
+#   subscription_service.check_creator 用水位线只捡基线之后的新作品）
+#   → 自动轮询（A5，downloadkit/poller.py）
 # 抓创作者主页必须登录，未登录时返回 401 + 可读的提示文案，
 # 而不是 500（这是正常业务状态，不是故障）。
 #

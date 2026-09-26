@@ -144,7 +144,7 @@ async def add_subscription(url: str, fetch_profile: bool = True) -> dict:
         await _require_login()
         browser = _browser()
         # max_scrolls=0：订阅时只要昵称头像，不抓作品列表。
-        # 抓列表留给 A4 的增量检查，那时才需要。
+        # 抓列表留给 A4 的增量检查（check_creator）去做，订阅阶段不需要。
         info = await browser.fetch_creator(sec_uid, max_scrolls=0)
         nickname = info.nickname
         avatar = info.avatar

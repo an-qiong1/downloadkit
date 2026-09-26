@@ -381,7 +381,6 @@
   
   function downloadPlaylistSongs(songs) {
     $('#playlist-preview').classList.remove('show');
-    $('#playlist-clear-btn').style.display = 'none';
     state.playlistSongs = null;
     state.songs = songs;
     renderResults();
