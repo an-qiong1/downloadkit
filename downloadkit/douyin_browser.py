@@ -264,31 +264,80 @@ class DouyinBrowser:
             logger.info(f"启动抖音浏览器 (headless={self.headless}) profile={self.profile_dir}")
 
             self._pw = await async_playwright().start()
-            self._ctx = await self._pw.chromium.launch_persistent_context(
-                user_data_dir=str(self.profile_dir),
-                headless=self.headless,
-                locale="zh-CN",
-                viewport={"width": 1440, "height": 900},
-                args=["--disable-blink-features=AutomationControlled"],
-            )
+            try:
+                self._ctx = await self._launch()
+            except BaseException:
+                # 起不来别把 playwright driver 悬着：A5 每小时失败一次
+                # 就会累积一个 driver 进程。注意不能调 close()——它也要拿
+                # self._lock，而当前已持锁，asyncio.Lock 不可重入会死锁。
+                await self._cleanup()
+                raise
             self._ctx.set_default_timeout(60000)
+
+    async def _launch(self):
+        """启动 persistent context：系统 Edge 优先，Playwright 自带 Chromium 兜底。
+
+        channel 的各平台可执行路径由 Playwright 自己维护
+        （win32: \\Microsoft\\Edge\\Application\\msedge.exe、
+          linux: /opt/microsoft/msedge/msedge、darwin: /Applications/...），
+        此处只传 channel 名，不重复造一份路径表。
+
+        --no-sandbox 与 --disable-dev-shm-usage 是容器里 Chromium 系的刚需
+        （root 身份、/dev/shm 默认只有 64MB），在 Windows 上无害，故统一
+        加载、不按平台分支——保证 Windows exe 与 Docker 用同一份代码。
+        """
+        args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+        ]
+        last_err: Optional[BaseException] = None
+        for channel in ("msedge", None):   # None = playwright 自带 chromium
+            label = channel or "chromium"
+            try:
+                return await self._pw.chromium.launch_persistent_context(
+                    user_data_dir=str(self.profile_dir),
+                    headless=self.headless,
+                    locale="zh-CN",
+                    viewport={"width": 1440, "height": 900},
+                    args=args,
+                    **({"channel": channel} if channel else {}),
+                )
+            except Exception as e:         # noqa: BLE001 — 逐个内核试到能用为止
+                last_err = e
+                logger.warning(f"以 channel={label} 启动抖音浏览器失败，回退: {e}")
+
+        raise RuntimeError(
+            "抖音浏览器启动失败：系统 Edge 与 Playwright 自带 Chromium 都不可用。"
+            "Windows 请确认已安装 Microsoft Edge；"
+            "Docker/Linux 请执行 `playwright install chromium`"
+            "或安装 microsoft-edge-stable。"
+        ) from last_err
+
+    async def _cleanup(self) -> None:
+        """释放浏览器与 playwright driver（不加锁，调用方必须已持锁）。
+
+        与 close() 分离，是因为 start() 的失败路径本身就在锁内，
+        再调 close() 会因 asyncio.Lock 不可重入而死锁。
+        """
+        if self._ctx is not None:
+            try:
+                await self._ctx.close()
+            except Exception as e:
+                logger.warning(f"关闭浏览器上下文失败: {e}")
+            self._ctx = None
+        if self._pw is not None:
+            try:
+                await self._pw.stop()
+            except Exception as e:
+                logger.warning(f"停止 Playwright 失败: {e}")
+            self._pw = None
+        logger.info("抖音浏览器已关闭")
 
     async def close(self) -> None:
         """关闭浏览器（幂等）"""
         async with self._lock:
-            if self._ctx is not None:
-                try:
-                    await self._ctx.close()
-                except Exception as e:
-                    logger.warning(f"关闭浏览器上下文失败: {e}")
-                self._ctx = None
-            if self._pw is not None:
-                try:
-                    await self._pw.stop()
-                except Exception as e:
-                    logger.warning(f"停止 Playwright 失败: {e}")
-                self._pw = None
-            logger.info("抖音浏览器已关闭")
+            await self._cleanup()
 
     async def __aenter__(self) -> "DouyinBrowser":
         await self.start()
