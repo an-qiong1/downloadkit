@@ -51,6 +51,37 @@ export interface SearchResult {
   thumbnail: string
 }
 
+export interface CollectionTrack {
+  id: number
+  title: string
+  artist: string
+  album: string
+  song_id: string
+  platform: string
+  sort_order: number
+}
+
+export interface CollectionItem {
+  id: number
+  name: string
+  url: string
+  platform: string
+  song_count: number
+  auto_name: boolean
+  created_at: string
+  refreshed_at: string | null
+}
+
+export interface CollectionDetail extends CollectionItem {
+  tracks: CollectionTrack[]
+}
+
+export interface RefreshResponse {
+  collection: CollectionDetail
+  status: string
+  message: string
+}
+
 export interface MediaItem {
   id: string
   title: string

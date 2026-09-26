@@ -11,6 +11,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import DownloadCenter from './pages/DownloadCenter'
 import BatchDownload from './pages/BatchDownload'
+import MyPlaylists from './pages/MyPlaylists'
 import TaskManager from './pages/TaskManager'
 import MediaLibrary from './pages/MediaLibrary'
 import Settings from './pages/Settings'
@@ -21,6 +22,7 @@ const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: '仪表盘' },
   { key: '/download', icon: <DownloadOutlined />, label: '下载中心' },
   { key: '/download/batch', icon: <DownloadOutlined />, label: '批量下载' },
+  { key: '/collections', icon: <UnorderedListOutlined />, label: '我的歌单' },
   { key: '/tasks', icon: <UnorderedListOutlined />, label: '下载管理' },
   { key: '/library', icon: <PlaySquareOutlined />, label: '媒体库' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
@@ -55,6 +57,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/download" element={<DownloadCenter />} />
             <Route path="/download/batch" element={<BatchDownload />} />
+            <Route path="/collections" element={<MyPlaylists />} />
             <Route path="/tasks" element={<TaskManager />} />
             <Route path="/library" element={<MediaLibrary />} />
             <Route path="/settings" element={<Settings />} />
