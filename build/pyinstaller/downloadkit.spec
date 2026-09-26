@@ -2,17 +2,27 @@
 import os
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 # Use cwd() because __file__ is not available in PyInstaller 6.x exec namespace
 project_root = Path.cwd()
+
+# 抖音路线靠 Playwright 驱动系统 Edge / 自带 Chromium。两处特殊性：
+#   1) douyin_browser._launch() 是在函数体内延迟导入，静态分析扫不全
+#   2) 它自带一个 89MB 的 node.exe driver，不在包里就起不来
+# 必须显式收进包，否则 exe 里点「登录抖音」只会抛 ImportError。
+# collect_all 只收 site-packages 里的 playwright，不会碰
+# %LOCALAPPDATA%\ms-playwright 的浏览器缓存（那是 400MB+，不进包）。
+pw_data, pw_binaries, pw_hiddenimports = collect_all('playwright')
 
 a = Analysis(
     [str(project_root / 'run.py')],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=pw_binaries,
     datas=[
         (str(project_root / 'downloadkit' / 'static'), 'downloadkit/static'),
         (str(project_root / 'server.py'), '.'),
-    ],
+    ] + pw_data,
     hiddenimports=[
         # uvicorn
         'uvicorn.logging',
@@ -52,7 +62,7 @@ a = Analysis(
         'clr_loader',
         'pythonnet',
         'bottle',
-    ],
+    ] + pw_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -124,7 +134,9 @@ a = Analysis(
         'bcrypt',
         'nacl',
         'opentelemetry',
-        'playwright',
+        # 注意：这里曾经排除过 'playwright'，导致打包出的 exe 点抖音必抛
+        # ImportError（抖音登录/抓取全废）。playwright 已改为在顶部用
+        # collect_all 显式收集，绝不能放回 excludes。
         'selenium',
         'django',
         'flask',

@@ -2,12 +2,19 @@
 .SYNOPSIS
     downloadkit one-click build script (portable build)
 .DESCRIPTION
-    1. Check build tool (pyinstaller)
+    1. Resolve build tool — MUST be the project .venv (see note below)
     2. PyInstaller -> onefile standalone EXE
-    3. Output: dist/downloadkit.exe (~100 MB portable, double-click to run)
+    3. Output: dist/downloadkit.exe (portable, double-click to run)
 .NOTES
     Portable mode: no installer, no admin rights needed, no UAC.
     Just copy dist/downloadkit.exe anywhere and double-click to launch.
+
+    ENVIRONMENT NOTE:
+    PyInstaller analyses the environment it is INSTALLED IN, not the one
+    on PATH. Building with a system-wide pyinstaller would silently miss
+    fastapi/playwright/webview and make collect_all('playwright') in
+    downloadkit.spec blow up with "No module named playwright".
+    So this script pins everything to <root>\.venv.
 
     To build the optional Inno Setup installer (not built by default),
     run build-installer.ps1 after this script.
@@ -24,15 +31,30 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 Write-Host "=== downloadkit Build Script (portable) ===" -ForegroundColor Cyan
 Write-Host "Project dir: $Root" -ForegroundColor Gray
 
-# === 1. Check build tool ===
+# === 1. Resolve build tool (pinned to the project .venv) ===
 Write-Host ""
 Write-Host "[1/3] Checking build tools..." -ForegroundColor Yellow
 
-if (-not (Get-Command "pyinstaller" -ErrorAction SilentlyContinue)) {
-    Write-Host "  Installing PyInstaller..." -ForegroundColor Yellow
-    pip install pyinstaller
+$VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
+if (-not (Test-Path $VenvPython)) {
+    Write-Error "Project .venv not found: $VenvPython`nCreate it first: python -m venv .venv"
+    exit 1
+}
+$PyInstallerExe = Join-Path $Root ".venv\Scripts\pyinstaller.exe"
+if (-not (Test-Path $PyInstallerExe)) {
+    Write-Host "  Installing PyInstaller into .venv..." -ForegroundColor Yellow
+    & $VenvPython -m pip install --disable-pip-version-check pyinstaller
     if ($LASTEXITCODE -ne 0) { Write-Error "PyInstaller install failed"; exit 1 }
 }
+
+# Fail fast: PyInstaller collects from ITS OWN environment, not from PATH.
+# If an app dependency is missing in .venv the build would burn several
+# minutes and then die inside collect_all('playwright'). Probe up front.
+# NOTE: kept as a .py file on purpose — PowerShell truncates multi-line
+# arguments containing quotes when passing them to `python -c`.
+$EnvProbe = Join-Path $Root "build\check-build-env.py"
+& $VenvPython $EnvProbe
+if ($LASTEXITCODE -ne 0) { Write-Error "Build environment incomplete (.venv is missing app deps)"; exit 1 }
 Write-Host "  PyInstaller OK" -ForegroundColor Green
 
 # === 2. Clean old build (only PyInstaller outputs, NOT spec/iss/scripts) ===
@@ -47,7 +69,7 @@ Write-Host "  Cleaned" -ForegroundColor Green
 # === 3. PyInstaller build ===
 Write-Host ""
 Write-Host "[3/3] PyInstaller (onefile)..." -ForegroundColor Yellow
-pyinstaller build\pyinstaller\downloadkit.spec
+& $PyInstallerExe build\pyinstaller\downloadkit.spec
 if ($LASTEXITCODE -ne 0) { Write-Error "PyInstaller failed (exit $LASTEXITCODE)"; exit 1 }
 if (-not (Test-Path "dist\downloadkit.exe")) { Write-Error "PyInstaller did not produce dist\downloadkit.exe"; exit 1 }
 $exeSize = [math]::Round((Get-Item "dist\downloadkit.exe").Length / 1MB, 2)
