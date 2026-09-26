@@ -5,6 +5,38 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-09-26
+
+### 新增
+- 抖音创作者订阅与自动增量下载（A1-A5）：用 `baseline_max_id` 水位线
+  只捡基线之后的新作品，首次订阅只建基线、不回补历史；检查串行不并发，
+  避免撞抖音限流
+- 抖音扫码登录，登录态持久化在独立 profile，跨重启复用（扫码只需一次）
+- 抖音浏览器启动链：优先系统 Edge，Playwright 自带 Chromium 兜底，
+  两者都不可用时给出含操作指引的报错
+- Windows exe 一体化打包（PyInstaller onefile），playwright driver
+  随包分发，双击即可用抖音
+- 歌单收藏、下载后元数据补全与 ID3 标签写入
+- 设置页目录选择与 Cookie 登录流程
+- NAS Docker 部署路径与下载目录挂载
+- 打包前环境预检 `build/check-build-env.py`，exe 实测
+  `build/test-exe-douyin.py`（登录态、订阅读取、真实抓取）
+
+### 优化
+- 项目合并：Windows 桌面版与 NAS Docker 版统一到一个仓库
+- 打包脚本绑定项目 .venv，避免 PyInstaller 分析到错误环境
+
+### 修复
+- PyInstaller `excludes` 误排除 playwright，导致 exe 内抖音功能全部失效
+- 抖音浏览器启动失败时未释放 playwright driver，轮询每失败一次就泄漏
+  一个进程
+- 安装包版本号写成 1.0.0，与项目版本无关
+- 版本号三处互不相同（pyproject 0.3.0 / CHANGELOG 0.3.1 / 安装包
+  1.0.0），统一为 0.4.0
+
+### 移除
+- 影视搜索全部代码及其引用
+
 ## [0.3.1] - 2026-06-01
 
 ### 新增
