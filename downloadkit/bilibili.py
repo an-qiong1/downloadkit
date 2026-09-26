@@ -16,7 +16,7 @@ import httpx
 
 from .browser_cookie import get_bilibili_cookie_string
 from .download_queue import download_queue
-from .utils import download_file, sanitize_filename
+from .utils import download_file, sanitize_filename, read_cookie_from_file, get_config_value
 
 logger = logging.getLogger(__name__)
 
@@ -57,29 +57,71 @@ HEADERS = {
 _cached_cookie: Optional[str] = None
 
 
+def _load_cookie_from_ui_config() -> Optional[str]:
+    """从用户在 UI 配置的 cookie.bilibili_path 文件中读取 Cookie。
+
+    优先级：
+    1. UI 配置的 cookie.bilibili_path（设置页填的文件路径）
+    2. 默认路径 ~/.downloadkit/cookies/bilibili.txt 与 bilibili.json
+
+    Returns:
+        Cookie 字符串，没找到返回 None。
+    """
+    # 1. UI 配置的路径
+    user_path = (get_config_value("cookie", "bilibili_path", "") or "").strip()
+    if user_path:
+        cookie = read_cookie_from_file(user_path)
+        if cookie:
+            logger.info(f"[Cookie] 从 UI 配置路径加载 B站 Cookie: {user_path}")
+            return cookie
+
+    # 2. 默认目录
+    default_dir = Path.home() / '.downloadkit' / 'cookies'
+    for filename in ('bilibili.txt', 'bilibili.json'):
+        f = default_dir / filename
+        if f.exists():
+            cookie = read_cookie_from_file(str(f))
+            if cookie:
+                logger.info(f"[Cookie] 从默认文件加载 B站 Cookie: {f}")
+                return cookie
+
+    return None
+
+
 def get_headers_with_cookie() -> dict:
     """
     获取带Cookie的请求头
-    
+
+    Cookie 加载优先级：
+    1. UI 配置的 cookie.bilibili_path
+    2. ~/.downloadkit/cookies/bilibili.{txt,json}
+    3. Edge 浏览器中 .bilibili.com 域的 Cookie
+
     Returns:
         包含Cookie的请求头字典
     """
     global _cached_cookie
-    
+
     headers = HEADERS.copy()
-    
+
     # 尝试获取Cookie
     if _cached_cookie is None:
-        try:
-            _cached_cookie = get_bilibili_cookie_string('edge')
-            logger.info("已从Edge浏览器获取Cookie")
-        except Exception as e:
-            logger.warning(f"获取Cookie失败: {e}")
-            _cached_cookie = ""
-    
+        # 1. 先从 UI 配置/默认文件加载
+        cookie = _load_cookie_from_ui_config()
+        if cookie:
+            _cached_cookie = cookie
+        else:
+            # 2. 退回浏览器
+            try:
+                _cached_cookie = get_bilibili_cookie_string('edge')
+                logger.info("已从Edge浏览器获取Cookie")
+            except Exception as e:
+                logger.warning(f"获取Cookie失败: {e}")
+                _cached_cookie = ""
+
     if _cached_cookie:
         headers["Cookie"] = _cached_cookie
-    
+
     return headers
 
 

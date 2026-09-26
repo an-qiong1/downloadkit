@@ -232,10 +232,12 @@
         card.classList.add('selected');
       }
       
-      // 恢复下载状态
+      // 恢复下载状态（仅对音乐面板内的卡片）
       var dlBtn = card.querySelector('.dl-btn');
-      var task = state.downloading[dlBtn.dataset.id];
-      if (task) updateDlBtn(dlBtn, task);
+      if (dlBtn) {
+        var task = state.downloading[dlBtn.dataset.id];
+        if (task) updateDlBtn(dlBtn, task);
+      }
     });
     
     // 绑定下载按钮

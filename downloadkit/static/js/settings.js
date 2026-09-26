@@ -8,15 +8,15 @@
       
       // General
       var gen = s.general || {};
-      $('#setting-download-dir').value = gen.download_dir || './downloads';
+      $('#setting-download-dir').value = gen.download_dir || '~/Downloads';
       $('#setting-max-concurrent').value = gen.max_concurrent || 3;
       $('#setting-log-level').value = gen.log_level || 'INFO';
-      
+
       // Type-specific download dirs
-      $('#setting-download-dir-music').value = gen.download_dir_music || './downloads/music';
-      $('#setting-download-dir-video').value = gen.download_dir_video || './downloads/videos';
-      $('#setting-download-dir-animated').value = gen.download_dir_animated || './downloads/animated';
-      $('#setting-download-dir-images').value = gen.download_dir_images || './downloads/images';
+      $('#setting-download-dir-music').value = gen.download_dir_music || '~/Downloads/music';
+      $('#setting-download-dir-video').value = gen.download_dir_video || '~/Downloads/videos';
+      $('#setting-download-dir-animated').value = gen.download_dir_animated || '~/Downloads/animated';
+      $('#setting-download-dir-images').value = gen.download_dir_images || '~/Downloads/images';
       
       // Rename strategy
       if ($('#setting-rename-strategy')) {
@@ -45,18 +45,83 @@
       // Cookie
       var cookie = s.cookie || {};
       $('#setting-cookie-douyin').value = cookie.douyin_path || '';
-      
+
       // Bilibili cookie
       if ($('#setting-cookie-bilibili')) {
         $('#setting-cookie-bilibili').value = cookie.bilibili_path || '';
       }
-      
+
       // Update proxy field disabled state
       updateProxyFields();
+
+      // Update download dir display: show actual resolved absolute path + status
+      updateDownloadDirDisplay(gen.download_dir || './downloads');
     }).catch(function(err) {
       toast('加载设置失败: ' + err.message, 'error');
     });
   };
+
+  // ========== 显示下载目录的实际路径和状态 ==========
+  function updateDownloadDirDisplay(rawPath) {
+    var actualEl = $('#setting-download-dir-actual');
+    var statusEl = $('#setting-download-dir-status');
+    if (!actualEl) return;
+
+    api('/api/settings/download-dir-info?path=' + encodeURIComponent(rawPath || ''))
+      .then(function(info) {
+        actualEl.textContent = info.absolute || '(未解析)';
+        actualEl.title = info.absolute || '';
+        if (info.ok) {
+          statusEl.innerHTML = '<span style="color:var(--success)">✓ 可用</span>';
+        } else {
+          var msg = (typeof info.message === 'string') ? info.message : (info.message && (info.message.error || info.message.detail)) || '不可用';
+          var tip = (typeof info.message === 'string') ? info.message : JSON.stringify(info.message || '');
+          statusEl.innerHTML = '<span style="color:var(--danger)" title="' + tip.replace(/"/g, '&quot;') + '">✗ ' + msg + '</span>';
+        }
+      })
+      .catch(function(err) {
+        actualEl.textContent = '(检查失败)';
+        var errMsg = (err && err.message) ? err.message : String(err);
+        statusEl.innerHTML = '<span style="color:var(--danger)">✗ ' + errMsg + '</span>';
+      });
+  }
+
+  // ========== Windows 原生目录选择 ==========
+  function pickDirectory(inputId) {
+    var input = $('#' + inputId);
+    if (!input) return;
+    var initial = input.value || '';
+
+    // 按钮置灰
+    var btn = document.querySelector('[id^="setting-browse-dir"][id$="' + inputId.replace('setting-download-dir-', '').replace('setting-download-dir', '') + '"]');
+    // 简单方案：直接 disable 所有 browse 按钮中跟当前 inputId 匹配的
+    var allBrowse = document.querySelectorAll('[id^="setting-browse-"]');
+    allBrowse.forEach(function(b) { b.disabled = true; });
+
+    api('/api/utils/pick-directory', {
+      method: 'POST',
+      body: JSON.stringify({ initial: initial })
+    })
+    .then(function(res) {
+      allBrowse.forEach(function(b) { b.disabled = false; });
+      if (!res || !res.ok) {
+        if (res && res.cancelled) {
+          // 用户取消，静默
+          return;
+        }
+        toast('选择目录失败: ' + (res && res.error || '未知错误'), 'error');
+        return;
+      }
+      input.value = res.path;
+      // 触发 input 事件让"实际路径"和"状态"实时刷新
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      toast('已选择：' + res.path, 'success');
+    })
+    .catch(function(err) {
+      allBrowse.forEach(function(b) { b.disabled = false; });
+      toast('请求失败: ' + err.message, 'error');
+    });
+  }
 
   // ========== Update proxy field state ==========
   function updateProxyFields() {
@@ -68,121 +133,6 @@
     fields.forEach(function(id) {
       $('#' + id).disabled = !enabled;
     });
-  }
-
-  // ========== 目录浏览弹窗 ==========
-  function openDirBrowser(inputId, currentPath) {
-    // 创建遮罩层和弹窗
-    var overlay = document.createElement('div');
-    overlay.className = 'dir-browser-overlay';
-    
-    var modal = document.createElement('div');
-    modal.className = 'dir-browser-modal';
-    
-    modal.innerHTML =
-      '<h4 class="dir-browser-title">选择目录</h4>' +
-      '<div class="dir-browser-path-row">' +
-        '<input class="search-input" id="dir-browse-path" type="text" placeholder="输入路径后按回车..." value="' + (currentPath || '') + '">' +
-        '<button class="btn btn-secondary" id="dir-browse-go">打开</button>' +
-      '</div>' +
-      '<div id="dir-browse-list" class="dir-browser-list">' +
-        '<div class="dir-browser-status">加载中...</div>' +
-      '</div>' +
-      '<div class="dir-browser-footer">' +
-        '<button class="btn btn-secondary" id="dir-browse-cancel">取消</button>' +
-      '</div>';
-    
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    
-    // 加载目录列表
-    function loadDirs(path) {
-      var listEl = $('#dir-browse-list');
-      listEl.innerHTML = '<div class="dir-browser-status">加载中...</div>';
-      
-      api('/api/utils/list-directories', {
-        method: 'POST',
-        body: { path: path || '' }
-      }).then(function(data) {
-        var dirs = data.directories || [];
-        listEl.innerHTML = '';
-        
-        if (!path && dirs.length === 0) {
-          listEl.innerHTML = '<div class="dir-browser-status">无法获取目录列表</div>';
-          return;
-        }
-        
-        // 返回上级
-        if (path) {
-          var parentItem = document.createElement('div');
-          parentItem.className = 'dir-browser-item';
-          parentItem.innerHTML = '<span class="dir-browser-parent-item">.. (返回上级)</span>';
-          parentItem.addEventListener('click', function() {
-            var normalized = path.replace(/[\\\/]+$/, '');
-            var idx = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
-            if (idx <= 0) { loadDirs(''); return; }
-            loadDirs(normalized.substring(0, idx));
-          });
-          listEl.appendChild(parentItem);
-        }
-        
-        // 目录列表
-        dirs.forEach(function(dir) {
-          var item = document.createElement('div');
-          item.className = 'dir-browser-item';
-          
-          var nameSpan = document.createElement('span');
-          nameSpan.className = 'dir-browser-item-name';
-          nameSpan.innerHTML = '<i data-lucide="folder"></i> ' + (dir.name || dir.path);
-          nameSpan.addEventListener('click', function() { loadDirs(dir.path); });
-          item.appendChild(nameSpan);
-          
-          var selectBtn = document.createElement('button');
-          selectBtn.className = 'btn btn-secondary dir-browser-select-btn';
-          selectBtn.textContent = '选择';
-          selectBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            $('#' + inputId).value = dir.path;
-            document.body.removeChild(overlay);
-          });
-          item.appendChild(selectBtn);
-          
-          listEl.appendChild(item);
-        });
-        
-        // 刷新 lucide 图标
-        if (typeof lucide !== 'undefined' && lucide.createIcons) {
-          try { lucide.createIcons(); } catch(e) {}
-        }
-      }).catch(function(err) {
-        listEl.innerHTML = '<div class="dir-browser-error">加载失败: ' + err.message + '</div>';
-      });
-    }
-    
-    // 绑定事件
-    $('#dir-browse-go').addEventListener('click', function() {
-      loadDirs($('#dir-browse-path').value.trim());
-    });
-    
-    $('#dir-browse-cancel').addEventListener('click', function() {
-      document.body.removeChild(overlay);
-    });
-    
-    $('#dir-browse-path').addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') {
-        loadDirs($('#dir-browse-path').value.trim());
-      }
-    });
-    
-    // 点击遮罩关闭
-    overlay.addEventListener('click', function(e) {
-      if (e.target === overlay) {
-        document.body.removeChild(overlay);
-      }
-    });
-    
-    // 初始加载
-    loadDirs(currentPath || '');
   }
 
   // ========== 保存设置 ==========
@@ -242,7 +192,7 @@
     if (!confirm('确定恢复默认设置？')) return;
     
     var defaults = {
-      general: { download_dir: './downloads', download_dir_music: './downloads/music', download_dir_video: './downloads/videos', download_dir_animated: './downloads/animated', download_dir_images: './downloads/images', max_concurrent: 3, log_level: 'INFO', rename_strategy: 'skip', motion_photo_default: true, history_max_records: 1000 },
+      general: { download_dir: '~/Downloads', download_dir_music: '~/Downloads/music', download_dir_video: '~/Downloads/videos', download_dir_animated: '~/Downloads/animated', download_dir_images: '~/Downloads/images', max_concurrent: 3, log_level: 'INFO', rename_strategy: 'skip', motion_photo_default: true, history_max_records: 1000 },
       proxy: { enabled: true, global: '', youtube: '', douyin: '', bilibili: '', xiaohongshu: '' },
       cookie: { douyin_path: '', bilibili_path: '' }
     };
@@ -267,8 +217,8 @@
     $('#settings-save').addEventListener('click', saveSettings);
     $('#settings-reset').addEventListener('click', resetDefaults);
     $('#setting-proxy-enabled').addEventListener('change', updateProxyFields);
-    
-    // 目录浏览按钮
+
+    // 目录浏览按钮 - 调 Windows 原生 FolderBrowserDialog
     var browseMap = {
       'setting-browse-dir': 'setting-download-dir',
       'setting-browse-dir-music': 'setting-download-dir-music',
@@ -281,10 +231,227 @@
       if (btn) {
         btn.addEventListener('click', function() {
           var inputId = browseMap[btnId];
-          var input = document.getElementById(inputId);
-          openDirBrowser(inputId, input ? input.value : '');
+          pickDirectory(inputId);
         });
       }
     });
+
+    // ===== 新增：下载目录相关事件 =====
+    var dirInput = $('#setting-download-dir');
+    if (dirInput) {
+      // 输入时实时更新"实际路径"显示
+      var debounceTimer = null;
+      dirInput.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(function() {
+          updateDownloadDirDisplay(dirInput.value);
+        }, 300);
+      });
+    }
+
+    // "打开"按钮 - 在文件管理器中打开当前下载目录
+    var openDirBtn = $('#setting-open-dir');
+    if (openDirBtn) {
+      openDirBtn.addEventListener('click', function() {
+        var rawPath = dirInput ? dirInput.value : '';
+        api('/api/settings/download-dir-info?path=' + encodeURIComponent(rawPath || ''))
+          .then(function(info) {
+            if (info.absolute && info.exists) {
+              // 调用后端在系统文件管理器中打开目录
+              api('/api/open-dir', {
+                method: 'POST',
+                body: JSON.stringify({ path: info.absolute })
+              })
+                .then(function() { toast('已打开：' + info.absolute, 'success'); })
+                .catch(function(err) { toast('打开失败: ' + err.message, 'error'); });
+            } else {
+              toast('目录不存在：' + (info.message || info.absolute), 'error');
+            }
+          })
+          .catch(function(err) { toast('获取路径失败: ' + err.message, 'error'); });
+      });
+    }
+
+    // ===== 新增：Cookie 浏览器读取按钮 =====
+    ['douyin', 'bilibili'].forEach(function(platform) {
+      var btn = $('#cookie-load-' + platform);
+      var sel = $('#cookie-browser-' + platform);
+      var status = $('#cookie-status-' + platform);
+      if (btn) {
+        btn.addEventListener('click', function() {
+          var browser = sel ? sel.value : 'edge';
+          btn.disabled = true;
+          if (status) status.textContent = '正在读取...';
+          api('/api/cookies/load-from-browser', {
+            method: 'POST',
+            body: JSON.stringify({ platform: platform, browser: browser })
+          })
+          .then(function(res) {
+            btn.disabled = false;
+            if (!res || !res.ok) {
+              if (status) status.innerHTML = '<span style="color:var(--danger)">✗ ' + (res.error || '读取失败') + '</span>';
+              toast(res.error || '读取 Cookie 失败', 'error');
+              return;
+            }
+            if (status) {
+              status.innerHTML = '<span style="color:var(--success)">✓ 找到 ' + res.count + ' 个 Cookie</span>';
+            }
+            // 弹窗让用户确认保存
+            var ok = window.confirm(
+              '从 ' + res.browser + ' 浏览器找到 ' + res.count + ' 个 ' + (platform === 'douyin' ? '抖音' : 'B站') + ' Cookie。\n\n' +
+              '点击 [确定] 保存到默认文件：\n' +
+              '  ~/.downloadkit/cookies/' + platform + '.txt\n\n' +
+              '点击 [取消] 不保存。'
+            );
+            if (ok && res.cookie_string) {
+              api('/api/cookies/save', {
+                method: 'POST',
+                body: JSON.stringify({
+                  platform: platform,
+                  cookie_string: res.cookie_string,
+                  save_to_config: true
+                })
+              })
+              .then(function(saveRes) {
+                toast('已保存到：' + saveRes.path, 'success');
+                if (status) status.innerHTML = '<span style="color:var(--success)">✓ 已保存 ' + res.count + ' 个 Cookie 到 ' + saveRes.path + '</span>';
+                // 刷新对应输入框
+                var inputId = platform === 'douyin' ? 'setting-cookie-douyin' : 'setting-cookie-bilibili';
+                var input = $('#' + inputId);
+                if (input) input.value = saveRes.path;
+              })
+              .catch(function(err) {
+                toast('保存失败: ' + err.message, 'error');
+                if (status) status.innerHTML = '<span style="color:var(--danger)">✗ 保存失败: ' + err.message + '</span>';
+              });
+            }
+          })
+          .catch(function(err) {
+            btn.disabled = false;
+            if (status) status.innerHTML = '<span style="color:var(--danger)">✗ ' + err.message + '</span>';
+            toast('请求失败: ' + err.message, 'error');
+          });
+        });
+      }
+
+      // ===== 新增："🌐 登录并获取"按钮（新流程）=====
+      var loginBtn = $('#cookie-login-' + platform);
+      if (loginBtn) {
+        loginBtn.addEventListener('click', function() {
+          var sel2 = $('#cookie-browser-' + platform);
+          var browser = sel2 ? sel2.value : 'edge';
+          var platformName = platform === 'douyin' ? '抖音' : 'B站';
+          openCookieLoginFlow(platform, platformName, browser);
+        });
+      }
+    });
+
+    // ========== "登录并获取"流程 ==========
+    function openCookieLoginFlow(platform, platformName, browser) {
+      // 1. 调后端在默认浏览器打开登录页
+      api('/api/cookies/open-login?platform=' + encodeURIComponent(platform))
+        .then(function(res) {
+          if (!res || !res.url) {
+            toast('无法打开登录页', 'error');
+            return;
+          }
+
+          // 2. 弹"等待登录"卡片
+          var overlay = document.createElement('div');
+          overlay.className = 'dir-browser-overlay';
+          var modal = document.createElement('div');
+          modal.className = 'dir-browser-modal';
+          modal.innerHTML =
+            '<h4 class="dir-browser-title">🌐 正在打开 ' + platformName + ' 登录页</h4>' +
+            '<div style="padding:12px 0;font-size:13px;line-height:1.7">' +
+              '<p>已在你的 <b>' + (browser === 'chrome' ? 'Chrome' : 'Edge') + '</b> 浏览器中打开登录页。</p>' +
+              '<p style="margin-top:8px">请在浏览器中完成以下步骤：</p>' +
+              '<ol style="margin:8px 0 8px 20px;padding:0;color:var(--text-secondary)">' +
+                '<li>登录你的 ' + platformName + ' 账号</li>' +
+                '<li>登录成功后<b>保持浏览器开着</b>，<b>不要退出登录</b></li>' +
+                '<li>回到本窗口，点击下方"已完成登录"按钮</li>' +
+              '</ol>' +
+              (res.opened
+                ? ''
+                : '<p style="margin-top:8px;color:var(--warning);font-size:12px">⚠ 自动打开失败，请手动复制此链接到浏览器打开：<br>' +
+                  '<code style="display:inline-block;margin-top:4px;background:var(--bg-secondary);padding:4px 8px;border-radius:3px;word-break:break-all;user-select:all">' + res.url + '</code></p>'
+              ) +
+            '</div>' +
+            '<div class="dir-browser-footer" style="display:flex;gap:8px;justify-content:flex-end">' +
+              '<button class="btn btn-secondary" id="cookie-login-cancel">取消</button>' +
+              '<button class="btn btn-primary" id="cookie-login-done">✅ 已完成登录</button>' +
+            '</div>';
+
+          overlay.appendChild(modal);
+          document.body.appendChild(overlay);
+
+          // 关闭
+          function close() { document.body.removeChild(overlay); }
+
+          // 取消
+          $('#cookie-login-cancel').addEventListener('click', close);
+
+          // 点击遮罩关闭
+          overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) close();
+          });
+
+          // 3. 用户点"已完成登录" → 读取 Cookie
+          $('#cookie-login-done').addEventListener('click', function() {
+            var doneBtn = $('#cookie-login-done');
+            doneBtn.disabled = true;
+            doneBtn.textContent = '正在读取...';
+            var status = $('#cookie-status-' + platform);
+            if (status) status.textContent = '正在从浏览器读取...';
+
+            api('/api/cookies/load-from-browser', {
+              method: 'POST',
+              body: JSON.stringify({ platform: platform, browser: browser })
+            })
+            .then(function(loadRes) {
+              close();
+              if (!loadRes || !loadRes.ok) {
+                if (status) status.innerHTML = '<span style="color:var(--danger)">✗ ' + (loadRes.error || '读取失败') + '</span>';
+                toast(loadRes.error || '读取 Cookie 失败', 'error');
+                return;
+              }
+              if (loadRes.count === 0) {
+                if (status) status.innerHTML = '<span style="color:var(--warning)">⚠ 未找到 ' + platformName + ' Cookie，请确认浏览器中已登录</span>';
+                toast('未找到 ' + platformName + ' Cookie', 'error');
+                return;
+              }
+              // 4. 直接保存（无需 confirm，已经过"已完成登录"确认）
+              api('/api/cookies/save', {
+                method: 'POST',
+                body: JSON.stringify({
+                  platform: platform,
+                  cookie_string: loadRes.cookie_string,
+                  save_to_config: true
+                })
+              })
+              .then(function(saveRes) {
+                toast('已保存 ' + loadRes.count + ' 个 ' + platformName + ' Cookie', 'success');
+                if (status) status.innerHTML = '<span style="color:var(--success)">✓ 已保存 ' + loadRes.count + ' 个 Cookie</span>';
+                var inputId = platform === 'douyin' ? 'setting-cookie-douyin' : 'setting-cookie-bilibili';
+                var input = $('#' + inputId);
+                if (input) input.value = saveRes.path;
+              })
+              .catch(function(err) {
+                if (status) status.innerHTML = '<span style="color:var(--danger)">✗ 保存失败: ' + err.message + '</span>';
+                toast('保存失败: ' + err.message, 'error');
+              });
+            })
+            .catch(function(err) {
+              close();
+              var status = $('#cookie-status-' + platform);
+              if (status) status.innerHTML = '<span style="color:var(--danger)">✗ ' + err.message + '</span>';
+              toast('请求失败: ' + err.message, 'error');
+            });
+          });
+        })
+        .catch(function(err) {
+          toast('无法打开登录页: ' + err.message, 'error');
+        });
+    }
   });
 })();
