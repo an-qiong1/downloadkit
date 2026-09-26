@@ -12,6 +12,11 @@ class SongInfo:
     song_id: str = ""
     url: str = ""
     cover: str = ""
+    lyrics: str = ""         # 原文歌词
+    lyrics_trans: str = ""   # 翻译歌词
+    track_number: int = 0
+    year: int = 0
+    genre: str = ""
 
     def __str__(self):
         return f"{self.title} - {self.artist}"
@@ -52,3 +57,12 @@ class BasePlatform(ABC):
     @abstractmethod
     def extract_playlist_id(url: str) -> str:
         ...
+
+    # ── 可选方法：元数据补全 ──────────────────────────────────────
+    async def get_song_detail(self, song_id: str) -> SongInfo | None:
+        """获取歌曲完整元数据（含专辑、年份、音轨号等）。返回 None 表示未实现。"""
+        return None
+
+    async def get_lyrics(self, song_id: str) -> tuple[str, str] | None:
+        """获取歌词。返回 (原文, 翻译) 或 None。"""
+        return None

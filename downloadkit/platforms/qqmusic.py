@@ -1,11 +1,16 @@
 import re
 import json
+import base64
+import logging
 import httpx
 from .base import BasePlatform, SongInfo, PlaylistInfo
+
+logger = logging.getLogger(__name__)
 
 _SEARCH_URL = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
 _SONG_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg"
 _PLAYLIST_URL = "https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg"
+_LYRICS_URL = "https://i.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
 
 
 class QQMusicPlatform(BasePlatform):
@@ -69,6 +74,91 @@ class QQMusicPlatform(BasePlatform):
         sip = data.get("req_0", {}).get("data", {}).get("sip", [])
         prefix = sip[0] if sip else "http://ws.stream.qqmusic.qq.com/"
         return prefix + purl
+
+    async def get_song_detail(self, song_id: str) -> SongInfo | None:
+        """获取歌曲完整元数据（含音轨号、年份）。"""
+        if not song_id:
+            return None
+        try:
+            payload = {
+                "req": {
+                    "module": "music.songSongGet",
+                    "method": "uinner_get_song_detail",
+                    "param": {"song_mid": song_id},
+                },
+            }
+            resp = await self._client.post(
+                _SONG_URL,
+                params={"format": "json", "data": json.dumps(payload)},
+            )
+            data = resp.json()
+            track = data.get("req", {}).get("data", {}).get("track_info", {})
+            if not track:
+                return None
+
+            singers = track.get("singer", [])
+            album = track.get("album", {})
+            # year from time_public (string like "2024-01-01")
+            year = 0
+            time_public = track.get("time_public", "")
+            if time_public and len(time_public) >= 4:
+                try:
+                    year = int(time_public[:4])
+                except ValueError:
+                    pass
+
+            return SongInfo(
+                title=track.get("title", ""),
+                artist="/".join(s.get("name", "") for s in singers),
+                album=album.get("name", ""),
+                duration=track.get("interval", 0),
+                platform=self.name,
+                song_id=track.get("mid", ""),
+                cover=f"https://y.qq.com/music/photo_new/T002R300x300M000{album.get('mid', '')}.jpg",
+                track_number=track.get("track", 0) or 0,
+                year=year,
+            )
+        except Exception as e:
+            logger.warning(f"[QQMusic] 获取歌曲详情失败: {e}")
+        return None
+
+    async def get_lyrics(self, song_id: str) -> tuple[str, str] | None:
+        """获取歌词，返回 (原文歌词, 翻译歌词)。"""
+        if not song_id:
+            return None
+        try:
+            resp = await self._client.get(
+                _LYRICS_URL,
+                params={"songmid": song_id, "format": "json"},
+            )
+            data = resp.json()
+            if data.get("code") != 0:
+                return None
+
+            original = ""
+            translation = ""
+
+            lyric_b64 = data.get("lyric", "")
+            if lyric_b64:
+                try:
+                    original = base64.b64decode(lyric_b64).decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+
+            trans_b64 = data.get("trans", "")
+            if trans_b64:
+                try:
+                    translation = base64.b64decode(trans_b64).decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+
+            if not original:
+                return None
+
+            return (original, translation)
+        except Exception as e:
+            logger.warning(f"[QQMusic] 获取歌词失败: {e}")
+            return None
 
     async def get_playlist(self, playlist_id: str) -> PlaylistInfo:
         params = {

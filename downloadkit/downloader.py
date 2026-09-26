@@ -13,6 +13,8 @@ from .utils import sanitize_filename, get_download_dir, get_download_subdir
 from .download_queue import download_queue
 from .exceptions import PauseException, CancelException
 from .utils import check_download_status
+from .enricher import enrich_metadata
+from .tagger import write_tags
 
 logger = logging.getLogger(__name__)
 
@@ -31,45 +33,61 @@ async def download_song(song: SongInfo, progress=None, task_id: str = None) -> P
             if download_queue.is_cancelled(task_id):
                 raise CancelException("下载已取消")
 
+    result: Path | None = None
+
     # Step 1: Try platform direct URL
-    url = await _get_download_url(song)
-    if url and await _stream_download(url, filepath, task_id):
-        return filepath
+    if not result:
+        url = await _get_download_url(song)
+        if url and await _stream_download(url, filepath, task_id):
+            result = filepath
 
     # Step 2: Try itzo.cn
-    logger.info(f"[itzo] Searching: {song.title} - {song.artist.split(chr(47))[0]}")
-    try:
-        u = await itzo_search(song.title, song.artist)
-        if u and await _stream_download(u, filepath, task_id):
-            return filepath
-    except Exception as e:
-        logger.error(f"[itzo] Error: {e}")
+    if not result:
+        logger.info(f"[itzo] Searching: {song.title} - {song.artist.split(chr(47))[0]}")
+        try:
+            u = await itzo_search(song.title, song.artist)
+            if u and await _stream_download(u, filepath, task_id):
+                result = filepath
+        except Exception as e:
+            logger.error(f"[itzo] Error: {e}")
 
     # Step 3: Try gequbao
-    logger.info("[gequbao] Searching...")
-    try:
-        u = await gequbao_search(song.title, song.artist)
-        if u and await _stream_download(u, filepath, task_id):
-            return filepath
-    except Exception as e:
-        logger.error(f"[gequbao] Error: {e}")
+    if not result:
+        logger.info("[gequbao] Searching...")
+        try:
+            u = await gequbao_search(song.title, song.artist)
+            if u and await _stream_download(u, filepath, task_id):
+                result = filepath
+        except Exception as e:
+            logger.error(f"[gequbao] Error: {e}")
 
     # Step 4: Try migu
-    logger.info("[migu] Searching...")
-    try:
-        u = await migu_search(song.title, song.artist)
-        if u and await _stream_download(u, filepath, task_id):
-            return filepath
-    except Exception as e:
-        logger.error(f"[migu] Error: {e}")
+    if not result:
+        logger.info("[migu] Searching...")
+        try:
+            u = await migu_search(song.title, song.artist)
+            if u and await _stream_download(u, filepath, task_id):
+                result = filepath
+        except Exception as e:
+            logger.error(f"[migu] Error: {e}")
 
     # Step 5: yt-dlp
-    logger.info("[yt-dlp] Searching...")
-    try:
-        return await _download_via_ytdlp(song, filepath)
-    except Exception as e:
-        logger.error(f"[yt-dlp] Failed: {e}")
-        return None
+    if not result:
+        logger.info("[yt-dlp] Searching...")
+        try:
+            result = await _download_via_ytdlp(song, filepath)
+        except Exception as e:
+            logger.error(f"[yt-dlp] Failed: {e}")
+
+    # ── 后处理：元数据补全 + ID3 打标签 ──────────────────────────
+    if result and result.exists():
+        try:
+            enriched = await enrich_metadata(song)
+            write_tags(result, enriched)
+        except Exception as e:
+            logger.warning(f"[post] 打标签失败（不影响下载）: {e}")
+
+    return result
 
 
 async def _stream_download(url: str, filepath: Path, task_id: str = None) -> bool:
