@@ -10,6 +10,7 @@
 import re
 import json
 import asyncio
+import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
@@ -52,16 +53,24 @@ class DouyinContent:
     author: str = ""
     cover: str = ""
     description: str = ""
-    
+
     video_url: str = ""
     video_url_watermark: str = ""
     video_quality: str = ""
-    
+
     images: List[MediaItem] = field(default_factory=list)
     motion_photo_pairs: List[MotionPhotoPair] = field(default_factory=list)
-    
+
     file_ext: str = "mp4"
     file_path: str = ""
+
+    # ---- 浏览器后端新增字段（2026-09-26）----
+    # backend: "browser" 或 "legacy"，标识解析路径
+    backend: str = "legacy"
+    # author_sec_uid: 作者稳定 ID，订阅功能用
+    author_sec_uid: str = ""
+    # stream_size: 视频实际总长（字节），来自 Content-Range
+    stream_size: int = 0
 
 
 class OptimizedOfficialParser:
@@ -371,13 +380,14 @@ class OptimizedOfficialParser:
 
     def _load_user_cookies(self) -> str:
         """加载用户提供的抖音 Cookie（多路径尝试）
-        
+
         优先级：
-        1. `~/.downloadkit/cookies/douyin.txt` — 纯文本 Cookie 字符串
-        2. `~/.downloadkit/cookies/douyin.json` — JSON 格式 {name: value}
-        3. 浏览器（Edge/Chrome）中 .douyin.com 域的 Cookie
-        4. 兜底：仅返回已有 ttwid
-        
+        1. 用户在 UI 配置的 cookie.douyin_path（设置页填的文件路径）
+        2. `~/.downloadkit/cookies/douyin.txt` — 纯文本 Cookie 字符串
+        3. `~/.downloadkit/cookies/douyin.json` — JSON 格式 {name: value}
+        4. 浏览器（Edge/Chrome）中 .douyin.com 域的 Cookie
+        5. 兜底：仅返回已有 ttwid
+
         Returns:
             Cookie 字符串（可能为空）
         """
@@ -385,36 +395,32 @@ class OptimizedOfficialParser:
         if self._cookie_cache is not None:
             return self._cookie_cache
         from pathlib import Path
-        # 尝试配置文件
+        from .utils import read_cookie_from_file, get_config_value
+
+        # 1. 优先：用户在 UI 配置的 cookie.douyin_path
+        user_path = (get_config_value("cookie", "douyin_path", "") or "").strip()
+        if user_path:
+            cookie = read_cookie_from_file(user_path)
+            if cookie:
+                logger.info(f"[Cookie] 从 UI 配置路径加载抖音 Cookie: {user_path}")
+                self._cookie_cache = cookie
+                return cookie
+
+        # 2. 默认目录下的 douyin.txt / douyin.json
         cookie_dirs = [
             Path.home() / '.downloadkit' / 'cookies',
         ]
         for d in cookie_dirs:
-            txt_file = d / 'douyin.txt'
-            if txt_file.exists():
-                try:
-                    cookie = txt_file.read_text(encoding='utf-8').strip()
+            for filename in ('douyin.txt', 'douyin.json'):
+                f = d / filename
+                if f.exists():
+                    cookie = read_cookie_from_file(str(f))
                     if cookie:
-                        logger.info(f"[Cookie] 从文件加载抖音 Cookie: {txt_file}")
+                        logger.info(f"[Cookie] 从默认文件加载抖音 Cookie: {f}")
                         self._cookie_cache = cookie
                         return cookie
-                except Exception as e:
-                    logger.info(f"[Cookie] 读取 {txt_file} 失败: {e}")
-            
-            json_file = d / 'douyin.json'
-            if json_file.exists():
-                try:
-                    import json
-                    data = json.loads(json_file.read_text(encoding='utf-8'))
-                    if isinstance(data, dict):
-                        cookie_str = '; '.join([f"{k}={v}" for k, v in data.items()])
-                        logger.info(f"[Cookie] 从 JSON 文件加载抖音 Cookie: {json_file}")
-                        self._cookie_cache = cookie_str
-                        return cookie_str
-                except Exception as e:
-                    logger.info(f"[Cookie] 读取 {json_file} 失败: {e}")
-        
-        # 尝试浏览器 Cookie
+
+        # 3. 浏览器 Cookie
         try:
             from .browser_cookie import get_douyin_cookie_string
             for browser in ('edge', 'chrome'):
@@ -428,7 +434,7 @@ class OptimizedOfficialParser:
                     continue
         except ImportError:
             pass
-        
+
         logger.info(f"[Cookie] 未找到用户 Cookie，仅使用 ttwid")
         result = f"ttwid={self._ttwid_cache}" if self._ttwid_cache else ""
         self._cookie_cache = result
@@ -1546,40 +1552,533 @@ def parse_url(input_text: str) -> Optional[str]:
 _last_parse_result = {}  # 调试用：记录最近一次解析结果
 
 
+# ======================================================================
+# 浏览器后端（douyin_browser）
+# ======================================================================
+#
+# 背景：抖音现行风控（ArgusSecurityPlugin）会校验浏览器运行时产生的
+# 动态凭据。2026-09-26 实测，纯 HTTP 方案全部 403：
+#   · 官方页面解析（RENDER_DATA / __INITIAL_STATE__ 已从响应中移除）
+#   · aweme/detail、aweme/post 接口（ArgusSecurityPlugin 拦截）
+#   · F2 库 + 完整登录 Cookie（66 条，含 sessionid/UIFID）仍 403
+#   · curl_cffi 伪装 Chrome/Edge TLS 指纹仍 403
+#
+# 因此新增 douyin_browser 作为首选后端，用真实 Chromium 完成解析。
+# 旧路径保留为兜底，避免新后端出问题时功能完全不可用。
+#
+# 详见 docs/抖音路线验证报告-2026-09-26.md
+
+_browser_instance = None      # 全局共享的 DouyinBrowser（避免重复启动 Chromium）
+_browser_lock = None         # 保护 _browser_instance 的创建
+_browser_disabled = False    # 熔断标记：浏览器后端连续失败后不再重试
+
+
+def _get_browser_lock():
+    """惰性创建 asyncio.Lock（避免 import 时绑定事件循环）"""
+    global _browser_lock
+    if _browser_lock is None:
+        _browser_lock = asyncio.Lock()
+    return _browser_lock
+
+
+async def get_browser():
+    """
+    获取全局共享的 DouyinBrowser 实例
+
+    Chromium 启动约 1~2 秒，重复启动会拖慢每次解析，
+    因此全局复用同一个实例，由 server 启动/关闭时统一管理生命周期。
+    """
+    global _browser_instance
+
+    if _browser_instance is not None:
+        return _browser_instance
+
+    async with _get_browser_lock():
+        if _browser_instance is None:
+            from .douyin_browser import DouyinBrowser
+            _browser_instance = DouyinBrowser(headless=True)
+            await _browser_instance.start()
+            logger.info("[Fetch] 抖音浏览器后端已启动")
+    return _browser_instance
+
+
+async def close_browser():
+    """关闭全局浏览器实例（程序退出时调用）"""
+    global _browser_instance
+
+    if _browser_instance is None:
+        return
+
+    try:
+        await _browser_instance.close()
+        logger.info("[Fetch] 抖音浏览器后端已关闭")
+    except Exception as e:
+        logger.warning(f"[Fetch] 关闭浏览器失败: {e}")
+    finally:
+        _browser_instance = None
+
+
+# ==================================================================
+# 抖音登录
+# ==================================================================
+# 登录态本身由浏览器 profile 目录里的 cookie 维持，进程内只缓存「流程状态」。
+#
+# 关键约束：Chromium 会独占 profile 目录（SingletonLock），
+# 有头登录窗口和无头下载实例不能同时存在。所以登录流程必须是：
+#
+#     关掉无头实例 → 开有头窗口让用户扫码 → 关掉有头窗口
+#                    → 无头实例留到下次下载时按需重启
+#
+# 已知限制：登录期间若有下载任务在跑，两者会争抢同一个 profile。
+# 因此 douyin_start_login() 会先检查队列是否空闲，不空闲直接拒绝。
+# 后续做后台定时轮询时，这里要升级成读写锁
+# （下载持读锁、登录持写锁），否则轮询任务会打断用户扫码。
+
+# 登录流程状态
+LOGIN_IDLE = "idle"            # 未开始
+LOGIN_WAITING = "waiting"      # 已开窗口，等用户扫码
+LOGIN_SUCCESS = "success"      # 登录成功
+LOGIN_FAILED = "failed"        # 出错（含用户把窗口关了）
+LOGIN_TIMEOUT = "timeout"      # 超时未扫码
+LOGIN_CANCELLED = "cancelled"  # 用户主动取消
+
+_login_state: dict = {
+    "status": LOGIN_IDLE,
+    "message": "",
+    # started_at 是 time.time()（墙钟），只用来给前端显示「已用多少秒」
+    # started_mono 是 time.monotonic()（单调钟），只用来算 deadline
+    # 两者不能混用：早先拿墙钟去和单调钟比，算出 17 亿秒，
+    # 结果超时永不触发，登录窗口一直挂着，把后续所有登录请求都堵死。
+    "started_at": 0.0,
+    "started_mono": 0.0,
+    "elapsed": 0,
+}
+_login_task: Optional[asyncio.Task] = None
+
+
+def _login_snapshot() -> dict:
+    """给前端看的登录流程状态快照（waiting 时实时算已用秒数）"""
+    snap = {k: v for k, v in _login_state.items() if k != "started_mono"}
+    if snap["status"] == LOGIN_WAITING:
+        snap["elapsed"] = int(time.time() - snap["started_at"])
+    return snap
+
+
+def is_login_running() -> bool:
+    """登录流程是否正在跑"""
+    return _login_task is not None and not _login_task.done()
+
+
+def _login_message(deadline: float) -> str:
+    """扫码提示文案，带实时剩余秒数（deadline 必须来自单调钟）"""
+    left = max(0, int(deadline - time.monotonic()))
+    return f"请在弹出的浏览器窗口里扫码登录抖音（还剩 {left} 秒）"
+
+
+def _active_download_count() -> int:
+    """在跑 + 排队的下载任务数（登录要独占 profile，不能和它们并行）"""
+    try:
+        from .download_queue import download_queue
+        st = download_queue.get_queue_status()
+        return int(st.get("downloading", 0)) + int(st.get("pending", 0))
+    except Exception as e:
+        logger.debug(f"[Login] 读取队列状态失败，按 0 处理: {e}")
+        return 0
+
+
+async def douyin_login_status() -> dict:
+    """
+    查询抖音登录态（走抖音自己的接口判定，权威）
+
+    不能只看 cookie：未登录访客抖音也会发占位 sessionid
+    （实测 4 个 cookie 全是同一个哈希值），只看 cookie 会误判。
+
+    Returns:
+        {logged_in, login_running, status, message, elapsed, detail}
+    """
+    result: dict = {
+        "logged_in": False,
+        "login_running": is_login_running(),
+        "detail": "",
+        **_login_snapshot(),
+    }
+
+    browser = _browser_instance
+    if browser is None:
+        # 登录流程会为了腾出 profile 关掉后台无头实例。
+        # 万一还没重启回来，别把「刚登录成功」误报成「未登录」——
+        # 实测踩过：扫码成功后 status 返回 logged_in=false，
+        # 界面上立刻又变回未登录，用户会以为扫码没生效。
+        if _login_state.get("status") == LOGIN_SUCCESS:
+            result["logged_in"] = True
+            result["detail"] = "（登录流程已确认，后台浏览器稍后恢复）"
+        else:
+            result["message"] = result["message"] or "后台浏览器未启动，请稍候重试"
+        return result
+
+    try:
+        logged, detail = await browser.check_login_via_api()
+        result["logged_in"] = logged
+        result["detail"] = detail
+    except Exception as e:
+        logger.warning(f"[Login] 读取登录态失败: {e}")
+        result["message"] = f"读取登录态失败：{e}"
+    return result
+
+
+async def douyin_start_login(timeout: int = 300) -> dict:
+    """
+    启动抖音扫码登录（转后台任务，立即返回，不阻塞接口）
+
+    Args:
+        timeout: 等待扫码的最长秒数
+
+    Returns:
+        {ok, status, message, elapsed}；ok=False 时 error 说明原因
+    """
+    global _login_task
+
+    if is_login_running():
+        return {"ok": True, "already_running": True, **_login_snapshot()}
+
+    busy = _active_download_count()
+    if busy:
+        return {
+            "ok": False,
+            "error": f"当前有 {busy} 个下载任务在进行，请等下载结束后再登录。"
+                     "（登录窗口和下载共用同一个浏览器配置，不能并行）",
+            **_login_snapshot(),
+        }
+
+    # 订阅自动轮询正在抓主页时也不能开登录窗 —— 它和下载一样占着
+    # 同一个 Chromium profile。检查和下面的状态更新之间没有 await，
+    # 所以轮询那边「检查登录状态 → 置 running」这段同样无 await，
+    # 两边不会在同一个事件循环里互相穿过。
+    from . import poller
+    if poller.is_round_running():
+        return {
+            "ok": False,
+            "error": "正在自动检查订阅更新，等这一轮结束再登录。"
+                     "（约十几秒，可稍后重试）",
+            **_login_snapshot(),
+        }
+
+    _login_state.update(
+        status=LOGIN_WAITING,
+        message="正在准备浏览器…",
+        started_at=time.time(),      # 墙钟：给前端显示已用秒数
+        started_mono=time.monotonic(),  # 单调钟：算 deadline
+        elapsed=0,
+    )
+    _login_task = asyncio.create_task(_run_login(timeout))
+    logger.info("[Login] 已启动抖音登录流程")
+    return {"ok": True, **_login_snapshot()}
+
+
+async def _run_login(timeout: int) -> None:
+    """登录流程主体（跑在后台任务里）"""
+    from .douyin_browser import DouyinBrowser
+
+    headful = None
+    try:
+        # 1. 先释放 profile 占用。
+        #    Chromium 关闭后不会立刻释放 SingletonLock，留一点余量。
+        _login_state["message"] = "正在释放后台浏览器…"
+        await close_browser()
+        await asyncio.sleep(1.5)
+
+        # 2. 开有头窗口
+        _login_state["message"] = "正在打开浏览器窗口…"
+        headful = DouyinBrowser(headless=False)
+        await headful.start()
+        await headful.open_login_page()
+
+        # 3. 等用户扫码（只轮询 cookie，不重复导航页面）
+        #    deadline 从流程开始算起，保证「最多等 timeout 秒」是准确的总数。
+        #    早先从开完窗口才起算，导致开窗口那几秒不计入，
+        #    前端显示的已用秒数会超出承诺（实测 timeout=8 却显示 12 秒）。
+        deadline = _login_state["started_mono"] + timeout
+        _login_state["message"] = _login_message(deadline)
+        logger.info(f"[Login] 登录窗口已打开，等待扫码（{timeout} 秒）")
+
+        tick = 0
+        while time.monotonic() < deadline:
+            # 用接口判定而不是 cookie：未登录访客也有占位 sessionid，
+            # 只看 cookie 会一进来就误判成「已登录」。
+            try:
+                logged, detail = await headful.check_login_via_api()
+            except Exception as e:
+                # 用户把窗口关了，或浏览器崩了
+                _login_state.update(
+                    status=LOGIN_FAILED,
+                    message="登录窗口已被关闭或网络异常，请重新点击「登录抖音」",
+                )
+                logger.warning(f"[Login] 探测登录态失败: {e}")
+                return
+
+            if logged:
+                elapsed = int(time.time() - _login_state["started_at"])
+
+                # 先关有头窗口把 profile 让出来。
+                # Chromium 独占 profile 目录，不关的话下面 get_browser()
+                # 拉起的无头实例会和它抢同一份数据。
+                if headful is not None:
+                    try:
+                        await headful.close()
+                    except Exception as e:
+                        logger.debug(f"[Login] 提前关闭登录窗口失败: {e}")
+                    headful = None
+
+                # 重新拉起后台无头实例。登录流程一开始为了腾 profile
+                # 把它关了，不拉回来的话：
+                #   1. /login/status 因为拿不到浏览器会误报「未登录」
+                #      （实测登录成功后立刻返回 logged_in=false）
+                #   2. 用户登录完还得等下一次调用才启动 Chromium
+                # 代价约 2~3 秒，发生在扫码成功之后，不影响扫码体验。
+                verify, vdetail = True, "（登录流程已确认，未能复核）"
+                try:
+                    await get_browser()
+                    verify, vdetail = await _browser_instance.check_login_via_api()
+                except Exception as e:
+                    logger.warning(f"[Login] 登录后恢复后台浏览器失败: {e}")
+
+                _login_state.update(
+                    status=LOGIN_SUCCESS,
+                    message=f"登录成功（{vdetail}）",
+                    elapsed=elapsed,
+                )
+                logger.info(f"[Login] 抖音登录成功 — {vdetail}（复核 {verify}）")
+                return
+
+            tick += 1
+            _login_state["elapsed"] = int(time.time() - _login_state["started_at"])
+            # 每约 9 秒刷新一次剩余时间提示
+            if tick % 3 == 0:
+                _login_state["message"] = _login_message(deadline)
+            await asyncio.sleep(3)
+
+        _login_state.update(
+            status=LOGIN_TIMEOUT,
+            message=f"{timeout} 秒内没有完成登录，已关闭登录窗口，请重试",
+            elapsed=int(time.time() - _login_state["started_at"]),
+        )
+        logger.warning("[Login] 等待扫码超时")
+
+    except asyncio.CancelledError:
+        _login_state.update(
+            status=LOGIN_CANCELLED, message="已取消登录",
+        )
+        logger.info("[Login] 登录流程被取消")
+        raise
+    except Exception as e:
+        logger.error(f"[Login] 登录流程出错: {e}", exc_info=True)
+        _login_state.update(status=LOGIN_FAILED, message=f"登录失败：{e}")
+    finally:
+        if headful is not None:
+            try:
+                await headful.close()
+            except Exception as e:
+                logger.debug(f"[Login] 关闭登录窗口失败: {e}")
+        _login_task = None
+
+
+async def douyin_cancel_login() -> dict:
+    """取消正在进行的登录流程"""
+    if not is_login_running():
+        return {"ok": True, "already_stopped": True, **_login_snapshot()}
+
+    _login_task.cancel()
+    for _ in range(30):          # 最多等 3 秒让取消生效
+        await asyncio.sleep(0.1)
+        if not is_login_running():
+            break
+    return {"ok": True, **_login_snapshot()}
+
+
+async def douyin_logout() -> dict:
+    """退出抖音登录（清掉 profile 里的登录 cookie）"""
+    if is_login_running():
+        return {"ok": False, "error": "登录流程进行中，请先取消再退出"}
+
+    browser = _browser_instance
+    if browser is None:
+        return {"ok": False, "error": "后台浏览器未启动，无法退出登录"}
+
+    try:
+        cleared = await browser.clear_login_cookies()
+    except Exception as e:
+        logger.error(f"[Login] 退出登录失败: {e}")
+        return {"ok": False, "error": f"退出登录失败：{e}"}
+
+    _login_state.update(
+        status=LOGIN_IDLE, message="已退出登录",
+        started_at=0.0, started_mono=0.0, elapsed=0,
+    )
+    logger.info(f"[Login] 已退出登录（清除 {cleared} 条 cookie）")
+    return {"ok": True, "cleared": cleared, **_login_snapshot()}
+
+
+
+async def _fetch_content_browser(input_text: str) -> Optional[DouyinContent]:
+    """
+    用浏览器后端解析抖音视频
+
+    与旧后端的区别：
+      · 旧后端返回 video_url，由 download_content 用 httpx 下载
+      · 浏览器后端的流地址带签名且有时效，httpx 直连会拿到 351 字节的
+        HTML 错误页，必须由浏览器在页面上下文中下载
+
+    因此这里只填充元数据，把下载交给 _browser_download_pending，
+    由 download_content 识别后走浏览器下载分支。
+
+    Args:
+        input_text: 抖音链接或分享文案
+
+    Returns:
+        DouyinContent；失败返回 None（交给调用方走兜底）
+    """
+    from .douyin_browser import parse_video_url
+
+    browser = await get_browser()
+
+    # 短链需要先解析出 aweme_id
+    aweme_id = await parse_video_url(input_text, browser=browser)
+    if not aweme_id:
+        logger.info("[Fetch:browser] 未能解析出作品 ID")
+        return None
+
+    item = await browser.resolve_stream(aweme_id)
+
+    content = DouyinContent(
+        item_id=item.aweme_id,
+        content_type=ContentType.VIDEO,
+        title=item.title or f"douyin_{item.aweme_id}",
+        author=item.author or "",
+        cover=item.cover or "",
+        video_url=item.stream_url,
+        file_ext="mp4",
+        backend="browser",
+        author_sec_uid=item.author_sec_uid or "",
+        stream_size=item.size,
+    )
+
+    logger.info(
+        f"[Fetch:browser] 解析成功 {aweme_id} "
+        f"{item.size:,} bytes | {item.title[:40]} | 作者={item.author or '-'}"
+    )
+    return content
+
+
+def _is_browser_backend(content: DouyinContent) -> bool:
+    """判断该内容是否由浏览器后端解析（需走浏览器下载）"""
+    return getattr(content, "backend", "legacy") == "browser"
+
+
+async def _browser_download_pending(
+    content: DouyinContent,
+    output_dir: Path,
+    task_id: str = None,
+    progress_callback=None,
+    rename_strategy: str | None = None,
+) -> List[Path]:
+    """
+    浏览器后端下载
+
+    命名规则沿用旧实现：douyin_<item_id>.mp4
+    """
+    browser = await get_browser()
+
+    video_dir = get_download_subdir('videos')
+    filename = f"douyin_{content.item_id}"
+    target = video_dir / f"{filename}.mp4"
+
+    # 已存在且未指定覆盖时，直接跳过
+    if target.exists() and rename_strategy != "overwrite":
+        logger.info(f"[Download:browser] 已存在，跳过: {target.name}")
+        if progress_callback:
+            progress_callback(1.0)
+        if task_id:
+            from .download_queue import download_queue
+            download_queue.update_progress(task_id, 1.0)
+        return [target]
+
+    logger.info(f"[Download:browser] 开始下载 {content.item_id}")
+
+    def _on_progress(done: int, total: int):
+        if total <= 0:
+            return
+        ratio = min(done / total, 1.0)
+        if progress_callback:
+            progress_callback(ratio)
+        if task_id:
+            from .download_queue import download_queue
+            download_queue.update_progress(task_id, ratio, done, total)
+
+    # 注意：流地址有短时效签名（约 5~15 秒），不能跨请求复用。
+    # 因此这里不再传入 content.video_url，而是让 download() 内部
+    # 现解析现用——这是"签名过期自动换 URL 续传"逻辑的前提。
+    path = await browser.download(
+        content.item_id,
+        video_dir,
+        filename=filename,
+        progress_callback=_on_progress,
+    )
+
+    content.file_path = str(path)
+    logger.info(f"[Download:browser] 完成: {path.name}")
+    return [path]
+
+
 async def fetch_content(input_text: str) -> DouyinContent:
     """
     解析抖音链接，返回内容信息
-    
-    解析优先级：
-    1. 官方页面解析（优化版）
-    2. 第三方API解析（山海云端 -> TenAPI）
+
+    解析优先级（2026-09-26 调整）：
+    1. 浏览器后端（douyin_browser）—— 当前唯一可靠路径
+    2. 旧官方页面解析 —— 保留兜底
+    3. 第三方 API —— 保留兜底
     """
-    global _last_parse_result
-    
+    global _last_parse_result, _browser_disabled
+
     url = parse_url(input_text)
     if not url:
         raise ValueError("未找到抖音链接")
-    
-    # 1. 先尝试官方解析
-    content = await _parser.parse(url)
-    
-    # 2. 失败则尝试第三方解析
+
+    content = None
+
+    # 1. 浏览器后端（首选）
+    if not _browser_disabled:
+        try:
+            content = await _fetch_content_browser(input_text)
+        except Exception as e:
+            logger.warning(f"[Fetch:browser] 解析失败: {type(e).__name__}: {e}")
+            # 连续失败后熔断，避免每次解析都卡在浏览器启动上
+            content = None
+    else:
+        logger.info("[Fetch:browser] 已熔断，跳过浏览器后端")
+
+    # 2. 兜底：旧官方解析
+    if not content:
+        content = await _parser.parse(url)
+
+    # 3. 兜底：第三方 API
     if not content or (not content.video_url and not content.images):
         try:
             from .douyin_third_party import parse_with_third_party
             content = await parse_with_third_party(url)
         except Exception as e:
             logger.info(f"[Fetch] 第三方解析失败: {e}")
-    
+
     if not content:
         raise ValueError("解析失败")
-    
+
     if not content.video_url and not content.images:
         raise ValueError("未找到视频或图片地址")
-    
+
     # 保存调试信息
     _last_parse_result = {
         "url": url[:200],
+        "backend": "browser" if _is_browser_backend(content) else "legacy",
         "content_type": str(content.content_type.value) if content.content_type else "?",
         "video_url": str(content.video_url)[:200] if content.video_url else None,
         "video_url_watermark": str(content.video_url_watermark)[:200] if content.video_url_watermark else None,
@@ -1589,8 +2088,12 @@ async def fetch_content(input_text: str) -> DouyinContent:
         "image_count": len(content.images) if content.images else 0,
         "has_motion_photos": bool(content.motion_photo_pairs),
     }
-    logger.info(f"[Fetch] 解析结果: type={_last_parse_result['content_type']}, video_url={str(_last_parse_result['video_url'])[:120]}, images={_last_parse_result['image_count']}")
-    
+    logger.info(
+        f"[Fetch] 解析结果: backend={_last_parse_result['backend']}, "
+        f"type={_last_parse_result['content_type']}, "
+        f"video_url={str(_last_parse_result['video_url'])[:100]}"
+    )
+
     return content
 
 
@@ -1625,9 +2128,24 @@ async def download_content(
     
     # 确保output_dir是Path对象
     output_dir = Path(output_dir)
-    
+
     downloaded = []
-    
+
+    # 浏览器后端：流地址带签名，必须由浏览器在页面上下文中下载，
+    # 用 httpx 直连只会拿到 351 字节的 HTML 错误页。
+    if _is_browser_backend(content):
+        if content.content_type != ContentType.VIDEO:
+            logger.info("[Download:browser] 浏览器后端暂只支持视频，"
+                        "其他类型回退旧逻辑")
+        else:
+            return await _browser_download_pending(
+                content,
+                output_dir,
+                task_id=task_id,
+                progress_callback=progress_callback,
+                rename_strategy=rename_strategy,
+            )
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://www.douyin.com/",

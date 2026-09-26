@@ -2,6 +2,22 @@
 var $ = function(sel, ctx) { return (ctx || document).querySelector(sel); };
 var $$ = function(sel, ctx) { return [].slice.call((ctx || document).querySelectorAll(sel)); };
 
+function _extractErr(e) {
+  // 递归从对象里提取可读的错误字符串（避免显示 [object Object]）
+  if (!e) return '';
+  if (typeof e === 'string') return e;
+  if (typeof e === 'number') return String(e);
+  if (e instanceof Error) return _extractErr(e.message);
+  if (Array.isArray(e)) return e.map(_extractErr).filter(Boolean).join('; ');
+  if (typeof e === 'object') {
+    for (var k of ['message', 'detail', 'error', 'msg']) {
+      if (e[k]) return _extractErr(e[k]);
+    }
+    try { return JSON.stringify(e); } catch (_) { return String(e); }
+  }
+  return String(e);
+}
+
 function api(path, opts) {
   opts = opts || {};
   opts.headers = opts.headers || {};
@@ -11,7 +27,7 @@ function api(path, opts) {
   }
   return fetch(window.location.origin + path, opts).then(function(r) {
     if (!r.ok) return r.json().then(function(e) {
-      throw new Error(e.detail || r.statusText || '请求失败');
+      throw new Error(_extractErr(e) || r.statusText || '请求失败');
     }, function() {
       throw new Error(r.statusText || '请求失败');
     });
@@ -59,8 +75,10 @@ var state = {
 var tabTitles = {
   'music': '音乐下载',
   'resource': '资源解析',
+  'subscriptions': '创作者订阅',
   'files': '已下载',
   'queue': '下载队列',
+  'collections': '我的歌单',
   'settings': '设置',
 
 };

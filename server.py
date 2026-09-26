@@ -13,11 +13,12 @@ if sys.platform == "win32":
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from pydantic import BaseModel
+from typing import Optional
 import uvicorn
 import subprocess
 import httpx
@@ -28,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from downloadkit.searcher import search_all
 from downloadkit.playlist import parse_playlist
 from downloadkit.downloader import download_song
-from downloadkit.utils import get_download_dir, get_download_subdir, sanitize_filename, load_config, save_config
+from downloadkit.utils import get_download_dir, get_download_subdir, sanitize_filename, load_config, save_config, validate_download_dir, read_cookie_from_file
 from downloadkit.file_manager import (
     safe_download_path,
     safe_delete_path,
@@ -123,6 +124,10 @@ class SongInfoRequest(BaseModel):
 
 class ListDirectoriesRequest(BaseModel):
     path: str = ""
+
+
+class PickDirectoryRequest(BaseModel):
+    initial: str = ""  # 初始选中路径（用户当前输入框里的值）
 
 @app.get("/api/search")
 async def api_search(keyword: str = Query(...), count: int = 30):
@@ -503,9 +508,34 @@ async def api_list_directories(req: ListDirectoriesRequest):
         return {"directories": dirs}
 
     # 验证路径存在且是目录
-    p = Path(target)
+    p = Path(target).expanduser()
+    if not p.is_absolute():
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).parent
+        else:
+            base = Path.cwd()
+        p = (base / p).resolve()
+    else:
+        p = p.resolve()
+
     if not p.exists():
-        raise HTTPException(404, f"路径不存在: {target}")
+        # 路径不存在 → 退回到常用目录，不报错
+        home = Path.home()
+        dirs = []
+        for name in ("Desktop", "Downloads", "Documents"):
+            dp = home / name
+            if dp.is_dir():
+                dirs.append({"name": name, "path": str(dp)})
+        dirs.append({"name": "~", "path": str(home)})
+        if sys.platform == "win32":
+            for letter in range(67, 91):
+                drive = Path(f"{chr(letter)}:\\")
+                if drive.exists():
+                    dirs.append({"name": f"{chr(letter)}:\\", "path": str(drive)})
+        else:
+            dirs.append({"name": "/", "path": "/"})
+        return {"directories": dirs, "fallback": True, "original": target}
+
     if not p.is_dir():
         raise HTTPException(400, f"不是目录: {target}")
 
@@ -533,6 +563,83 @@ async def api_list_directories(req: ListDirectoriesRequest):
 
     return {"directories": dirs}
 
+
+@app.post("/api/utils/pick-directory")
+async def api_pick_directory(req: PickDirectoryRequest):
+    """弹 Windows 原生文件夹选择对话框（FolderBrowserDialog），返回用户选中的路径
+
+    实现方式：subprocess 调 powershell.exe -STA 启动 System.Windows.Forms.FolderBrowserDialog
+    - 用户点 [确定]：stdout 输出选中的路径 → 返回 {ok: True, path: "..."}
+    - 用户点 [取消]：stdout 为空 → 返回 {ok: False, cancelled: True}
+    - 60 秒无响应：自动 kill 进程 → 返回超时错误
+    """
+    import subprocess
+    from pathlib import Path
+
+    # 处理 initial：相对路径展开 + 验证存在（不存在则回退到 ~/Downloads）
+    initial = (req.initial or "").strip()
+    if initial:
+        p = Path(initial).expanduser()
+        if not p.is_absolute():
+            if getattr(sys, "frozen", False):
+                base = Path(sys.executable).parent
+            else:
+                base = Path.cwd()
+            p = (base / p).resolve()
+        if p.is_dir():
+            initial = str(p)
+        else:
+            initial = str(Path.home() / "Downloads")
+    else:
+        initial = str(Path.home() / "Downloads")
+
+    # PowerShell 单引号转义（避免注入：' → ''）
+    initial_escaped = initial.replace("'", "''")
+
+    # PowerShell 脚本：弹 FolderBrowserDialog，选中后输出路径到 stdout
+    ps_script = (
+        "Add-Type -AssemblyName System.Windows.Forms;"
+        "$dlg = New-Object System.Windows.Forms.FolderBrowserDialog;"
+        "$dlg.Description = '请选择下载目录';"
+        f"$dlg.SelectedPath = '{initial_escaped}';"
+        "$dlg.ShowNewFolderButton = $true;"
+        "if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {"
+        "  Write-Output $dlg.SelectedPath"
+        "}"
+    )
+
+    try:
+        proc = subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-STA", "-Command", ps_script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except FileNotFoundError:
+        return {"ok": False, "error": "找不到 powershell.exe，请确认系统已安装"}
+    except Exception as e:
+        return {"ok": False, "error": f"启动 PowerShell 失败：{e}"}
+
+    try:
+        stdout, stderr = proc.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()  # 清空管道
+        return {"ok": False, "error": "选择超时（60 秒）"}
+
+    if proc.returncode != 0:
+        return {"ok": False, "error": f"PowerShell 异常退出（{proc.returncode}）：{stderr.strip()}"}
+
+    selected = stdout.strip()
+    if not selected:
+        # 用户点取消
+        return {"ok": False, "cancelled": True}
+
+    return {"ok": True, "path": selected}
+
+
 @app.post("/api/playlist")
 async def api_playlist(req: PlaylistRequest):
     try:
@@ -554,6 +661,86 @@ async def api_playlist(req: PlaylistRequest):
         }
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+# --- 歌单收藏 endpoints ---
+from downloadkit.collection import (
+    list_collections as _list_collections,
+    get_collection as _get_collection,
+    create_collection as _create_collection,
+    update_collection as _update_collection,
+    delete_collection as _delete_collection,
+    refresh_collection as _refresh_collection,
+)
+
+class CreateCollectionRequest(BaseModel):
+    url: str
+    name: str = ""
+
+class UpdateCollectionRequest(BaseModel):
+    name: str | None = None
+
+
+@app.get("/api/collections")
+async def api_collections_list():
+    """获取所有收藏歌单列表"""
+    return _list_collections()
+
+
+@app.post("/api/collections")
+async def api_collections_create(req: CreateCollectionRequest):
+    """添加收藏歌单"""
+    try:
+        return _create_collection(url=req.url, name=req.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/collections/{collection_id}")
+async def api_collections_get(collection_id: int):
+    """获取收藏歌单详情（含缓存曲目）"""
+    result = _get_collection(collection_id)
+    if not result:
+        raise HTTPException(404, "收藏歌单不存在")
+    return result
+
+
+@app.put("/api/collections/{collection_id}")
+async def api_collections_update(collection_id: int, req: UpdateCollectionRequest):
+    """更新收藏歌单信息"""
+    kwargs = {}
+    if req.name is not None:
+        kwargs["name"] = req.name
+    result = _update_collection(collection_id, **kwargs)
+    if not result:
+        raise HTTPException(404, "收藏歌单不存在")
+    return result
+
+
+@app.delete("/api/collections/{collection_id}")
+async def api_collections_delete(collection_id: int):
+    """删除收藏歌单"""
+    ok = _delete_collection(collection_id)
+    if not ok:
+        raise HTTPException(404, "收藏歌单不存在")
+    return {"status": "deleted"}
+
+
+@app.post("/api/collections/{collection_id}/refresh")
+async def api_collections_refresh(collection_id: int):
+    """刷新收藏歌单"""
+    try:
+        result = _refresh_collection(collection_id)
+        if not result:
+            raise HTTPException(404, "收藏歌单不存在")
+        song_count = len(result.get("tracks", []))
+        return {
+            "collection": result,
+            "status": "ok",
+            "message": f"刷新成功，共 {song_count} 首歌曲",
+        }
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
 
 # --- Douyin endpoints ---
 # --- 统一视频解析接口 ---
@@ -1178,6 +1365,442 @@ async def api_settings_get():
     return {"settings": load_config()}
 
 
+@app.get("/api/settings/download-dir-info")
+async def api_settings_download_dir_info(path: str = Query("")):
+    """获取下载目录信息（实际解析后的绝对路径、是否存在、是否可写）
+
+    Query:
+        path: 用户输入的路径（空字符串表示当前配置值）
+    """
+    if not path or not path.strip():
+        # 用当前配置值
+        cfg = load_config()
+        path = (cfg.get("general", {}) or {}).get("download_dir", "./downloads")
+
+    result = validate_download_dir(path)
+    result["input"] = path
+    return result
+
+
+class CookieLoadFromBrowserRequest(BaseModel):
+    platform: str  # "douyin" / "bilibili" / "xhs" / "youtube"
+    browser: str = "edge"  # "edge" / "chrome" / "firefox"
+
+
+# ------------------------------------------------------------------
+# 抖音登录（订阅功能的前置条件）
+# ------------------------------------------------------------------
+# 与上面 /api/cookies/* 的区别：
+#   /api/cookies/*        老方案，把 cookie 字符串存进配置文件，脆弱且要手动维护
+#   /api/douyin/login/*   新方案，直接用 Playwright 的持久化 profile，
+#                         用户扫一次码就长期有效，之后完全不用管 cookie
+#
+# 限制：登录窗口和下载共用同一个浏览器 profile，Chromium 独占目录，
+#       所以有下载任务在跑时不允许登录（后端返回 409 并说明原因）
+
+
+class DouyinLoginStartRequest(BaseModel):
+    timeout: int = 300  # 等待扫码的最长秒数
+
+
+@app.get("/api/douyin/login/status")
+async def api_douyin_login_status():
+    """查询抖音登录态（只读 cookie，<100ms，可放心高频调用）"""
+    from downloadkit.douyin import douyin_login_status
+    try:
+        return await douyin_login_status()
+    except Exception as e:
+        raise HTTPException(500, f"查询登录态失败：{e}")
+
+
+@app.post("/api/douyin/login/start")
+async def api_douyin_login_start(req: DouyinLoginStartRequest):
+    """启动抖音扫码登录
+
+    会弹出一个 Chromium 窗口让用户扫码。本接口立即返回，
+    前端用 /api/douyin/login/status 轮询进度。
+    """
+    from downloadkit.douyin import douyin_start_login
+    try:
+        result = await douyin_start_login(timeout=req.timeout)
+    except Exception as e:
+        raise HTTPException(500, f"启动登录失败：{e}")
+
+    # ok=False 是业务性拒绝（如下载中），用 409 让前端能区分「失败」和「被拒」
+    if not result.get("ok"):
+        return JSONResponse(status_code=409, content=result)
+    return result
+
+
+@app.post("/api/douyin/login/cancel")
+async def api_douyin_login_cancel():
+    """取消正在进行的登录流程"""
+    from downloadkit.douyin import douyin_cancel_login
+    try:
+        return await douyin_cancel_login()
+    except Exception as e:
+        raise HTTPException(500, f"取消登录失败：{e}")
+
+
+@app.post("/api/douyin/logout")
+async def api_douyin_logout():
+    """退出抖音登录"""
+    from downloadkit.douyin import douyin_logout
+    try:
+        result = await douyin_logout()
+    except Exception as e:
+        raise HTTPException(500, f"退出登录失败：{e}")
+    if not result.get("ok"):
+        return JSONResponse(status_code=409, content=result)
+    return result
+
+
+# ------------------------------------------------------------------
+# 创作者订阅
+# ------------------------------------------------------------------
+# 这是产品的核心能力：订阅抖音创作者，自动发现并下载新作品。
+#
+# 依赖链：
+#   登录（/api/douyin/login/*）→ 订阅本组接口 → 增量下载（A4 尚未实现）
+# 抓创作者主页必须登录，未登录时返回 401 + 可读的提示文案，
+# 而不是 500（这是正常业务状态，不是故障）。
+#
+# 去重在 subscription.filter_new_works() 里做，
+# 本层不重复实现判重逻辑。
+
+
+class AddSubscriptionRequest(BaseModel):
+    url: str
+    fetch_profile: bool = True   # False = 只存 ID，不抓昵称头像（省一次页面加载）
+
+
+class ToggleSubscriptionRequest(BaseModel):
+    enabled: bool
+
+
+@app.get("/api/subscriptions")
+async def api_subscriptions_list():
+    """列出全部订阅的创作者 + 总览统计"""
+    from downloadkit.subscription_service import list_subscriptions
+    try:
+        return await list_subscriptions()
+    except Exception as e:
+        raise HTTPException(500, f"读取订阅列表失败：{e}")
+
+
+@app.post("/api/subscriptions")
+async def api_subscriptions_add(req: AddSubscriptionRequest):
+    """订阅一个创作者
+
+    传主页链接、短链或 sec_uid 都行。
+    未登录抖音时返回 401，提示去设置页登录。
+    """
+    from downloadkit.subscription_service import (
+        LoginRequired, add_subscription,
+    )
+    try:
+        rec = await add_subscription(req.url, fetch_profile=req.fetch_profile)
+    except LoginRequired as e:
+        return JSONResponse(status_code=401, content={"ok": False, "error": str(e)})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"添加订阅失败: {e}", exc_info=True)
+        raise HTTPException(500, f"添加订阅失败：{e}")
+    return {"ok": True, "creator": rec}
+
+
+@app.delete("/api/subscriptions/{sec_uid}")
+async def api_subscriptions_remove(sec_uid: str):
+    """取消订阅。已发现的作品记录保留，重新加回不会重复下载。"""
+    from downloadkit.subscription_service import remove_subscription
+    try:
+        ok = await remove_subscription(sec_uid)
+    except Exception as e:
+        raise HTTPException(500, f"取消订阅失败：{e}")
+    if not ok:
+        raise HTTPException(404, "没有订阅这个创作者")
+    return {"ok": True}
+
+
+@app.post("/api/subscriptions/{sec_uid}/toggle")
+async def api_subscriptions_toggle(sec_uid: str, req: ToggleSubscriptionRequest):
+    """暂停 / 恢复某个创作者的轮询"""
+    from downloadkit.subscription_service import toggle_subscription
+    try:
+        return {"ok": True, "creator": await toggle_subscription(sec_uid, req.enabled)}
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"操作失败：{e}")
+
+
+# ---------------- 自动轮询（A5） ----------------
+#
+# ⚠ 必须注册在下面的 `/api/subscriptions/{sec_uid}` **之前**。
+#   FastAPI 按注册顺序匹配，放后面的话 GET /poller 会被 `{sec_uid}`
+#   这个路径参数先吃掉，返回 404「没有订阅这个创作者」（实测踩过）。
+#   所有不带路径参数的静态子路由都要排在参数化路由前面。
+
+class PollerConfigRequest(BaseModel):
+    """轮询配置，None = 不改"""
+    enabled: Optional[bool] = None
+    interval_minutes: Optional[int] = None
+    max_new_per_check: Optional[int] = None
+    jitter_percent: Optional[int] = None
+
+
+@app.get("/api/subscriptions/poller")
+async def api_subscriptions_poller():
+    """轮询状态（开关、下次执行时间、退避情况、上轮结果）"""
+    from downloadkit import poller
+    try:
+        return poller.status()
+    except Exception as e:
+        logger.error(f"读取轮询状态失败: {e}", exc_info=True)
+        raise HTTPException(500, f"读取失败：{e}")
+
+
+@app.post("/api/subscriptions/poller")
+async def api_subscriptions_poller_config(req: PollerConfigRequest):
+    """开关/调整自动轮询。只更新传入的字段"""
+    from downloadkit import poller
+    try:
+        # 先关再开要重置状态，避免「关掉再打开」还卡在旧的退避里
+        before = poller.load_settings().get("enabled")
+        settings = poller.save_settings(
+            enabled=req.enabled,
+            interval_minutes=req.interval_minutes,
+            max_new_per_check=req.max_new_per_check,
+            jitter_percent=req.jitter_percent,
+        )
+        after = settings.get("enabled")
+        if before is False and after is True:
+            poller.reset_for_enable()
+        return {"status": "ok", "settings": settings, "poller": poller.status()}
+    except Exception as e:
+        logger.error(f"更新轮询配置失败: {e}", exc_info=True)
+        raise HTTPException(500, f"更新失败：{e}")
+
+
+@app.get("/api/subscriptions/{sec_uid}")
+async def api_subscriptions_detail(sec_uid: str, limit: int = 50):
+    """单个创作者详情 + 已发现的作品列表"""
+    from downloadkit.subscription_service import get_creator_detail
+    try:
+        return await get_creator_detail(sec_uid, limit=limit)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"读取详情失败：{e}")
+
+
+class PreviewCreatorRequest(BaseModel):
+    url: str
+    max_scrolls: int = 3
+
+
+class CheckCreatorRequest(BaseModel):
+    download: bool = True       # False = 只检测不入队
+    max_new: int = 3            # 本次最多入队几个，0 = 不限制
+    max_scrolls: int = 3
+
+
+@app.post("/api/subscriptions/{sec_uid}/check")
+async def api_subscriptions_check(sec_uid: str, req: CheckCreatorRequest):
+    """检查单个创作者有没有新作品
+
+    ⚠ 首次检查只建立基线：把现有作品全部标记为「已见」但一个都不下载。
+      之后只下载基线之后新增的作品。这是订阅功能的默认语义，
+      不是临时限制——订阅一个 500 视频的博主不该把 500 个全下下来。
+    """
+    from downloadkit.subscription_service import (
+        LoginRequired, RateLimited, check_creator,
+    )
+    try:
+        return await check_creator(
+            sec_uid,
+            download=req.download,
+            max_new=req.max_new,
+            max_scrolls=req.max_scrolls,
+        )
+    except RateLimited as e:
+        # 抖音触发风控，让前端提示「稍后再试」而不是当成 500 故障
+        return JSONResponse(status_code=429, content={"ok": False, "error": str(e)})
+    except LoginRequired as e:
+        return JSONResponse(status_code=401, content={"ok": False, "error": str(e)})
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"检查订阅失败: {e}", exc_info=True)
+        raise HTTPException(500, f"检查失败：{e}")
+
+
+class CheckAllRequest(BaseModel):
+    download: bool = True
+    max_new: int = 3
+
+
+@app.post("/api/subscriptions/check-all")
+async def api_subscriptions_check_all(req: CheckAllRequest):
+    """检查所有启用的订阅（串行，避免撞抖音限流）
+
+    走 poller.run_round(manual=True) 而不是直接调 check_all：
+    自动轮询和手动点击共用同一把锁，两轮绝不会同时抓主页。
+    手动触发不计入退避，用户说了算。
+    """
+    from downloadkit import poller
+    try:
+        return await poller.run_round(
+            manual=True,
+            download=req.download,
+            max_new=req.max_new,
+        )
+    except Exception as e:
+        logger.error(f"批量检查失败: {e}", exc_info=True)
+        raise HTTPException(500, f"批量检查失败：{e}")
+
+
+@app.post("/api/subscriptions/preview")
+async def api_subscriptions_preview(req: PreviewCreatorRequest):
+    """订阅前预览：抓一次主页看有多少作品，但不入库"""
+    from downloadkit.subscription_service import LoginRequired, preview_creator
+    try:
+        return await preview_creator(req.url, max_scrolls=req.max_scrolls)
+    except LoginRequired as e:
+        return JSONResponse(status_code=401, content={"ok": False, "error": str(e)})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"预览创作者失败: {e}", exc_info=True)
+        raise HTTPException(500, f"预览失败：{e}")
+
+
+# 平台登录页 URL（用于"弹浏览器登录"流程）
+_LOGIN_URLS = {
+    "douyin": "https://www.douyin.com/",
+    "bilibili": "https://passport.bilibili.com/login",
+}
+
+
+@app.get("/api/cookies/open-login")
+async def api_cookies_open_login(platform: str = Query(...)):
+    """在用户默认浏览器中打开指定平台的登录页
+
+    流程：前端请求 → 后端调 webbrowser.open() 打开 URL → 返回 URL 让前端展示
+    用户在浏览器里登录完成后，回到 app 点"已完成登录"，再调 /api/cookies/load-from-browser 读取。
+    """
+    if platform not in _LOGIN_URLS:
+        raise HTTPException(400, f"不支持的平台: {platform}")
+    url = _LOGIN_URLS[platform]
+    try:
+        import webbrowser
+        opened = webbrowser.open(url, new=2)  # new=2: 新标签页
+        return {"ok": True, "url": url, "opened": opened, "platform": platform}
+    except Exception as e:
+        # 打不开时仍把 URL 返给前端，让前端展示给用户自己复制
+        return {"ok": False, "url": url, "platform": platform, "error": f"自动打开浏览器失败：{e}"}
+
+
+@app.post("/api/cookies/load-from-browser")
+async def api_cookies_load_from_browser(req: CookieLoadFromBrowserRequest):
+    """从指定浏览器读取指定平台的 Cookie 列表
+
+    用于 Cookie 设置页的"从浏览器读取"按钮，列出可用的 Cookie 项供用户选择保存。
+    """
+    if req.platform not in ("douyin", "bilibili", "xhs", "youtube"):
+        raise HTTPException(400, f"不支持的平台: {req.platform}")
+
+    # 延迟导入，避免 browser_cookie 在某些环境下加载失败
+    try:
+        from downloadkit.browser_cookie import (
+            get_douyin_cookie_string,
+            get_bilibili_cookie_string,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"无法加载 browser_cookie 模块: {e}")
+
+    cookie_string = ""
+    source_browser = ""
+    if req.platform == "douyin":
+        try:
+            cookie_string = get_douyin_cookie_string(req.browser) or ""
+            source_browser = req.browser
+        except Exception as e:
+            return {"ok": False, "platform": req.platform, "browser": req.browser,
+                    "cookies": [], "count": 0, "cookie_string": "",
+                    "error": f"从 {req.browser} 浏览器读取失败：{e}"}
+    elif req.platform == "bilibili":
+        try:
+            cookie_string = get_bilibili_cookie_string(req.browser) or ""
+            source_browser = req.browser
+        except Exception as e:
+            return {"ok": False, "platform": req.platform, "browser": req.browser,
+                    "cookies": [], "count": 0, "cookie_string": "",
+                    "error": f"从 {req.browser} 浏览器读取失败：{e}"}
+    else:
+        return {"ok": False, "platform": req.platform, "browser": req.browser,
+                "cookies": [], "count": 0, "cookie_string": "",
+                "error": f"{req.platform} 平台暂不支持浏览器自动读取，请使用文件方式"}
+
+    # 解析为 dict（name -> value）让前端能展示
+    cookies = {}
+    if cookie_string:
+        for part in cookie_string.split(";"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                cookies[k.strip()] = v.strip()
+
+    return {
+        "ok": bool(cookies),
+        "platform": req.platform,
+        "browser": source_browser,
+        "cookies": [{"name": k, "value": v} for k, v in cookies.items()],
+        "count": len(cookies),
+        "cookie_string": cookie_string,  # 同时返回原始字符串，方便直接保存
+    }
+
+
+class CookieSaveRequest(BaseModel):
+    platform: str  # "douyin" / "bilibili"
+    cookie_string: str  # Cookie 字符串
+    save_to_config: bool = True  # 是否同时保存到 UI 配置路径
+    custom_path: str = ""  # 自定义保存路径，为空时用默认路径
+
+
+@app.post("/api/cookies/save")
+async def api_cookies_save(req: CookieSaveRequest):
+    """保存 Cookie 到文件（同时更新 UI 配置路径）"""
+    from pathlib import Path
+
+    if not req.cookie_string or not req.cookie_string.strip():
+        raise HTTPException(400, "Cookie 字符串不能为空")
+
+    if req.platform not in ("douyin", "bilibili"):
+        raise HTTPException(400, f"不支持的平台: {req.platform}")
+
+    # 决定保存路径
+    if req.custom_path and req.custom_path.strip():
+        save_path = Path(req.custom_path.strip()).expanduser()
+    else:
+        save_path = Path.home() / ".downloadkit" / "cookies" / f"{req.platform}.txt"
+
+    try:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.write_text(req.cookie_string.strip(), encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(500, f"写入 Cookie 文件失败: {e}")
+
+    # 同时保存到 config.toml 让 UI 路径生效
+    if req.save_to_config:
+        cfg = load_config()
+        cfg.setdefault("cookie", {})[f"{req.platform}_path"] = str(save_path)
+        save_config(cfg)
+
+    return {"ok": True, "path": str(save_path), "message": f"已保存 {len(req.cookie_string)} 字符到 {save_path}"}
+
+
 @app.post("/api/settings/update")
 async def api_settings_update(req: SettingsUpdateRequest):
     """更新配置，只更新传入的字段"""
@@ -1220,6 +1843,45 @@ async def startup_event():
     download_queue.add_cleanup_callback(cleanup_downloads)
     asyncio.create_task(download_queue.start())
     logger.info("Download queue worker started")
+
+    # 预热抖音浏览器：启动 Chromium 约需 1~2 秒，
+    # 放到启动阶段做，首次下载就不用等。
+    # 失败不影响其他功能（首次下载时会懒启动）。
+    async def _warmup_douyin():
+        try:
+            from downloadkit.douyin import get_browser
+            await get_browser()
+        except Exception as e:
+            logger.warning(f"Douyin 浏览器预热失败（不影响其他功能）: {e}")
+
+    asyncio.create_task(_warmup_douyin())
+
+    # 订阅自动轮询（A5）。默认配置 enabled=False，任务起着但不跑，
+    # 用户在「创作者订阅」页打开开关后自动开始；开关状态周期性重读，
+    # 所以无需为开关再单独启停任务。
+    try:
+        from downloadkit import poller
+        poller.start()
+    except Exception as e:
+        logger.warning(f"订阅轮询调度器启动失败（不影响其他功能）: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """关闭时释放浏览器资源"""
+    # 先停轮询，避免关服务时它还在抓主页（会和浏览器关闭互相打断）
+    try:
+        from downloadkit import poller
+        await poller.stop()
+    except Exception as e:
+        logger.warning(f"停止订阅轮询失败: {e}")
+
+    try:
+        from downloadkit.douyin import close_browser
+        await close_browser()
+    except Exception as e:
+        logger.warning(f"关闭抖音浏览器失败: {e}")
+
 
 def main():
     uvicorn.run(app, host="127.0.0.1", port=8765)

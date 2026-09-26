@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -36,6 +36,10 @@
           <i data-lucide="link" class="nav-icon"></i>
           <span>资源解析</span>
         </a>
+        <a class="nav-item" data-tab="subscriptions">
+          <i data-lucide="users" class="nav-icon"></i>
+          <span>创作者订阅</span>
+        </a>
       </div>
       
       <div class="nav-section">
@@ -47,6 +51,10 @@
         <a class="nav-item" data-tab="queue">
           <i data-lucide="download" class="nav-icon"></i>
           <span>下载队列</span>
+        </a>
+        <a class="nav-item" data-tab="collections">
+          <i data-lucide="heart" class="nav-icon"></i>
+          <span>我的歌单</span>
         </a>
         <a class="nav-item" data-tab="settings">
           <i data-lucide="settings" class="nav-icon"></i>
@@ -144,6 +152,79 @@
         </div>
       </div>
 
+      <!-- 创作者订阅面板 -->
+      <div class="tab-panel" id="panel-subscriptions">
+        <div style="max-width:860px">
+
+          <!-- 添加订阅 -->
+          <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+            <div style="font-size:14px;font-weight:500;margin-bottom:4px">订阅抖音创作者</div>
+            <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:12px">
+              粘贴创作者主页链接，订阅后他会发的新作品会被自动发现并下载。
+            </div>
+            <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+              <input class="search-input" id="sub-url" type="text"
+                     placeholder="https://www.douyin.com/user/MS4wLjABAAAA..."
+                     style="flex:1;min-width:260px">
+              <button class="btn btn-primary" id="sub-add-btn">
+                <i data-lucide="plus"></i> 订阅
+              </button>
+              <button class="btn btn-secondary" id="sub-preview-btn" title="先看看能抓到什么，不入库">
+                <i data-lucide="eye"></i> 预览
+              </button>
+            </div>
+            <div id="sub-msg" style="display:none;margin-top:10px;padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.6"></div>
+          </div>
+
+          <!-- 自动检查（A5） -->
+          <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+              <div style="flex:1;min-width:240px">
+                <div style="font-size:14px;font-weight:500;margin-bottom:4px">自动检查新作品</div>
+                <div style="font-size:12px;color:var(--text-secondary);line-height:1.6">
+                  打开后在后台按固定间隔检查所有订阅，发现新作品自动下载。
+                  默认 60 分钟一次并带随机浮动——请求太频繁会触发抖音验证码。
+                </div>
+              </div>
+              <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;white-space:nowrap">
+                <input type="checkbox" id="sub-poller-toggle" style="width:18px;height:18px;cursor:pointer"> 启用
+              </label>
+            </div>
+
+            <div id="sub-poller-options" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+              <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--text-secondary)">
+                <label>检查间隔
+                  <select class="search-input" id="sub-poller-interval" style="width:auto;margin-left:6px;padding:4px 6px;font-size:12px">
+                    <option value="15">15 分钟</option>
+                    <option value="30">30 分钟</option>
+                    <option value="60">60 分钟</option>
+                    <option value="120">2 小时</option>
+                    <option value="360">6 小时</option>
+                    <option value="720">12 小时</option>
+                    <option value="1440">24 小时</option>
+                  </select>
+                </label>
+                <label>单轮最多下载
+                  <select class="search-input" id="sub-poller-maxnew" style="width:auto;margin-left:6px;padding:4px 6px;font-size:12px">
+                    <option value="1">1 个</option>
+                    <option value="3">3 个</option>
+                    <option value="5">5 个</option>
+                    <option value="0">不限</option>
+                  </select>
+                </label>
+              </div>
+              <div id="sub-poller-status" style="display:none;margin-top:10px;padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.7"></div>
+            </div>
+          </div>
+
+          <!-- 总览 -->
+          <div id="sub-stats" style="display:flex;gap:16px;font-size:12px;color:var(--text-secondary);margin-bottom:10px;align-items:center;flex-wrap:wrap"></div>
+
+          <!-- 列表 -->
+          <div id="sub-list"></div>
+        </div>
+      </div>
+
       <!-- 已下载面板 -->
       <div class="tab-panel" id="panel-files">
         <div class="files-toolbar">
@@ -192,6 +273,11 @@
         </div>
     </div>
 
+      <!-- 收藏歌单面板 -->
+      <div class="tab-panel" id="panel-collections">
+        <div id="collections-app"></div>
+      </div>
+
       <!-- 设置面板 -->
       <div class="tab-panel" id="panel-settings">
         <div class="search-section">
@@ -204,8 +290,14 @@
               <div style="margin-bottom:10px">
                 <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">基础下载目录 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
                 <div style="display:flex;gap:6px">
-                  <input class="search-input" id="setting-download-dir" type="text" placeholder="./downloads" style="flex:1">
+                  <input class="search-input" id="setting-download-dir" type="text" placeholder="~/Downloads 或 D:\Downloads" style="flex:1">
                   <button class="btn btn-secondary" id="setting-browse-dir" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                </div>
+                <div style="margin-top:6px;font-size:12px;line-height:1.5;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                  <span style="color:var(--text-secondary)">实际路径：</span>
+                  <code id="setting-download-dir-actual" style="color:var(--text-primary);background:var(--bg-secondary);padding:2px 6px;border-radius:3px;font-size:11px;word-break:break-all"></code>
+                  <span id="setting-download-dir-status" style="font-size:11px"></span>
+                  <button class="btn btn-secondary" id="setting-open-dir" style="padding:2px 8px;font-size:11px" title="在文件管理器中打开此目录">📂 打开</button>
                 </div>
               </div>
               
@@ -274,13 +366,81 @@
               </div>
             </div>
             
+            <!-- 抖音账号登录（新方案，优先用这个） -->
             <div style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
-              <h4 style="margin-bottom:12px;font-weight:500;font-size:14px">Cookie 设置</h4>
+              <h4 style="margin-bottom:8px;font-weight:500;font-size:14px">抖音账号登录</h4>
+              <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px;font-size:12px;line-height:1.6">
+                <div style="color:var(--text-secondary)">
+                  <b>订阅创作者</b>功能需要登录抖音。点下面的按钮会弹出一个浏览器窗口，
+                  用抖音 App 扫码即可，<b>登录一次长期有效</b>，之后不用再管 Cookie。
+                </div>
+                <div style="color:var(--text-tertiary);margin-top:6px">
+                  ⚠ 登录窗口和下载不能同时进行，有下载任务时会暂时无法登录。
+                </div>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <button class="btn btn-primary" id="dy-login-btn" style="padding:6px 14px;font-size:13px">扫码登录抖音</button>
+                <button class="btn btn-secondary" id="dy-logout-btn" style="padding:6px 12px;font-size:13px;display:none">退出登录</button>
+                <button class="btn btn-secondary" id="dy-login-refresh" style="padding:6px 10px;font-size:12px" title="重新检查登录状态">刷新状态</button>
+                <span id="dy-login-status" style="font-size:12px;flex:1;min-width:160px">正在检查登录状态…</span>
+              </div>
+              <div id="dy-login-box" style="display:none;margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:6px;font-size:12px;line-height:1.6"></div>
+            </div>
+
+            <div style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
+              <h4 style="margin-bottom:12px;font-weight:500;font-size:14px">Cookie 设置 <span style="font-size:11px;color:var(--text-tertiary);font-weight:400">（旧方案，抖音请优先用上面的扫码登录）</span></h4>
+
+              <!-- Cookie 说明卡片（新增） -->
+              <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12px;line-height:1.6">
+                <div style="font-weight:500;margin-bottom:6px">🔑 哪些平台需要 Cookie？</div>
+                <div style="color:var(--text-secondary);margin-bottom:8px">
+                  ✅ <b>抖音</b>：必须（否则视频解析失败）&nbsp;&nbsp;
+                  ✅ <b>B站</b>：建议（1080P 高清需登录）<br>
+                  ❌ <b>YouTube / 小红书 / 网易云</b>：公开内容不需要
+                </div>
+                <div style="font-weight:500;margin-bottom:6px">📄 Cookie 文件格式（任选一种）：</div>
+                <ul style="margin:0 0 8px 16px;color:var(--text-secondary);padding:0">
+                  <li><b>纯文本</b>：<code style="background:var(--bg-tertiary);padding:1px 4px">name1=value1; name2=value2</code></li>
+                  <li><b>JSON</b>：<code style="background:var(--bg-tertiary);padding:1px 4px">{"name1": "value1", "name2": "value2"}</code></li>
+                  <li><b>Netscape</b>：<code style="background:var(--bg-tertiary);padding:1px 4px"># Netscape HTTP Cookie File</code> 开头的 tab 分隔格式（yt-dlp 风格）</li>
+                </ul>
+                <div style="font-weight:500;margin-bottom:6px">🛠 怎么获取 Cookie？</div>
+                <ol style="margin:0 0 8px 20px;color:var(--text-secondary);padding:0">
+                  <li>在浏览器（Edge/Chrome）中登录目标网站</li>
+                  <li>按 F12 → <b>Application</b> → <b>Cookies</b> → 复制需要的键值对</li>
+                  <li>粘贴到下方文本框，或保存为文件后再选文件</li>
+                </ol>
+                <div style="font-size:11px;color:var(--text-tertiary)">💡 下方的"从浏览器读取"按钮可以一键从 Edge / Chrome 中读取已登录的 Cookie</div>
+              </div>
+
               <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">抖音 Cookie 文件路径 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
               <input class="search-input" id="setting-cookie-douyin" type="text" placeholder="~/.downloadkit/cookies/douyin.json" style="width:100%">
-              <div style="margin-top:8px">
+
+              <!-- 抖音 Cookie 助手（新增：登录并获取） -->
+              <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <button class="btn btn-primary" id="cookie-login-douyin" style="padding:4px 10px;font-size:12px" data-platform="douyin">🌐 登录并获取</button>
+                <button class="btn btn-secondary" id="cookie-load-douyin" style="padding:4px 10px;font-size:12px" data-platform="douyin">🔍 立即读取</button>
+                <select class="search-input" id="cookie-browser-douyin" style="padding:4px 6px;font-size:12px;width:auto">
+                  <option value="edge">Edge</option>
+                  <option value="chrome">Chrome</option>
+                </select>
+                <span id="cookie-status-douyin" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
+              </div>
+
+              <div style="margin-top:12px">
                 <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">B站 Cookie 文件路径 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
                 <input class="search-input" id="setting-cookie-bilibili" type="text" placeholder="~/.downloadkit/cookies/bilibili.json" style="width:100%">
+              </div>
+
+              <!-- B站 Cookie 助手（新增：登录并获取） -->
+              <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <button class="btn btn-primary" id="cookie-login-bilibili" style="padding:4px 10px;font-size:12px" data-platform="bilibili">🌐 登录并获取</button>
+                <button class="btn btn-secondary" id="cookie-load-bilibili" style="padding:4px 10px;font-size:12px" data-platform="bilibili">🔍 立即读取</button>
+                <select class="search-input" id="cookie-browser-bilibili" style="padding:4px 6px;font-size:12px;width:auto">
+                  <option value="edge">Edge</option>
+                  <option value="chrome">Chrome</option>
+                </select>
+                <span id="cookie-status-bilibili" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
               </div>
             </div>
             
@@ -328,7 +488,10 @@
 <script src="js/resource.js?v=20260604b"></script>
 <script src="js/files.js?v=20260604b"></script>
 <script src="js/queue.js?v=20260604b"></script>
-<script src="js/settings.js?v=20260617"></script>
+<script src="js/settings.js?v=20260712b"></script>
+<script src="js/douyin-login.js?v=20260926a"></script>
+<script src="js/subscriptions.js?v=20260926a"></script>
+<script src="js/collections.js?v=20260724b"></script>
 <script src="js/app.js?v=20260604b"></script>
 </body>
 </html>
