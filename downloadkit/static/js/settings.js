@@ -32,7 +32,15 @@
       if ($('#setting-history-max-records')) {
         $('#setting-history-max-records').value = gen.history_max_records || 1000;
       }
-      
+
+      // 关闭窗口是否最小化到托盘（存 config.toml，跟着「保存」一起提交）
+      if ($('#setting-close-to-tray')) {
+        $('#setting-close-to-tray').checked = gen.close_to_tray === true;
+      }
+
+      // 开机自启动写的是注册表、不在 config.toml 里，得单独查一次
+      loadAutostartStatus();
+
       // Proxy
       var proxy = s.proxy || {};
       $('#setting-proxy-enabled').checked = proxy.enabled !== false;
@@ -135,6 +143,48 @@
     });
   }
 
+  // ========== 开机自启动 ==========
+  // 与其它设置分开处理的两个原因：
+  //   1. 它写的是注册表（系统状态），不是 config.toml；
+  //   2. 勾完必须立即生效 —— 攒到「保存」再提交，用户会以为开关坏了。
+  function loadAutostartStatus() {
+    var box = $('#setting-autostart');
+    var hint = $('#setting-autostart-hint');
+    if (!box) return;
+    api('/api/settings/autostart').then(function(st) {
+      box.disabled = !st.available;
+      box.checked = !!st.enabled;
+      if (hint) {
+        // 不可用时把原因亮出来（例如「源码运行没有可自启的程序」），
+        // 否则用户点不动只会觉得程序有 bug
+        hint.textContent = st.available ? '' : (st.reason || '当前环境不支持');
+        hint.style.color = st.available ? 'var(--text-secondary)' : 'var(--warning)';
+      }
+    }).catch(function(err) {
+      if (hint) { hint.textContent = '查询失败: ' + err.message; hint.style.color = 'var(--error)'; }
+    });
+  }
+
+  function toggleAutostart(enabled) {
+    var box = $('#setting-autostart');
+    var hint = $('#setting-autostart-hint');
+    if (box) box.disabled = true;
+    if (hint) { hint.textContent = '处理中…'; hint.style.color = 'var(--text-secondary)'; }
+
+    api('/api/settings/autostart', { method: 'POST', body: { enabled: enabled } })
+      .then(function(st) {
+        if (box) { box.checked = !!st.enabled; box.disabled = !st.available; }
+        if (hint) { hint.textContent = st.message || ''; hint.style.color = 'var(--success)'; }
+        toast(st.message || '已更新', 'success');
+      })
+      .catch(function(err) {
+        // 失败要把勾还原，不能停在「看起来已开启」的假状态上
+        if (box) { box.checked = !enabled; box.disabled = false; }
+        if (hint) { hint.textContent = err.message; hint.style.color = 'var(--error)'; }
+        toast('设置失败: ' + err.message, 'error');
+      });
+  }
+
   // ========== 保存设置 ==========
   function saveSettings() {
     var data = {};
@@ -150,7 +200,8 @@
       log_level: $('#setting-log-level').value,
       rename_strategy: $('#setting-rename-strategy').value || 'skip',
       motion_photo_default: $('#setting-motion-photo-default').checked,
-      history_max_records: parseInt($('#setting-history-max-records').value) || 1000
+      history_max_records: parseInt($('#setting-history-max-records').value) || 1000,
+      close_to_tray: $('#setting-close-to-tray') ? $('#setting-close-to-tray').checked : false
     };
     
     // Proxy
@@ -192,7 +243,7 @@
     if (!confirm('确定恢复默认设置？')) return;
     
     var defaults = {
-      general: { download_dir: '~/Downloads', download_dir_music: '~/Downloads/music', download_dir_video: '~/Downloads/videos', download_dir_animated: '~/Downloads/animated', download_dir_images: '~/Downloads/images', max_concurrent: 3, log_level: 'INFO', rename_strategy: 'skip', motion_photo_default: true, history_max_records: 1000 },
+      general: { download_dir: '~/Downloads', download_dir_music: '~/Downloads/music', download_dir_video: '~/Downloads/videos', download_dir_animated: '~/Downloads/animated', download_dir_images: '~/Downloads/images', max_concurrent: 3, log_level: 'INFO', rename_strategy: 'skip', motion_photo_default: true, history_max_records: 1000, close_to_tray: false },
       proxy: { enabled: true, global: '', youtube: '', douyin: '', bilibili: '', xiaohongshu: '' },
       cookie: { douyin_path: '', bilibili_path: '' }
     };
@@ -217,6 +268,14 @@
     $('#settings-save').addEventListener('click', saveSettings);
     $('#settings-reset').addEventListener('click', resetDefaults);
     $('#setting-proxy-enabled').addEventListener('change', updateProxyFields);
+
+    // 开机自启动勾完立即写注册表，不等「保存」
+    var autostartBox = $('#setting-autostart');
+    if (autostartBox) {
+      autostartBox.addEventListener('change', function() {
+        toggleAutostart(this.checked);
+      });
+    }
 
     // 目录浏览按钮 - 调 Windows 原生 FolderBrowserDialog
     var browseMap = {

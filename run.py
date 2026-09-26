@@ -316,6 +316,110 @@ def make_uvicorn_log_config():
 
 # ---------- main ----------
 
+# ------------------------------------------------------------------
+# 托盘图标（仅当「关闭窗口时最小化到托盘」开启时才创建）
+# ------------------------------------------------------------------
+# 为什么不是无条件创建：关闭 = 直接退出时，托盘图标纯属多余，会在任务栏
+# 留一个用户不知道怎么关的图标；而「关闭 = 隐藏」时必须有图标，
+# 否则窗口一关就再也叫不回来，等于把程序卡死。
+_tray_state = {"icon": None, "really_quit": False}
+
+
+def _close_to_tray_enabled() -> bool:
+    """读配置。每次关窗口都读一次，这样改完设置不用重启就生效。"""
+    try:
+        from downloadkit.utils import load_config
+        return bool(load_config().get("general", {}).get("close_to_tray", False))
+    except Exception:
+        # 读不到就按关闭处理：宁可直接退出，也不能进入一个
+        # 没有托盘图标的「隐藏模式」把窗口弄丢
+        return False
+
+
+def _tray_image():
+    """托盘图标：优先用包里的 ico，找不到就现场画一个。
+
+    画兜底图标是因为——图标难看只是难看，程序起不来是不能用，
+    这两件事不是一个量级。
+    """
+    from PIL import Image, ImageDraw
+
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "downloadkit.ico")
+    here = Path(__file__).resolve().parent
+    candidates.append(here / "downloadkit.ico")
+    candidates.append(here / "dist" / "downloadkit.ico")
+
+    for p in candidates:
+        if p.is_file():
+            try:
+                return Image.open(p)
+            except Exception:
+                log(f"托盘图标读取失败 {p}: {traceback.format_exc()}")
+
+    # 没有 ico：蓝底圆角 + 白色播放三角
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([4, 4, 60, 60], radius=14, fill=(37, 99, 235, 255))
+    d.polygon([(25, 20), (46, 32), (25, 44)], fill=(255, 255, 255, 255))
+    return img
+
+
+def _start_tray(window) -> bool:
+    """后台线程跑托盘图标；失败返回 False，调用方降级为「关闭即退出」。"""
+    try:
+        import pystray
+    except Exception:
+        log("pystray 不可用，托盘功能关闭")
+        return False
+
+    def _show(icon=None, item=None):
+        try:
+            window.show()
+        except Exception:
+            log(f"托盘「显示窗口」失败:\n{traceback.format_exc()}")
+
+    def _quit(icon, item=None):
+        _tray_state["really_quit"] = True
+        try:
+            # 走窗口销毁，触发 closed -> uvicorn should_exit -> 进程退出，
+            # 与用户点 X 的退出路径完全一致，不另开一条收尾逻辑
+            window.destroy()
+        except Exception:
+            log(f"托盘「退出」失败:\n{traceback.format_exc()}")
+        try:
+            icon.stop()
+        except Exception:
+            pass
+
+    try:
+        icon = pystray.Icon(
+            "downloadkit",
+            _tray_image(),
+            "DownloadKit",
+            pystray.Menu(
+                pystray.MenuItem("显示主窗口", _show, default=True),
+                pystray.MenuItem("退出", _quit),
+            ),
+        )
+    except Exception:
+        log(f"托盘图标创建失败:\n{traceback.format_exc()}")
+        return False
+
+    def _run():
+        try:
+            icon.run()
+        except Exception:
+            log(f"托盘线程异常:\n{traceback.format_exc()}")
+
+    _tray_state["icon"] = icon
+    threading.Thread(target=_run, daemon=True, name="tray").start()
+    log("托盘图标已启动")
+    return True
+
+
 def main():
     global PORT
     log("=== downloadkit starting ===")
@@ -477,11 +581,34 @@ def main():
         show_error_dialog("DownloadKit - 启动失败", f"创建桌面窗口失败：\n{traceback.format_exc()[:800]}")
         sys.exit(1)
 
-    # When the user closes the window, signal uvicorn to stop.
+    # 8.5 托盘：只在「关闭=收到托盘」开着时才需要图标
+    if _close_to_tray_enabled():
+        if _start_tray(window):
+            log("close_to_tray 已启用：点关闭会收到托盘后台运行")
+        else:
+            log("托盘启动失败，降级为「关闭窗口即退出」")
+
+    # 关闭窗口时：托盘模式收进后台，否则通知 uvicorn 停止（原行为）
+    def _on_closing():
+        if _tray_state["really_quit"]:
+            return True  # 托盘菜单点了「退出」，放行关闭
+        if _tray_state["icon"] is not None:
+            try:
+                # 只隐藏不销毁：webview.start() 要等所有窗口关闭才返回，
+                # 隐藏后它继续阻塞 = 进程常驻，后台轮询照常跑
+                window.hide()
+                log("窗口已收到托盘，后台继续运行")
+                return False  # 取消本次关闭
+            except Exception:
+                log(f"隐藏窗口失败，按正常退出处理:\n{traceback.format_exc()}")
+                return True  # 隐藏不成就退出，别留下一个关不掉的僵尸窗口
+        return True  # 没开托盘：关闭 = 退出（保持原行为）
+
     def _on_closed():
         log("Window closed by user")
         server_obj.should_exit = True
 
+    window.events.closing += _on_closing
     window.events.closed += _on_closed
 
     # webview.start() blocks until all windows are closed
@@ -491,6 +618,14 @@ def main():
     except Exception:
         log(f"webview.start() error:\n{traceback.format_exc()}")
     log("webview.start() returned")
+
+    # 托盘收尾：正常关闭路径下图标线程可能还活着，显式停掉再走
+    if _tray_state["icon"] is not None:
+        try:
+            _tray_state["icon"].stop()
+        except Exception:
+            pass
+        _tray_state["icon"] = None
 
     # 9. After window closes, give uvicorn up to 3s to shut down cleanly
     server_obj.should_exit = True

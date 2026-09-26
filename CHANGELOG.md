@@ -21,6 +21,13 @@
 - NAS Docker 部署路径与下载目录挂载
 - 打包前环境预检 `build/check-build-env.py`，exe 实测
   `build/test-exe-douyin.py`（登录态、订阅读取、真实抓取）
+- 开机自启动：写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+  （当前用户，不弹 UAC），设置页开关勾完立即生效，非 exe 模式如实提示
+  不可用而不是让用户点了没反应；注册表测试打在临时键上，不碰用户真键
+- 关闭窗口时最小化到托盘（pystray）：窗口收进后台、订阅轮询与下载不中断，
+  托盘菜单提供「显示主窗口 / 退出」；未开启该开关时关闭仍等于退出，
+  原行为不变。exe 实测 `build/test-exe-tray.py`（注册表读写、托盘创建、
+  WM_CLOSE 两种关闭路径、红线复核）
 
 ### 优化
 - 项目合并：Windows 桌面版与 NAS Docker 版统一到一个仓库
@@ -28,6 +35,9 @@
 
 ### 修复
 - PyInstaller `excludes` 误排除 playwright，导致 exe 内抖音功能全部失效
+- PyInstaller `excludes` 误排除 PIL/Pillow（按「大而无用的库」一刀切），
+  导致 exe 内托盘图标、实况照片、抖音图片处理全部拿不到 Pillow
+  （`run.py` / `motion_photo` / `douyin` 三处引用一并受影响）
 - 抖音浏览器启动失败时未释放 playwright driver，轮询每失败一次就泄漏
   一个进程
 - 安装包版本号写成 1.0.0，与项目版本无关

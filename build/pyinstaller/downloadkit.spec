@@ -22,6 +22,10 @@ a = Analysis(
     datas=[
         (str(project_root / 'downloadkit' / 'static'), 'downloadkit/static'),
         (str(project_root / 'server.py'), '.'),
+        # 托盘图标：只写下面的 icon= 只是把图标嵌进 exe 的资源段，
+        # 运行时拿不到实体文件，Pillow 就打不开。必须再作为数据文件
+        # 放一份进包，run.py 的 _tray_image() 才读得到。
+        (str(project_root / 'downloadkit.ico'), '.'),
     ] + pw_data,
     hiddenimports=[
         # uvicorn
@@ -95,8 +99,12 @@ a = Analysis(
         'sklearn',
         'cv2',
         'opencv',
-        'PIL',
-        'Pillow',
+        # 注意：这里历史上曾排除 'PIL'/'Pillow'（按「大而无用的库」一刀切）。
+        # 2026-09-26 实测踩到：托盘图标 run.py:_tray_image() 要
+        # `from PIL import Image, ImageDraw`，被排除后 exe 里必然
+        # ImportError，托盘直接哑掉降级成「关闭即退出」，1.5 白做。
+        # 同一排除还让实况照片（motion_photo）在 exe 里拿不到 PIL。
+        # Pillow 只有几 MB，换两个功能可用，划算 —— 不要再加回去。
         'onnxruntime',
         'numba',
         'llvmlite',

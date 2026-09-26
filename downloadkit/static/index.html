@@ -467,6 +467,22 @@
               </div>
             </div>
             
+            <div style="margin-bottom:0;padding-top:12px;border-top:1px solid var(--border)">
+              <h4 style="margin-bottom:12px;font-weight:500;font-size:14px">启动与后台</h4>
+              
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                <label style="font-size:13px;color:var(--text-secondary)">开机自动启动</label>
+                <input type="checkbox" id="setting-autostart" style="width:18px;height:18px;cursor:pointer">
+                <span id="setting-autostart-hint" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
+              </div>
+              
+              <div style="display:flex;align-items:center;gap:8px">
+                <label style="font-size:13px;color:var(--text-secondary)">关闭窗口时最小化到托盘</label>
+                <input type="checkbox" id="setting-close-to-tray" style="width:18px;height:18px;cursor:pointer">
+                <span style="font-size:11px;color:var(--text-secondary)">开启后程序常驻后台，订阅检查不中断 <span style="color:var(--warning)">下次启动生效</span></span>
+              </div>
+            </div>
+            
             <div style="display:flex;gap:8px;margin-top:24px;padding-top:16px;border-top:1px solid var(--border)">
               <button class="btn btn-primary" id="settings-save"><i data-lucide="save" style="width:14px;height:14px;margin-right:6px"></i>保存</button>
               <button class="btn btn-secondary" id="settings-reset">恢复默认</button>

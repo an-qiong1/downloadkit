@@ -1388,6 +1388,40 @@ class CookieLoadFromBrowserRequest(BaseModel):
 
 
 # ------------------------------------------------------------------
+# 开机自启动
+# ------------------------------------------------------------------
+# 与 /api/settings/update 的区别：那个写 config.toml（应用自己的配置），
+# 这个写 HKCU\...\Run（系统状态，决定登录时谁被拉起来）。
+# 所以它是独立端点，不塞进 general 段里，也不跟着「保存」按钮一起提交 ——
+# 用户勾完就该立即生效，攒着不保存会让人以为开关没反应。
+
+
+@app.get("/api/settings/autostart")
+async def api_settings_autostart_get():
+    """查询开机自启动状态。
+
+    源码运行时返回 available=False（没有可自启的程序），
+    前端据此禁用开关并显示原因，而不是让用户点了没反应。
+    """
+    from downloadkit import autostart
+    return autostart.get_status()
+
+
+class AutostartSetRequest(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/settings/autostart")
+async def api_settings_autostart_set(req: AutostartSetRequest):
+    """开启/关闭开机自启动（写/删 HKCU\\Software\\...\\Run\\DownloadKit）"""
+    from downloadkit import autostart
+    res = autostart.set_enabled(req.enabled)
+    if not res.get("ok", True):
+        raise HTTPException(400, res.get("message") or "设置开机启动失败")
+    return res
+
+
+# ------------------------------------------------------------------
 # 抖音登录（订阅功能的前置条件）
 # ------------------------------------------------------------------
 # 与上面 /api/cookies/* 的区别：

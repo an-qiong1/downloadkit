@@ -102,6 +102,11 @@ DEFAULT_CONFIG: dict = {
         "history_max_records": 1000,
         "rename_strategy": "skip",
         "motion_photo_default": True,
+        # 关闭主窗口时最小化到托盘（= 程序常驻后台，轮询/下载不中断）。
+        # 默认关闭：装完就静默常驻会让人以为程序没关掉，
+        # 由用户在「设置 → 启动与后台」主动打开。
+        # 仅打包成 exe 后生效，源码运行时忽略（见 run.py）。
+        "close_to_tray": False,
     },
     "proxy": {
         "enabled": True,

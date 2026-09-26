@@ -33,6 +33,10 @@ browser = [
 ]
 desktop = [
     "pywebview>=5.0",
+    # 托盘图标（关闭到托盘 / 后台常驻）。pystray 在 Windows 上会走
+    # Pillow 渲染图标，所以两个一起声明，单装 desktop 这个 extra 就能用。
+    "pystray>=0.19",
+    "Pillow>=10.0",
 ]
 douyin = [
     "playwright>=1.40",
