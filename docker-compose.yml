@@ -6,10 +6,10 @@
 # ── 部署步骤 ───────────────────────────────────────────────────────────────
 # 1. 把项目传到 NAS:
 #    rsync -avz --exclude='.venv' --exclude='__pycache__' --exclude='.git' \
-#      ./ wuyang@192.168.10.11:/vol1/1000/影视/docker/downloadkit/
+#      ./ wuyang@192.168.10.11:/vol1/1000/应用/docker/downloadkit/
 #
 # 2. SSH 到 NAS 执行:
-#    cd /vol1/1000/影视/docker/downloadkit
+#    cd /vol1/1000/应用/docker/downloadkit
 #    docker compose up -d --build
 #
 # 3. 访问: http://192.168.10.11:8765
@@ -48,12 +48,14 @@ services:
       - LANG=C.UTF-8
       - LC_ALL=C.UTF-8
       - PYTHONIOENCODING=utf-8
+      # 覆盖默认 ~/Downloads → 写入 /app/downloads（bind mount 到 NAS）
+      - MUSIC_DL_DIR=./downloads
       # 容器标记：让后端知道运行在容器中（影响"打开目录"行为）
       - RUNNING_IN_CONTAINER=1
       # NAS 路径配置（用于"打开目录"弹窗展示路径信息）
       - NAS_BASE_URL=http://192.168.10.11:5666
-      - NAS_FILES_PATH=/vol1/1000/影视/docker/downloadkit/downloads
-      - NAS_SMB_PATH=\\192.168.10.11\影视\docker\downloadkit\downloads
+      - NAS_FILES_PATH=/vol1/1000/应用/docker/downloadkit/downloads
+      - NAS_SMB_PATH=\\192.168.10.11\应用\docker\downloadkit\downloads
 
     # ── 资源限制 ──────────────────────────────────────────────────────────
     deploy:
