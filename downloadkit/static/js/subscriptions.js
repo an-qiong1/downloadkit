@@ -424,11 +424,11 @@
     };
   }
 
-  function checkAll() {
+  async function checkAll() {
     var strat = readStrategy();
     if (strat.scope === 'all') {
       // 与卡片上选「全部补下」同一个防呆：可能一次排队几十上百个
-      var ok = confirm(
+      var ok = await uiConfirm(
         '本次检查把所有创作者的历史作品全部补下？\n\n' +
         '水位线之下没下过的作品会按单轮上限分批入队，' +
         '已下载过的不会重复。'
@@ -488,7 +488,7 @@
     }).finally(function () { refresh(); });
   }
 
-  function onListClick(e) {
+  async function onListClick(e) {
     var btn = e.target.closest ? e.target.closest('button[data-act]') : null;
     if (btn && btn.dataset.act === 'check') { checkOne(btn); return; }
 
@@ -513,7 +513,7 @@
     }
 
     if (act === 'remove') {
-      if (!confirm('取消订阅？\n\n已下载的文件不会被删除。\n已发现的作品记录会保留，重新订阅时不会重复下载。')) return;
+      if (!(await uiConfirm('取消订阅？\n\n已下载的文件不会被删除。\n已发现的作品记录会保留，重新订阅时不会重复下载。'))) return;
       btn.disabled = true;
       api(API + '/' + encodeURIComponent(sec), { method: 'DELETE' })
         .then(function () { toast('已取消订阅', 'success'); return refresh(); })
@@ -566,7 +566,7 @@
     });
   }
 
-  function onScopeChange(e) {
+  async function onScopeChange(e) {
     var sel = e.target;
     if (!sel || !sel.classList || !sel.classList.contains('sub-scope')) return;
     var scope = sel.value;
@@ -575,7 +575,7 @@
 
     if (scope === 'all') {
       // 「全部」可能一次排队几十上百个，值得拦一下
-      var ok = confirm(
+      var ok = await uiConfirm(
         '把这个创作者的下载范围设为「全部补下」？\n\n' +
         '水位线之下的历史作品会在此后的检查中分批下载' +
         '（受单轮下载上限约束），已下载过的不会重复。'
@@ -612,9 +612,9 @@
     var sc = el('strat-scope');
     if (sc) {
       sc.dataset.prev = sc.value;
-      sc.addEventListener('change', function () {
+      sc.addEventListener('change', async function () {
         if (sc.value === 'all') {
-          var ok = confirm(
+          var ok = await uiConfirm(
             '本次检查把所有创作者的历史作品全部补下？\n\n' +
             '水位线之下没下过的作品会按单轮上限分批入队，' +
             '已下载过的不会重复。'

@@ -275,7 +275,7 @@
           '<div class="preview-header-title">' + escHtml(data.title || '无标题') + '</div>' +
           '<div class="preview-header-meta">' + escHtml(data.author || '未知作者') + ' · <span class="platform-tag" style="background:' + p.bg + ';color:' + p.color + ';margin-top:0">' + p.label + '</span></div>' +
         '</div>' +
-        '<button class="btn btn-primary" id="resource-download-btn"><i data-lucide="download" style="width:14px;height:14px;margin-right:6px"></i>下载</button>' +
+        '<button class="btn btn-primary" id="resource-download-btn"><i data-lucide="download"></i>下载</button>' +
       '</div>';
 
     // 内容预览主体
@@ -491,7 +491,7 @@
   function downloadResource(url, platform, btn) {
     btn = btn || $('#resource-download-btn');
     if (!btn) return;
-    var iconHtml = '<i data-lucide="download" style="width:14px;height:14px;margin-right:6px"></i>';
+    var iconHtml = '<i data-lucide="download"></i>';
     btn.disabled = true;
     btn.innerHTML = iconHtml + '下载中…';
     lucide.createIcons();
@@ -565,7 +565,7 @@
     
     var btn = $('#batch-parse-btn');
     btn.disabled = true;
-    btn.innerHTML = '<i data-lucide="search" style="width:14px;height:14px;margin-right:6px"></i>解析中...';
+    btn.innerHTML = '<i data-lucide="search"></i>解析中...';
     lucide.createIcons();
     
     var st = $('#batch-status');
@@ -583,7 +583,7 @@
       st.className = 'status-msg error';
     }).finally(function() { 
       btn.disabled = false; 
-      btn.innerHTML = '<i data-lucide="search" style="width:14px;height:14px;margin-right:6px"></i>解析全部';
+      btn.innerHTML = '<i data-lucide="search"></i>解析全部';
       lucide.createIcons();
     });
   });
@@ -649,8 +649,8 @@
       html += '<label for="batch-select-all">全选 (' + successCount + ')</label>';
       html += '</div>';
       html += '<div class="batch-download-actions">';
-      html += '<button class="btn btn-primary" id="batch-download-selected"><i data-lucide="download" style="width:14px;height:14px;margin-right:6px"></i>下载选中</button>';
-      html += '<button class="btn btn-secondary" id="batch-download-all"><i data-lucide="download" style="width:14px;height:14px;margin-right:6px"></i>下载全部</button>';
+      html += '<button class="btn btn-primary" id="batch-download-selected"><i data-lucide="download"></i>下载选中</button>';
+      html += '<button class="btn btn-secondary" id="batch-download-all"><i data-lucide="download"></i>下载全部</button>';
       html += '</div>';
       html += '</div>';
     }

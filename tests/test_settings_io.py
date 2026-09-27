@@ -69,8 +69,8 @@ def test_import_validates_json_and_whitelists_sections():
     assert "Array.isArray" in body, "没挡数组冒充设置对象"
     # 一段都没有 = 拒绝
     assert "没有可识别的设置段" in body
-    # 覆盖前必须确认
-    assert "confirm(" in body, "导入是覆盖性操作，缺确认"
+    # 覆盖前必须确认（P4-4 起原生 confirm 换成 uiConfirm 弹窗）
+    assert "uiConfirm(" in body, "导入是覆盖性操作，缺确认"
     # 写完刷新界面
     assert "loadSettings()" in body, "导入后没刷新设置页"
     # 编码显式 + 同一文件可重复选

@@ -148,7 +148,7 @@
       
       // 绑定按钮事件
       $$('.queue-item-actions .icon-btn', listEl).forEach(function(btn) {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', async function() {
           var action = btn.dataset.action;
           var taskId = btn.dataset.taskId;
           
@@ -161,7 +161,7 @@
               refreshQueue();
             });
           } else if (action === 'cancel') {
-            if (confirm('确定取消此下载？')) {
+            if (await uiConfirm('确定取消此下载？')) {
               api('/api/queue/' + taskId + '/cancel', { method: 'POST' }).then(function() {
                 refreshQueue();
               });
@@ -223,8 +223,8 @@
   // 一键重试全部失败（P3-2）
   // orphaned = 失败太久已被清理出队列的任务（见 api_retry_failed 注释），
   // 它们统计得出来但重发不了，必须跟用户说明白，不然点了像没反应
-  $('#queue-retry-failed').addEventListener('click', function() {
-    if (!confirm('重试所有失败任务？')) return;
+  $('#queue-retry-failed').addEventListener('click', async function() {
+    if (!(await uiConfirm('重试所有失败任务？'))) return;
     api('/api/queue/retry-failed', { method: 'POST' }).then(function(r) {
       var n = r.retried || 0;
       var msg = n > 0 ? ('已重新加入 ' + n + ' 个任务') : '没有可重试的任务';

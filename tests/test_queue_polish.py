@@ -144,7 +144,7 @@ def test_queue_header_has_failed_stat_and_batch_button():
 
 def test_queue_js_wires_batch_retry():
     assert "/api/queue/retry-failed" in QUEUE_JS, "按钮没调批量端点"
-    assert "confirm(" in QUEUE_JS, "批量重试前没有确认"
+    assert "uiConfirm(" in QUEUE_JS, "批量重试前没有确认（P4-4 起用 uiConfirm 弹窗）"
     assert "orphaned" in QUEUE_JS, "没把过期任务数转述给用户"
     assert "failedCount > 0" in QUEUE_JS, "按钮没按失败数显隐"
     assert "queue-failed-stat" in QUEUE_JS, "失败计数没回填"

@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20260927k">
+<link rel="stylesheet" href="css/main.css?v=20260927l">
 </head>
 <body>
 
@@ -153,8 +153,8 @@
         <div style="max-width:860px">
 
           <!-- 添加订阅 -->
-          <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
-            <div style="font-size:14px;font-weight:500;margin-bottom:4px">订阅抖音创作者</div>
+          <div class="card">
+            <div class="card-title">订阅抖音创作者</div>
             <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:12px">
               粘贴创作者主页链接，订阅后他会发的新作品会被自动发现并下载。
             </div>
@@ -173,10 +173,10 @@
           </div>
 
           <!-- 自动检查（A5） -->
-          <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+          <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
               <div style="flex:1;min-width:240px">
-                <div style="font-size:14px;font-weight:500;margin-bottom:4px">自动检查新作品</div>
+                <div class="card-title">自动检查新作品</div>
                 <div style="font-size:12px;color:var(--text-secondary);line-height:1.6">
                   打开后按固定间隔在后台检查所有订阅并自动下载新作品（默认 60 分钟一次、带随机浮动，太频繁会触发验证码）。
                 </div>
@@ -342,7 +342,7 @@
 
                 <div style="margin-bottom:10px">
                   <label class="f-label">基础下载目录 <span class="eff eff-live">立即生效</span></label>
-                  <div style="display:flex;gap:6px">
+                  <div class="row">
                     <input class="search-input" id="setting-download-dir" type="text" placeholder="~/Downloads/DownloadKit 或 D:\Downloads\DownloadKit" style="flex:1">
                     <button class="btn btn-secondary" id="setting-browse-dir">选择目录</button>
                   </div>
@@ -369,7 +369,7 @@
                   <div style="margin-top:8px;padding-top:4px;border-top:1px dashed var(--border)">
                     <div style="margin-bottom:10px">
                       <label class="f-label">音乐下载目录</label>
-                      <div style="display:flex;gap:6px">
+                      <div class="row">
                         <input class="search-input" id="setting-download-dir-music" type="text" placeholder="跟随总目录" style="flex:1">
                         <button class="btn btn-secondary" id="setting-browse-dir-music">选择目录</button>
                       </div>
@@ -377,7 +377,7 @@
 
                     <div style="margin-bottom:10px">
                       <label class="f-label">视频下载目录</label>
-                      <div style="display:flex;gap:6px">
+                      <div class="row">
                         <input class="search-input" id="setting-download-dir-video" type="text" placeholder="跟随总目录" style="flex:1">
                         <button class="btn btn-secondary" id="setting-browse-dir-video">选择目录</button>
                       </div>
@@ -385,7 +385,7 @@
 
                     <div style="margin-bottom:10px">
                       <label class="f-label">实况照片目录</label>
-                      <div style="display:flex;gap:6px">
+                      <div class="row">
                         <input class="search-input" id="setting-download-dir-animated" type="text" placeholder="跟随总目录" style="flex:1">
                         <button class="btn btn-secondary" id="setting-browse-dir-animated">选择目录</button>
                       </div>
@@ -393,7 +393,7 @@
 
                     <div style="margin-bottom:0">
                       <label class="f-label">图片下载目录</label>
-                      <div style="display:flex;gap:6px">
+                      <div class="row">
                         <input class="search-input" id="setting-download-dir-images" type="text" placeholder="跟随总目录" style="flex:1">
                         <button class="btn btn-secondary" id="setting-browse-dir-images">选择目录</button>
                       </div>
@@ -500,7 +500,7 @@
                 <input class="search-input" id="setting-cookie-douyin" type="text" placeholder="~/.downloadkit/cookies/douyin.json" style="width:100%">
 
                 <!-- 抖音 Cookie 助手（新增：登录并获取） -->
-                <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <div class="row" style="margin-top:6px">
                   <button class="btn btn-primary btn-xs" id="cookie-login-douyin" data-platform="douyin"><i data-lucide="globe"></i>登录并获取</button>
                   <button class="btn btn-secondary btn-xs" id="cookie-load-douyin" data-platform="douyin"><i data-lucide="search"></i>立即读取</button>
                   <select class="search-input compact" id="cookie-browser-douyin">
@@ -516,7 +516,7 @@
                 </div>
 
                 <!-- B站 Cookie 助手（新增：登录并获取） -->
-                <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <div class="row" style="margin-top:6px">
                   <button class="btn btn-primary btn-xs" id="cookie-login-bilibili" data-platform="bilibili"><i data-lucide="globe"></i>登录并获取</button>
                   <button class="btn btn-secondary btn-xs" id="cookie-load-bilibili" data-platform="bilibili"><i data-lucide="search"></i>立即读取</button>
                   <select class="search-input compact" id="cookie-browser-bilibili">
@@ -748,15 +748,15 @@
 <!-- Toast容器 -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="js/utils.js?v=20260927c"></script>
+<script src="js/utils.js?v=20260927l"></script>
 <script src="js/music.js?v=20260927i"></script>
-<script src="js/resource.js?v=20260927i"></script>
-<script src="js/files.js?v=20260927k"></script>
-<script src="js/queue.js?v=20260927k"></script>
-<script src="js/settings.js?v=20260927h"></script>
-<script src="js/douyin-login.js?v=20260926a"></script>
-<script src="js/subscriptions.js?v=20260927j"></script>
-<script src="js/collections.js?v=20260927k"></script>
+<script src="js/resource.js?v=20260927l"></script>
+<script src="js/files.js?v=20260927l"></script>
+<script src="js/queue.js?v=20260927l"></script>
+<script src="js/settings.js?v=20260927l"></script>
+<script src="js/douyin-login.js?v=20260927l"></script>
+<script src="js/subscriptions.js?v=20260927l"></script>
+<script src="js/collections.js?v=20260927l"></script>
 <script src="js/help.js?v=20260927g"></script>
 <script src="js/app.js?v=20260927c"></script>
 </body>

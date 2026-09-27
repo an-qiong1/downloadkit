@@ -16,7 +16,7 @@
     container.innerHTML =
       '<div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">' +
         '<h3 style="margin:0;font-size:16px;font-weight:600">收藏歌单</h3>' +
-        '<button class="btn btn-primary" id="coll-add-btn"><i data-lucide="plus" style="width:14px;height:14px;margin-right:6px"></i>添加收藏</button>' +
+        '<button class="btn btn-primary" id="coll-add-btn"><i data-lucide="plus"></i>添加收藏</button>' +
       '</div>' +
       '<div id="coll-loading" class="status-msg" style="display:none"><span class="spinner"></span> 加载中...</div>' +
       '<div id="coll-empty" class="status-msg" style="display:none">还没有收藏的歌单，点击右上角添加</div>' +
@@ -40,8 +40,8 @@
           '<div id="coll-detail-info" style="margin-bottom:16px;font-size:13px;color:var(--text-secondary)"></div>' +
           '<div id="coll-detail-tracks" style="margin-bottom:16px"></div>' +
           '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">' +
-            '<button class="btn btn-secondary" id="coll-detail-refresh"><i data-lucide="refresh-cw" style="width:14px;height:14px;margin-right:6px"></i>刷新</button>' +
-            '<button class="btn btn-primary" id="coll-detail-download"><i data-lucide="download" style="width:14px;height:14px;margin-right:6px"></i>下载全部</button>' +
+            '<button class="btn btn-secondary" id="coll-detail-refresh"><i data-lucide="refresh-cw"></i>刷新</button>' +
+            '<button class="btn btn-primary" id="coll-detail-download"><i data-lucide="download"></i>下载全部</button>' +
             '<button class="btn btn-secondary" id="coll-detail-close">关闭</button>' +
           '</div>' +
         '</div>' +
@@ -164,10 +164,10 @@
 
     // 删除按钮
     list.querySelectorAll('.coll-delete').forEach(function(btn) {
-      btn.addEventListener('click', function(e) {
+      btn.addEventListener('click', async function(e) {
         e.stopPropagation();
         var id = parseInt(this.dataset.id);
-        if (id && confirm('确定删除这个收藏歌单？')) {
+        if (id && await uiConfirm('确定删除这个收藏歌单？')) {
           api('/api/collections/' + id, { method: 'DELETE' }).then(function() {
             toast('已删除', 'success');
             loadList();

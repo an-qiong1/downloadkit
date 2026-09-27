@@ -966,6 +966,28 @@ details[open] #dir-advanced-arrow {
   height: 15px;
 }
 
+/* P4-4 行内样式收编：重复的横排布局与卡片壳 */
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
 
 .episode-title {
   font-size: 13px;
@@ -2618,6 +2640,80 @@ details[open] #dir-advanced-arrow {
   padding: 0 20px 16px;
   display: flex;
   justify-content: flex-end;
+}
+
+/* ========== P4-4 确认弹窗（替原生 confirm，由 utils.js 的 uiConfirm 生成）========== */
+.ui-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+  animation: ui-modal-fade 0.15s ease;
+}
+
+.ui-modal {
+  width: 100%;
+  max-width: 420px;
+  padding: 20px;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+  animation: ui-modal-pop 0.18s ease;
+}
+
+.ui-modal-title {
+  margin-bottom: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ui-modal-body {
+  margin-bottom: 18px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+.ui-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ui-modal-btn {
+  padding: 7px 18px;
+  font-size: 13px;
+  border-radius: var(--radius-pill);
+}
+
+.ui-modal-ok {
+  background: var(--primary);
+  color: #fff;
+}
+
+.ui-modal-ok:hover {
+  background: var(--primary-hover);
+}
+
+.ui-modal-ok.danger {
+  background: var(--error);
+}
+
+@keyframes ui-modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ui-modal-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
 }
 
 

@@ -143,10 +143,10 @@
       
       // 绑定单文件删除按钮事件
       $$('.file-delete-btn', listEl).forEach(function(btn) {
-        btn.addEventListener('click', function(e) {
+        btn.addEventListener('click', async function(e) {
           e.stopPropagation();  // 阻止冒泡，避免触发打开目录
           var filepath = btn.dataset.path;
-          if (confirm('确定删除此文件？')) {
+          if (await uiConfirm('确定删除此文件？')) {
             api('/api/files/batch-delete', { method: 'POST', body: { files: [filepath] } })
               .then(function(result) {
                 if (result.deleted && result.deleted.length > 0) {
@@ -307,11 +307,11 @@
   });
   
   // 批量删除选中文件
-  $('#files-delete-selected').addEventListener('click', function() {
+  $('#files-delete-selected').addEventListener('click', async function() {
     var files = Object.keys(selectedFiles);
     if (files.length === 0) return;
     
-    if (!confirm('确定删除选中的 ' + files.length + ' 个文件？')) return;
+    if (!(await uiConfirm('确定删除选中的 ' + files.length + ' 个文件？'))) return;
     
     api('/api/files/batch-delete', { method: 'POST', body: { files: files } })
       .then(function(result) {

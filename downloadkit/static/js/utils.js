@@ -84,3 +84,74 @@ var tabTitles = {
   'help': '解答',
 
 };
+
+// ========== 确认弹窗（P4-4，替原生 confirm）==========
+// 原生 confirm 卡死页面且样式和应用完全不搭；换成返回 Promise 的
+// 同款弹窗：Enter=确认、Esc=取消、点遮罩=取消，\n 直接换行。
+// 不用 id（静态引用检查只认 index.html 里存在的元素），全部局部引用；
+// 用 textContent 塞正文，消息里的尖括号不会被当 HTML 解析。
+function uiConfirm(message, options) {
+  options = options || {};
+  return new Promise(function (resolve) {
+    var mask = document.createElement('div');
+    mask.className = 'ui-modal-mask';
+
+    var box = document.createElement('div');
+    box.className = 'ui-modal';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-modal', 'true');
+
+    var title = document.createElement('div');
+    title.className = 'ui-modal-title';
+    title.textContent = options.title || '请确认';
+
+    var body = document.createElement('div');
+    body.className = 'ui-modal-body';
+    body.textContent = message || '';
+
+    var actions = document.createElement('div');
+    actions.className = 'ui-modal-actions';
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-secondary ui-modal-btn';
+    cancelBtn.textContent = options.cancelText || '取消';
+
+    var okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.className = 'btn ui-modal-btn ui-modal-ok' + (options.danger ? ' danger' : '');
+    okBtn.textContent = options.okText || '确认';
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    box.appendChild(title);
+    box.appendChild(body);
+    box.appendChild(actions);
+    mask.appendChild(box);
+
+    var done = false;
+    function close(v) {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey, true);
+      if (mask.parentNode) mask.parentNode.removeChild(mask);
+      resolve(v);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); close(true); }
+      else if (e.key === 'Tab') {
+        // 焦点关在弹窗里：只有两个按钮，Tab 来回切
+        e.preventDefault();
+        (document.activeElement === okBtn ? cancelBtn : okBtn).focus();
+      }
+    }
+    mask.addEventListener('click', function (e) { if (e.target === mask) close(false); });
+    cancelBtn.addEventListener('click', function () { close(false); });
+    okBtn.addEventListener('click', function () { close(true); });
+    document.addEventListener('keydown', onKey, true);
+
+    document.body.appendChild(mask);
+    okBtn.focus();
+  });
+}

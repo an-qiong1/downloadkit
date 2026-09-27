@@ -151,8 +151,8 @@
     });
   }
 
-  function logout() {
-    if (!confirm('确定要退出抖音登录吗？退出后订阅功能会不可用。')) return;
+  async function logout() {
+    if (!(await uiConfirm('确定要退出抖音登录吗？退出后订阅功能会不可用。'))) return;
     setButtons('busy');
     api(API + '/logout', { method: 'POST' }).then(function (d) {
       if (!d.ok) {

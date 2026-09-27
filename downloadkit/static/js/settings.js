@@ -104,13 +104,13 @@
         } else {
           var msg = (typeof info.message === 'string') ? info.message : (info.message && (info.message.error || info.message.detail)) || '不可用';
           var tip = (typeof info.message === 'string') ? info.message : JSON.stringify(info.message || '');
-          statusEl.innerHTML = '<span style="color:var(--danger)" title="' + tip.replace(/"/g, '&quot;') + '">✗ ' + msg + '</span>';
+          statusEl.innerHTML = '<span style="color:var(--error)" title="' + tip.replace(/"/g, '&quot;') + '">✗ ' + msg + '</span>';
         }
       })
       .catch(function(err) {
         actualEl.textContent = '(检查失败)';
         var errMsg = (err && err.message) ? err.message : String(err);
-        statusEl.innerHTML = '<span style="color:var(--danger)">✗ ' + errMsg + '</span>';
+        statusEl.innerHTML = '<span style="color:var(--error)">✗ ' + errMsg + '</span>';
       });
   }
 
@@ -346,14 +346,14 @@
       toast('保存失败: ' + err.message, 'error');
     }).finally(function() {
       $('#settings-save').disabled = false;
-      $('#settings-save').innerHTML = '<i data-lucide="save" style="width:14px;height:14px;margin-right:6px"></i>保存';
+      $('#settings-save').innerHTML = '<i data-lucide="save"></i>保存';
       lucide.createIcons();
     });
   }
 
   // ========== 恢复默认 ==========
-  function resetDefaults() {
-    if (!confirm('确定恢复默认设置？')) return;
+  async function resetDefaults() {
+    if (!(await uiConfirm('确定恢复默认设置？'))) return;
     
     var defaults = {
       general: { download_dir: '~/Downloads/DownloadKit', download_dir_music: '~/Downloads/DownloadKit/music', download_dir_video: '~/Downloads/DownloadKit/videos', download_dir_animated: '~/Downloads/DownloadKit/animated', download_dir_images: '~/Downloads/DownloadKit/images', max_concurrent: 3, log_level: 'INFO', rename_strategy: 'skip', motion_photo_default: true, history_max_records: 1000, close_to_tray: false },
@@ -423,7 +423,7 @@
     if (!file) return;
 
     var reader = new FileReader();
-    reader.onload = function() {
+    reader.onload = async function() {
       var data;
       try {
         data = JSON.parse(reader.result);
@@ -449,7 +449,7 @@
         toast('导入失败：没有可识别的设置段（general / proxy / cookie / subscription）', 'error');
         return;
       }
-      if (!confirm('导入将覆盖当前的【' + keys.join('、') + '】设置，确定？')) {
+      if (!(await uiConfirm('导入将覆盖当前的【' + keys.join('、') + '】设置，确定？'))) {
         return;
       }
       api('/api/settings/update', { method: 'POST', body: payload }).then(function() {
@@ -597,10 +597,10 @@
             method: 'POST',
             body: JSON.stringify({ platform: platform, browser: browser })
           })
-          .then(function(res) {
+          .then(async function(res) {
             btn.disabled = false;
             if (!res || !res.ok) {
-              if (status) status.innerHTML = '<span style="color:var(--danger)">✗ ' + (res.error || '读取失败') + '</span>';
+              if (status) status.innerHTML = '<span style="color:var(--error)">✗ ' + (res.error || '读取失败') + '</span>';
               toast(res.error || '读取 Cookie 失败', 'error');
               return;
             }
@@ -608,7 +608,7 @@
               status.innerHTML = '<span style="color:var(--success)">✓ 找到 ' + res.count + ' 个 Cookie</span>';
             }
             // 弹窗让用户确认保存
-            var ok = window.confirm(
+            var ok = await uiConfirm(
               '从 ' + res.browser + ' 浏览器找到 ' + res.count + ' 个 ' + (platform === 'douyin' ? '抖音' : 'B站') + ' Cookie。\n\n' +
               '点击 [确定] 保存到默认文件：\n' +
               '  ~/.downloadkit/cookies/' + platform + '.txt\n\n' +
@@ -633,13 +633,13 @@
               })
               .catch(function(err) {
                 toast('保存失败: ' + err.message, 'error');
-                if (status) status.innerHTML = '<span style="color:var(--danger)">✗ 保存失败: ' + err.message + '</span>';
+                if (status) status.innerHTML = '<span style="color:var(--error)">✗ 保存失败: ' + err.message + '</span>';
               });
             }
           })
           .catch(function(err) {
             btn.disabled = false;
-            if (status) status.innerHTML = '<span style="color:var(--danger)">✗ ' + err.message + '</span>';
+            if (status) status.innerHTML = '<span style="color:var(--error)">✗ ' + err.message + '</span>';
             toast('请求失败: ' + err.message, 'error');
           });
         });
@@ -722,7 +722,7 @@
             .then(function(loadRes) {
               close();
               if (!loadRes || !loadRes.ok) {
-                if (status) status.innerHTML = '<span style="color:var(--danger)">✗ ' + (loadRes.error || '读取失败') + '</span>';
+                if (status) status.innerHTML = '<span style="color:var(--error)">✗ ' + (loadRes.error || '读取失败') + '</span>';
                 toast(loadRes.error || '读取 Cookie 失败', 'error');
                 return;
               }
@@ -748,14 +748,14 @@
                 if (input) input.value = saveRes.path;
               })
               .catch(function(err) {
-                if (status) status.innerHTML = '<span style="color:var(--danger)">✗ 保存失败: ' + err.message + '</span>';
+                if (status) status.innerHTML = '<span style="color:var(--error)">✗ 保存失败: ' + err.message + '</span>';
                 toast('保存失败: ' + err.message, 'error');
               });
             })
             .catch(function(err) {
               close();
               var status = $('#cookie-status-' + platform);
-              if (status) status.innerHTML = '<span style="color:var(--danger)">✗ ' + err.message + '</span>';
+              if (status) status.innerHTML = '<span style="color:var(--error)">✗ ' + err.message + '</span>';
               toast('请求失败: ' + err.message, 'error');
             });
           });

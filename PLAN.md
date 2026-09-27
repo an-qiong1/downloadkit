@@ -26,6 +26,7 @@
 | 2026-09-27 | P4-1 两个体验 Bug | Bug⑤ 选中残留：`refreshFiles` 裁剪 `selectedFiles`、空列表回位全选框+工具栏计数、单删同步移出选中集、重绘后恢复有效勾选；Bug⑥ 完成行点击无反应：完成行可点（`queue-item-done`）→ 新端点 `POST /api/open-file`（裸文件名在下载目录递归找分类子目录，遍历/越界 403 拦死、目录 400、缺失 404）打开文件 → `POST /api/queue/{id}/dismiss` 双侧清除（队列 + `_downloads`，只删一边刷新复活）、进行中任务 409 拒绝；headless 回文件路径弹窗（标题「文件位置」）；`tests/test_open_file.py` 17 例，pytest 458 passed |
 | 2026-09-27 | P4-2 文件命名 | 抖音改 `标题 发布日期.ext`（日期在后）：浏览器后端从页面「发布时间：…」抓日期（body 正则 + `[data-e2e*=time]` 兜底，**零额外请求**，探针实测命中），旧接口路径从 `create_time` 按 UTC+8 换算（秒/毫秒/坏值都容错）；缺日期或缺标题回落 `douyin_<作品ID>` 不硬造；四命名点（浏览器视频/旧接口视频/实况/图文）统一走 `build_download_base`（非法字符清洗 + 120 字封顶），各点加 `_existing_target` 旧命名兜底去重，切换命名后重下不出第二份；`download_content` 先定死 `rename_strategy` 再做已存在预检；真实解析实测 `publish_date='2026-09-24'`、文件名 `…2026-09-24.mp4`；`tests/test_douyin_naming.py` 18 例，pytest 477 passed |
 | 2026-09-27 | P4-3 UI 统一 | 5 个真开关改 `.switch` 平移 toggle（appearance:none + `::after` 滑块，原生 checkbox/`label[for]` 保留，JS 零改动）；代理三态 radio 改 `.segmented` 分段按钮（radio 视觉隐藏留 DOM，`test_proxy`/`test_control_modes` 结构断言零改动全兼容）；`.search-input` 统一带边框盒（`.search-box` 内清透明防双边框）+ `.compact` 紧凑档收编订阅面板内联；`.btn-xs`/`.btn [data-lucide] 15px` 收编 16 处内联，📂🌐🔍→lucide；订阅「自动检查」两句并一句；走查 7 面板 console 零错误 + 截图核对（误点启用跑了 1 轮空轮询，0 下载已恢复关闭）；pytest 477 passed / 6 skipped |
+| 2026-09-27 | P4-4 confirm 弹窗 + 内联收编 | 原生 `confirm` 全换 `uiConfirm`（utils.js 返回 Promise，Enter/Esc/遮罩/焦点陷阱，textContent 防注入、不用 id），13 处调用方 async 化、文案不动；两处测试断言 `confirm(`→`uiConfirm(`；新增 `.row`/`.card`/`.card-title` 收编 11 处内联，JS 模板 10 处图标内联尺寸清零；修 settings.js 8 处不存在的 `var(--danger)`（红字失效）→ `var(--error)`；走查四路径 + 订阅范围取消回滚 API 零写入 console 零错误；pytest 477 passed / 6 skipped |
 
 ---
 
@@ -211,7 +212,21 @@
   - 备注：走查时误点订阅「启用」触发 1 轮空轮询（访问 1 个创作者页），队列 0 任务、下载目录 0 文件，
     已立即关闭并恢复 `enabled=false`
 
-- [ ] **P4-4 可选打磨**：自定义 confirm modal（替原生 `confirm`）、行内 style 收编进 class
+- [x] **P4-4 可选打磨**：自定义 confirm modal（替原生 `confirm`）、行内 style 收编进 class（2026-09-27 完成）
+  - **`uiConfirm(message, options)`**（utils.js）：返回 Promise，Enter=确认 / Esc=取消 / 点遮罩=取消、
+    焦点关在弹窗内 Tab 来回；正文用 `textContent` + `white-space:pre-line`（`\n` 换行、尖括号不被当 HTML 解析）；
+    全程不用 id（静态引用检查只认 index.html 里存在的元素），样式 `.ui-modal-*` 挂 main.css 文末
+  - 13 处原生 `confirm` 全部转换（files/queue/subscriptions/settings/collections/douyin-login），
+    调用方函数改 `async` + `await uiConfirm(...)`；消息文案一字未动
+  - 测试同步：`test_queue_polish`/`test_settings_io` 的 `"confirm("` 断言改 `"uiConfirm("`（确认意图不变）
+  - 行内收编：新增 `.row`（5+2 处 flex 行）、`.card`（2 张订阅卡壳）、`.card-title`（2 处）；
+    JS 模板里 10 处 `width:14px;height:14px` 图标内联全清（settings 1 + collections 3 + resource 6，
+    由 `.btn [data-lucide]` 接管）
+  - 顺手修 settings.js 8 处 `var(--danger)` → `var(--error)`：`--danger` token 不存在，
+    这些错误状态的红字一直在渲染成继承色
+  - 走查：Esc/Enter/确认钮/遮罩四路径全对；真实业务路径（订阅范围改「全部补下」→ 取消）回滚到
+    `only_new` 且 API 零写入；console 零错误；pytest 477 passed / 6 skipped
+  - 版本 bump：utils/main.css/settings/subscriptions/files/queue/collections/resource/douyin-login → `20260927l`
 
 ---
 
