@@ -431,6 +431,41 @@ body {
   width: 160px;
 }
 
+/* ========== 创作者订阅：下载范围（P2-1）========== */
+.sub-scope-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sub-scope {
+  padding: 1px 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.sub-scope:hover { border-color: var(--primary); }
+
+.sub-scope:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sub-scope-n {
+  width: 52px;
+  padding: 1px 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 /* ========== 解答页（P1-5）========== */
 .help-head {
   display: flex;

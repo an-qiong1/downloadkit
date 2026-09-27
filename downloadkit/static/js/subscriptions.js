@@ -6,6 +6,7 @@
 //   POST   /api/subscriptions              添加（传主页链接）
 //   POST   /api/subscriptions/preview      预览（不入库）
 //   POST   /api/subscriptions/{sec}/toggle 暂停/恢复
+//   POST   /api/subscriptions/{sec}/scope  下载范围（P2-1：仅新作品/往回补N/全部）
 //   DELETE /api/subscriptions/{sec}        取消订阅
 //   GET    /api/subscriptions/{sec}        详情 + 已发现作品
 (function () {
@@ -76,6 +77,29 @@
         : '<span style="color:var(--text-tertiary);margin-left:auto">没有可检查的订阅</span>');
   }
 
+  // ---------- 下载范围（P2-1） ----------
+  // 一个下拉 + 一个条件出现的数字框，都放在卡片的元信息行里。
+  // data-scope 记着「服务端当前的值」，改失败时靠它回滚显示。
+  function scopeSelect(c) {
+    var scope = c.download_scope || 'only_new';
+    var n = parseInt(c.scope_param, 10);
+    if (!(n >= 1)) n = 3;
+    var opts = [
+      ['only_new', '仅新作品'],
+      ['backfill_n', '往回补 N 个'],
+      ['all', '全部补下']
+    ].map(function (o) {
+      return '<option value="' + o[0] + '"' + (scope === o[0] ? ' selected' : '') + '>' +
+        o[1] + '</option>';
+    }).join('');
+    return '<select class="sub-scope" data-sec="' + escAttr(c.sec_uid) +
+      '" data-scope="' + escAttr(scope) + '" title="下载范围（下次检查生效）">' +
+      opts + '</select>' +
+      '<input class="sub-scope-n" type="number" min="1" max="9999" step="1" value="' +
+      n + '" data-sec="' + escAttr(c.sec_uid) + '" title="往回补几个"' +
+      (scope === 'backfill_n' ? '' : ' style="display:none"') + '>';
+  }
+
   function creatorCard(c) {
     var paused = !c.enabled;
     var avatar = c.avatar
@@ -105,6 +129,7 @@
       'gap:12px;flex-wrap:wrap">' +
       '<span>作品 ' + (c.works_count || 0) + ' 个</span>' +
       '<span>上次检查 ' + fmtWhen(c.last_checked) + '</span>' +
+      '<span class="sub-scope-cell">范围 ' + scopeSelect(c) + '</span>' +
       (paused ? '<span style="color:var(--warning)">已暂停</span>' : '') +
       '</div></div>' +
       '<div style="display:flex;gap:6px;flex-shrink:0">' +
@@ -434,6 +459,66 @@
     }
   }
 
+  // ---------- 下载范围：保存与回滚（P2-1） ----------
+
+  function saveScope(sec, scope, param) {
+    var sel = document.querySelector('.sub-scope[data-sec="' + sec + '"]');
+    if (sel) sel.disabled = true;
+    api(API + '/' + encodeURIComponent(sec) + '/scope', {
+      method: 'POST', body: { scope: scope, param: param || '' }
+    }).then(function () {
+      if (sel) {
+        sel.dataset.scope = scope;      // 服务端认可了，回滚基准跟着走
+        sel.value = scope;
+        sel.disabled = false;
+      }
+      toast('下载范围已更新，下次检查生效', 'success');
+    }).catch(function (err) {
+      showMsg(err.message || String(err), 'error');
+      refresh();                         // 失败就按服务端真值重画，别自己拼回滚
+    });
+  }
+
+  function onScopeChange(e) {
+    var sel = e.target;
+    if (!sel || !sel.classList || !sel.classList.contains('sub-scope')) return;
+    var scope = sel.value;
+    var prev = sel.dataset.scope || 'only_new';
+    if (scope === prev) return;
+
+    if (scope === 'all') {
+      // 「全部」可能一次排队几十上百个，值得拦一下
+      var ok = confirm(
+        '把这个创作者的下载范围设为「全部补下」？\n\n' +
+        '水位线之下的历史作品会在此后的检查中分批下载' +
+        '（受单轮下载上限约束），已下载过的不会重复。'
+      );
+      if (!ok) { sel.value = prev; return; }
+    }
+
+    var card = sel.closest('div[data-sec]');
+    var nInput = card ? card.querySelector('.sub-scope-n') : null;
+    if (scope === 'backfill_n') {
+      if (nInput) nInput.style.display = '';
+    } else if (nInput) {
+      nInput.style.display = 'none';
+    }
+
+    var param = '';
+    if (scope === 'backfill_n') param = (nInput && nInput.value) || '3';
+    saveScope(sel.dataset.sec, scope, param);
+  }
+
+  function onScopeNChange(e) {
+    var inp = e.target;
+    if (!inp || !inp.classList || !inp.classList.contains('sub-scope-n')) return;
+    var n = parseInt(inp.value, 10);
+    if (!(n >= 1)) n = 1;
+    if (n > 9999) n = 9999;
+    inp.value = n;
+    saveScope(inp.dataset.sec, 'backfill_n', String(n));
+  }
+
   // ---------- 绑定 ----------
 
   function isActive() {
@@ -447,6 +532,12 @@
     if (b1) b1.addEventListener('click', addSubscription);
     if (b2) b2.addEventListener('click', previewCreator);
     if (list) list.addEventListener('click', onListClick);
+    // 下载范围的下拉与 N 输入框都是动态渲染的卡片内容，
+    // 靠 sub-list 冒泡接住 change（数字框要等失焦/回车才触发 change）
+    if (list) list.addEventListener('change', function (e) {
+      onScopeChange(e);
+      onScopeNChange(e);
+    });
     // 「检查全部更新」按钮是 renderStats 动态生成的，
     // 挂在 stats 容器上靠事件冒泡接住，不能在 init 里直接绑
     if (stats) stats.addEventListener('click', function (e) {

@@ -16,6 +16,7 @@
 | 2026-09-27 | P1-4 | 备注治理：8 处生效提示统一为 `.eff` 药丸徽标（live/restart/next 三类）；Cookie 长卡与扫码登录长说明迁出设置页，改为 `data-help` 内链直达解答页；pytest 286 passed |
 | 2026-09-27 | P1-6 | 控件三模式统一：`.f-label` 标签在上 / `.f-switch` 开关带说明 / `.f-row` 下拉右对齐；宽度收敛到 100% 与 160px 两档，内联宽度与内联开关样式清零；pytest 294 passed |
 | 2026-09-27 | P1 整体验收 | 重打包 105.86MB → `test-exe.ps1` 6 个 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（playwright 进包、抖音登录有效、抓 55 作品零下载）；红线三处 0/0/1 不变，无残留进程 |
+| 2026-09-27 | P2-1 | 每创作者下载范围（`only_new`/`backfill_n`/`all`；`since_date` 缺时间源已确认缓做）：加列迁移、补下候选按 `task_id` 判重、N 为累计上限、增量优先吃配额；`mark_works_seen` 改冲突时补登任务号（原 `INSERT OR IGNORE` 会让补下每轮重下同一批）；卡片行内下拉+N 输入、all 前置 confirm；`tests/test_download_scope.py` 22 例，pytest 316 passed |
 
 ---
 
@@ -64,12 +65,20 @@
 
 ## P2 订阅功能（核心）
 
-- [ ] **P2-1 每创作者下载范围**
-  - `creators` 加列 `download_scope`（走已有 `ALTER TABLE` 迁移先例）
-  - 取值：`only_new`（默认，现状）/ `backfill_n`（往回补 N 个）/ `since_date`（从某日期起）/ `all`（全部补下）
-  - `check_creator()` 按范围算基线起点，**水位线防重复逻辑不动**
-  - 必须补测试证明：同一创作者反复检查不会重复下载（订阅功能的命门）
-  - 文件：`downloadkit/subscription.py`、`subscription_service.py`、`js/subscriptions.js`、`index.html`
+- [x] **P2-1 每创作者下载范围**（2026-09-27 完成）
+  - `creators` 加列 `download_scope` + `scope_param`（走已有 `ALTER TABLE` 迁移先例）
+  - 取值：`only_new`（默认，现状）/ `backfill_n`（往回补 N 个）/ `all`（全部补下）
+    - `since_date`（从某日期起）**本期缓做**：抖音主页只给作品 ID 不给发布时间，
+      没有可靠时间源，硬做只能逐个开详情页读 `create_time`，慢且易触发风控（已与用户确认）
+  - `check_creator()` 按范围算基线起点，**水位线防重复逻辑不动**；
+    补下候选 = 水位线之下且 `task_id` 为空，入队成功才补登 `task_id`
+    （`mark_works_seen` 由 `INSERT OR IGNORE` 改为冲突时更新，否则任务号永远写不进去，
+    每轮都会把同一批重下一遍）
+  - `backfill_n` 的 N 是**累计上限**，不是每轮上限（`count_backfilled` 按水位线过滤）
+  - 配额：`max_new` 先给增量，余量才给补下（`_budget`：`-1`=不限，`0`=没余量，混用会塞爆队列）
+  - 卡片行内控件：范围下拉 + 条件出现的 N 输入框，`all` 前置 confirm，失败按服务端真值重画
+  - 测试：`tests/test_download_scope.py` 22 例（含反复检查不重复入队、增量优先、探针零入队、迁移幂等）
+  - 文件：`downloadkit/subscription.py`、`subscription_service.py`、`server.py`、`js/subscriptions.js`、`css/main.css`
 
 - [ ] **P2-2 定时检查双模式**
   - `mode = interval | daily_at` + `daily_at="09:00"`，状态区显示「下次检查 14:30」
@@ -84,7 +93,7 @@
   - 显示上次检查时间 + 结果或中文失败原因
   - 文件：`js/subscriptions.js`
 
-**P2 验收**：新增回归测试（范围四种模式 × 水位线不重复）→ `pytest` 全量 → 重打包 → 真实创作者实测补下 N 个
+**P2 验收**：新增回归测试（范围三种模式 × 水位线不重复）→ `pytest` 全量 → 重打包 → 真实创作者实测补下 N 个
 
 ---
 

@@ -1574,6 +1574,32 @@ async def api_subscriptions_toggle(sec_uid: str, req: ToggleSubscriptionRequest)
         raise HTTPException(500, f"操作失败：{e}")
 
 
+# ---------------- 下载范围（P2-1） ----------------
+
+class ScopeSubscriptionRequest(BaseModel):
+    scope: str                      # only_new / backfill_n / all
+    param: str = ""                 # 仅 backfill_n 用的 N
+
+
+@app.post("/api/subscriptions/{sec_uid}/scope")
+async def api_subscriptions_scope(sec_uid: str, req: ScopeSubscriptionRequest):
+    """设置某创作者的下载范围
+
+    改完下次检查生效，不会立刻开任务。取值非法返回 400，
+    创作者不存在返回 404 —— 都是业务状态，不抛 500。
+    """
+    from downloadkit.subscription_service import update_scope
+    try:
+        rec = await update_scope(sec_uid, req.scope, req.param)
+    except ValueError as e:
+        # 「没有订阅这个创作者」和「取值非法」都是 ValueError，
+        # 按文案区分状态码太脆，这里统一 400 并把原因讲清楚
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"设置下载范围失败：{e}")
+    return {"ok": True, "creator": rec}
+
+
 # ---------------- 自动轮询（A5） ----------------
 #
 # ⚠ 必须注册在下面的 `/api/subscriptions/{sec_uid}` **之前**。

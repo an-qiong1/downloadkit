@@ -205,6 +205,26 @@ async def toggle_subscription(sec_uid: str, enabled: bool) -> dict:
     return store.get_creator(sec_uid)
 
 
+async def update_scope(sec_uid: str, scope: str, param: str = "") -> dict:
+    """设置某创作者的下载范围（P2-1）。
+
+    改完**下次检查生效**，不立刻触发下载 —— 立刻下会让「改配置」
+    这个动作变成「马上开一坨任务」，出乎意料。
+
+    Args:
+        sec_uid: 创作者 ID
+        scope: only_new / backfill_n / all
+        param: 仅 backfill_n 用的 N
+
+    Returns:
+        更新后的订阅记录
+
+    Raises:
+        ValueError: 取值非法，或创作者不存在
+    """
+    return store.set_creator_scope(sec_uid, scope, param)
+
+
 async def get_creator_detail(sec_uid: str, limit: int = 50) -> dict:
     """单个创作者详情 + 已发现作品列表"""
     rec = store.get_creator(sec_uid)
@@ -263,6 +283,92 @@ CHECK_SCROLLS = 3
 # 单次检查最多下载几个。0 = 不限制。
 # 上限存在的意义：万一创作者一口气发 20 条，不该一次全塞进队列。
 DEFAULT_MAX_NEW = 3
+
+
+def _budget(max_new: int, used: int = 0) -> int:
+    """本轮给补下的配额槽位。
+
+    max_new <= 0 表示不限，映射成 -1（`_apply_backfill` 的约定）；
+    否则返回剩余槽位，可能为 0 —— 0 是「这轮没你的份」，不是「随便下」。
+    """
+    if max_new <= 0:
+        return -1
+    return max(0, max_new - used)
+
+
+async def _apply_backfill(rec: dict, video_ids: list[str], watermark: str,
+                          budget: int, nickname: str = "") -> dict:
+    """按下载范围补下水位线之下的历史作品（P2-1）。
+
+    与增量检查共用一套防重复：候选由 store.list_backfill_candidates
+    筛（水位线之下 + task_id 为空），入队成功才 mark_works_seen 写
+    task_id —— 所以反复检查只会捡起上次没下成的，不会重复下载。
+
+    配额：budget 是本轮给补下的槽位（max_new 减去增量已占用的），
+    0 = 不限。增量优先，余量才轮到补下 —— 新作品有时效性。
+
+    Args:
+        rec: 创作者记录（含 download_scope / scope_param）
+        video_ids: 本次抓到的作品 ID，候选只能从这里出
+        watermark: 基线水位线，补它之下的历史
+        budget: 本轮最多入队几个，**负数 = 不限**（0 就是「一个都不剩」，
+            必须和「不限」区分开，否则增量吃满配额时余量是 0，
+            会被当成不限，把历史一口气全塞进队列）
+        nickname: 入队任务的标题用
+
+    Returns:
+        {"backfilled": 本轮入队数, "left": 按范围还差几个, "task_ids": [...]}
+        scope 为 only_new 时直接回全 0。
+    """
+    scope = rec.get("download_scope") or "only_new"
+    sec_uid = rec["sec_uid"]
+    if scope == "only_new":
+        return {"backfilled": 0, "left": 0, "task_ids": []}
+
+    candidates = store.list_backfill_candidates(sec_uid, video_ids, watermark)
+    if not candidates:
+        return {"backfilled": 0, "left": 0, "task_ids": []}
+
+    if scope == "backfill_n":
+        # N 是累计上限：先看水位线之下已经补过几个，还差多少补多少。
+        # 没有这一步，每次检查都取「未下的前 N 个」，N 会被无限刷新。
+        try:
+            target = int(rec.get("scope_param") or 0)
+        except (TypeError, ValueError):
+            target = 0
+        already = store.count_backfilled(sec_uid, watermark)
+        remaining = max(0, target - already)
+        if remaining <= 0:
+            return {"backfilled": 0, "left": 0, "task_ids": []}
+        candidates = candidates[:remaining]
+    else:  # all
+        remaining = len(candidates)
+
+    to_queue = candidates if budget < 0 else candidates[:budget]
+
+    backfilled = 0
+    task_ids = []
+    for aweme_id in to_queue:
+        ok, task_id, err = await _enqueue_video(
+            aweme_id, sec_uid, nickname or rec.get("nickname") or ""
+        )
+        if ok:
+            backfilled += 1
+            task_ids.append(task_id)
+            # 与增量同一条铁律：先入队成功，才标记已下
+            store.mark_works_seen(
+                sec_uid, [{"aweme_id": aweme_id, "task_id": task_id}]
+            )
+        else:
+            logger.warning(f"补下作品 {aweme_id} 入队失败: {err}")
+
+    left = max(0, remaining - backfilled)
+    if backfilled:
+        logger.info(
+            f"创作者 {nickname or sec_uid}：按范围 {scope} 补下 "
+            f"{backfilled} 个，还剩 {left} 个"
+        )
+    return {"backfilled": backfilled, "left": left, "task_ids": task_ids}
 
 
 async def check_creator(
@@ -333,7 +439,7 @@ async def check_creator(
             f"创作者 {info.nickname or sec_uid} 建立基线："
             f"标记 {marked} 个存量作品为已见，不下载；水位线={watermark}"
         )
-        return {
+        result = {
             "sec_uid": sec_uid,
             "nickname": info.nickname or rec["nickname"],
             "baselined": True,
@@ -343,11 +449,33 @@ async def check_creator(
             "new_count": 0,
             "queued": 0,
             "download": False,
+            "task_ids": [],
             "message": (
                 f"已建立基线：现有 {marked} 个作品标记为「已见」，不会下载。"
                 f"之后只下载订阅后新发的作品。"
             ),
         }
+
+        # 范围补下（P2-1）：选了 backfill_n / all 的，建基线这一轮就开始补，
+        # 不用等下一次检查 —— 用户订阅时就选好范围了，没必要多跑一轮。
+        # 只在 download=True 时补；download=False 是「看看有没有更新」的探针。
+        if download:
+            bf = await _apply_backfill(
+                rec, info.video_ids, watermark, budget=_budget(max_new),
+                nickname=info.nickname or rec["nickname"],
+            )
+            if bf["backfilled"] or bf["left"]:
+                result["queued"] = bf["backfilled"]
+                result["task_ids"] = bf["task_ids"]
+                result["backfilled"] = bf["backfilled"]
+                result["backfill_left"] = bf["left"]
+                segs = []
+                if bf["backfilled"]:
+                    segs.append(f"按范围补下 {bf['backfilled']} 个历史作品")
+                if bf["left"]:
+                    segs.append(f"还剩 {bf['left']} 个待补")
+                result["message"] += "；".join([""] + segs)
+        return result
 
     # ---- 后续检查：只处理水位线之上的真新作品 ----
     # 兼容升级前就存在的订阅：有 last_checked 但水位线是空的。
@@ -401,41 +529,74 @@ async def check_creator(
         "task_ids": [],
     }
 
-    if not fresh:
-        store.mark_creator_checked(sec_uid, last_found="")
-        result["message"] = "没有新作品"
-        return result
-
     if not download:
-        # 只看不下载：什么都不标记，下次检查还会算作新作品
-        result["message"] = f"发现 {len(fresh)} 个新作品（本次不下载）"
+        # 只看不下载：不标已见，下次检查还会算作新作品。
+        # 补下同样不做 —— download=False 是探针，任何情况下都不该产生任务。
+        # last_checked 维持原行为：有新作品的探针不算「检查过」，
+        # 没有新作品才算（跟改造前一致，免得轮询节奏跟着变）。
+        if not fresh:
+            store.mark_creator_checked(sec_uid, last_found="")
+            result["message"] = "没有新作品"
+        else:
+            result["message"] = f"发现 {len(fresh)} 个新作品（本次不下载）"
         return result
 
-    to_queue = fresh if max_new <= 0 else fresh[:max_new]
-    left = len(fresh) - len(to_queue)
-    if left:
-        # 只在真的有剩余时才报这个字段，避免响应里出现无意义的 0
-        result["pending"] = left
-
-    for aweme_id in to_queue:
-        ok, task_id, err = await _enqueue_video(
-            aweme_id, sec_uid, info.nickname or rec["nickname"]
-        )
-        if ok:
-            result["queued"] += 1
-            result["task_ids"].append(task_id)
-            # 只有真的入队了才标记已见
-            store.mark_works_seen(
-                sec_uid, [{"aweme_id": aweme_id, "task_id": task_id}]
-            )
+    # ---- 增量入队：新作品优先占满配额 ----
+    fresh_slots = 0          # 分给增量的槽位（max_new>0 时才有意义）
+    fresh_queued = 0
+    if fresh:
+        if max_new <= 0:
+            to_queue = fresh
         else:
-            logger.warning(f"作品 {aweme_id} 入队失败: {err}")
+            to_queue = fresh[:max_new]
+            fresh_slots = len(to_queue)
+            if len(fresh) > len(to_queue):
+                # 只在真的有剩余时才报这个字段，避免响应里出现无意义的 0
+                result["pending"] = len(fresh) - len(to_queue)
+
+        for aweme_id in to_queue:
+            ok, task_id, err = await _enqueue_video(
+                aweme_id, sec_uid, info.nickname or rec["nickname"]
+            )
+            if ok:
+                fresh_queued += 1
+                result["queued"] += 1
+                result["task_ids"].append(task_id)
+                # 只有真的入队了才标记已见
+                store.mark_works_seen(
+                    sec_uid, [{"aweme_id": aweme_id, "task_id": task_id}]
+                )
+            else:
+                logger.warning(f"作品 {aweme_id} 入队失败: {err}")
+
+    # ---- 范围补下（P2-1）：增量吃完配额，余量轮到历史作品 ----
+    bf = await _apply_backfill(
+        rec, info.video_ids, rec.get("baseline_max_id") or "",
+        budget=_budget(max_new, fresh_slots),
+        nickname=info.nickname or rec["nickname"],
+    )
+    if bf["backfilled"]:
+        result["queued"] += bf["backfilled"]
+        result["task_ids"] += bf["task_ids"]
+        result["backfilled"] = bf["backfilled"]
+    if bf["left"]:
+        result["backfill_left"] = bf["left"]
 
     store.mark_creator_checked(sec_uid, last_found="")
 
-    parts = [f"发现 {result['new_count']} 个新作品，入队 {result['queued']} 个"]
-    if result.get("pending"):
-        parts.append(f"其余 {result['pending']} 个留到下次检查")
+    parts = []
+    if fresh:
+        parts.append(
+            f"发现 {result['new_count']} 个新作品，入队 {fresh_queued} 个"
+        )
+        if result.get("pending"):
+            parts.append(f"其余 {result['pending']} 个留到下次检查")
+    else:
+        parts.append("没有新作品")
+    if bf["backfilled"]:
+        parts.append(f"按范围补下 {bf['backfilled']} 个历史作品")
+    if bf["left"]:
+        parts.append(f"还剩 {bf['left']} 个历史作品待补")
     result["message"] = "；".join(parts)
     return result
 

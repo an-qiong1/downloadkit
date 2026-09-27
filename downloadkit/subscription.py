@@ -93,6 +93,24 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE creators ADD COLUMN baseline_max_id "
             "TEXT NOT NULL DEFAULT ''"
         )
+    # P2-1 每创作者下载范围。默认 only_new = 现状（只下订阅后新发的），
+    # 老订阅升级后行为一个字都不变。
+    if "download_scope" not in cols:
+        conn.execute(
+            "ALTER TABLE creators ADD COLUMN download_scope "
+            "TEXT NOT NULL DEFAULT 'only_new'"
+        )
+    if "scope_param" not in cols:
+        conn.execute(
+            "ALTER TABLE creators ADD COLUMN scope_param "
+            "TEXT NOT NULL DEFAULT ''"
+        )
+
+
+# 下载范围取值。
+# since_date（从某日期起）本期不做：抖音主页只给作品 ID 不给发布时间，
+# 没有可靠时间源就硬做只能逐个开详情页，慢且易触发风控 —— 见 PLAN P2-1。
+SCOPES = ("only_new", "backfill_n", "all")
 
 
 # ==================================================================
@@ -185,6 +203,161 @@ def set_creator_enabled(sec_uid: str, enabled: bool) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def set_creator_scope(sec_uid: str, scope: str, param: str = "") -> dict:
+    """设置某创作者的下载范围（P2-1）。
+
+    Args:
+        sec_uid: 创作者 ID
+        scope: only_new（只下订阅后新发的，默认）
+             / backfill_n（往回补 param 个）
+             / all（水位线之下的历史全补下）
+        param: 仅 backfill_n 用，1-9999 的整数
+
+    Returns:
+        更新后的订阅记录
+
+    Raises:
+        ValueError: 范围取值非法，或 backfill_n 的 param 不是合法整数
+    """
+    scope = (scope or "").strip()
+    if scope not in SCOPES:
+        raise ValueError(
+            f"下载范围只能是 {'/'.join(SCOPES)}，收到 {scope!r}"
+        )
+
+    param = str(param or "").strip()
+    if scope == "backfill_n":
+        try:
+            n = int(param)
+        except (TypeError, ValueError):
+            raise ValueError("往回补 N 个需要一个整数")
+        if not (1 <= n <= 9999):
+            raise ValueError("往回补的个数要在 1-9999 之间")
+        param = str(n)
+    else:
+        # 另外两种模式不带参数，顺手清掉残留值，免得来回切之后
+        # 数据库里躺着一个没人读的旧 N，读出来误导排查
+        param = ""
+
+    with _db_lock:
+        _init_db()
+        conn = _get_db()
+        cur = conn.execute(
+            "UPDATE creators SET download_scope = ?, scope_param = ? "
+            "WHERE sec_uid = ?",
+            (scope, param, sec_uid),
+        )
+        conn.commit()
+        if cur.rowcount <= 0:
+            raise ValueError("没有订阅这个创作者")
+        row = conn.execute(
+            "SELECT * FROM creators WHERE sec_uid = ?", (sec_uid,)
+        ).fetchone()
+    return dict(row)
+
+
+def list_backfill_candidates(sec_uid: str, aweme_ids: list[str],
+                             watermark: str) -> list[str]:
+    """范围补下的候选：水位线之下、还没入队下载过的作品。
+
+    判「下没下过」用的是 seen_works.task_id：
+      · 存量作品首次建基线时被标记为已见，task_id 是空的
+      · 真的入队了才写 task_id（先入队后标记，入队失败保持空）
+    所以 task_id 为空 = 「见过但没下过」= 补下候选；
+    有 task_id 的一律排除 —— 这就是反复检查不会重复下载的依据。
+
+    Args:
+        sec_uid: 创作者 ID
+        aweme_ids: 本次抓到的作品 ID（保持信息流顺序，通常已按 ID 降序）
+        watermark: 基线水位线，只补它之下的历史作品
+
+    Returns:
+        候选 ID 列表，按数值降序（最新的排最前）
+    """
+    if not aweme_ids or not watermark:
+        return []
+
+    unique = list(dict.fromkeys(a for a in aweme_ids if a))
+    try:
+        wm = int(watermark)
+    except (TypeError, ValueError):
+        # 水位线坏了就不补：宁可这轮不下载，也不能失去界限
+        return []
+
+    # 按数值降序排一遍：backfill_n 要的是「最新的 N 个」，不能指望
+    # 调用方传进来的顺序 —— 抖音主页那段是字符串排序，ID 位数不同
+    # 时会和数值序打架（'9' > '10'）。解析不了的排到末尾，随后被跳过。
+    def _by_num(a: str) -> int:
+        try:
+            return int(a)
+        except (TypeError, ValueError):
+            return -1
+
+    unique.sort(key=_by_num, reverse=True)
+
+    with _db_lock:
+        _init_db()
+        conn = _get_db()
+        placeholders = ",".join("?" * len(unique))
+        status = {
+            r["aweme_id"]: (r["task_id"] or "")
+            for r in conn.execute(
+                f"SELECT aweme_id, task_id FROM seen_works "
+                f"WHERE sec_uid = ? AND aweme_id IN ({placeholders})",
+                [sec_uid] + unique,
+            )
+        }
+
+    out = []
+    for a in unique:
+        try:
+            if int(a) > wm:
+                continue          # 水位线之上是增量的活，不归补下管
+        except (TypeError, ValueError):
+            continue              # ID 解析不了的不碰
+        if status.get(a):
+            continue              # 已经入队下过了
+        out.append(a)
+    return out
+
+
+def count_backfilled(sec_uid: str, watermark: str) -> int:
+    """水位线之下已经入队补下的作品数。
+
+    backfill_n 的 N 是**累计上限**，不是每轮上限 —— 没有这个计数，
+    每次检查都会重新取「未下的前 N 个」，补完一轮又来一轮，N 形同虚设。
+
+    Args:
+        sec_uid: 创作者 ID
+        watermark: 基线水位线
+
+    Returns:
+        水位线之下、task_id 非空的作品数
+    """
+    try:
+        wm = int(watermark)
+    except (TypeError, ValueError):
+        return 0
+
+    with _db_lock:
+        _init_db()
+        conn = _get_db()
+        rows = conn.execute(
+            "SELECT aweme_id FROM seen_works "
+            "WHERE sec_uid = ? AND task_id IS NOT NULL AND task_id != ''",
+            (sec_uid,),
+        ).fetchall()
+
+    n = 0
+    for r in rows:
+        try:
+            if int(r["aweme_id"]) <= wm:
+                n += 1
+        except (TypeError, ValueError):
+            continue
+    return n
 
 
 def mark_creator_checked(sec_uid: str, works_seen: int = 0,
@@ -361,12 +534,24 @@ def mark_works_seen(sec_uid: str, items: list[dict]) -> int:
 
     必须在作品成功入队后立刻调用，否则下一轮轮询会重复入队。
 
+    两种调用时机（2026-09-27 踩坑后改成可更新）：
+      1. 首次见到 → INSERT，task_id 通常是空的
+      2. 补下/增量入队成功 → 同一行已存在，要**把 task_id 补登进去**
+    早年这里用 INSERT OR IGNORE，第二次调用对已存在的行直接忽略，
+    task_id 永远写不进去 —— 于是「没下过」的判据（task_id 为空）失真，
+    范围补下每轮都把同一批作品重下一遍。所以冲突时必须更新。
+
+    冲突时的取值规则：
+      · task_id：新值非空才覆盖（老的空标记不会把已登记的任务抹掉）
+      · title：  新值非空才覆盖（存量标记的空 title 不冲掉真标题）
+      · found_at：保留首次发现时间
+
     Args:
         sec_uid: 创作者 ID
         items: [{"aweme_id": ..., "title": ..., "task_id": ...}, ...]
 
     Returns:
-        新写入的记录数
+        尝试写入的记录数
     """
     if not items:
         return 0
@@ -387,12 +572,16 @@ def mark_works_seen(sec_uid: str, items: list[dict]) -> int:
         ]
         if not rows:
             return 0
-        # INSERT OR IGNORE：并发轮询时同一条被插两次不报错
+        # 并发轮询时同一条被插两次不报错；已存在的行则补登 task_id
         conn.executemany(
             """
-            INSERT OR IGNORE INTO seen_works
+            INSERT INTO seen_works
                 (aweme_id, sec_uid, title, found_at, task_id)
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(aweme_id, sec_uid) DO UPDATE SET
+                task_id  = COALESCE(excluded.task_id, seen_works.task_id),
+                title    = CASE WHEN excluded.title != ''
+                                THEN excluded.title ELSE seen_works.title END
             """,
             rows,
         )
