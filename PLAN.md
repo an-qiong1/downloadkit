@@ -20,6 +20,7 @@
 | 2026-09-27 | P2-2 | 定时检查双模式：`mode=interval\|daily_at` + `daily_at=HH:MM`，每天定时加 0~3 分钟抖动、退避仍优先、首轮仍 15 秒；前端「检查方式」下拉切两个 label 显隐，`bindPollerField` 加 transform；`tests/test_poller.py` +28 例，pytest 344 passed；走查零错误且全程未跑轮询 |
 | 2026-09-27 | P2-3 | 手动检查策略入口：折叠区（下载开关/单轮上限/范围），默认值=原行为不落库；范围临时覆盖透传 `CheckAllRequest→run_round→check_all→check_creator→_apply_backfill`，校验抽 `validate_scope` 与卡片共用、开跑前 400 拦下；`tests/test_check_strategy.py` 20 例，pytest 364 passed |
 | 2026-09-27 | P2-4 | 订阅卡片状态：加列 `last_attempt`/`last_result`（成败都更新），`last_checked` 仍只在成功时写（首查判断靠它，有命门测试锁死）；check_creator 四个成功出口 + check_all 三个 except + 单查端点写状态，中断只写被检查到的、暂停不写；卡片显示结果、失败标红、时间回落；`tests/test_card_status.py` 14 例，pytest 378 passed |
+| 2026-09-27 | P2 验收 | 重打包 105.87MB → `test-exe.ps1` 6 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9；新增 `build/test-exe-backfill.py` 真实补下实测：backfill_n=2 入队 2 → 落盘 `videos` 1→3（+2 共 162MB，验收预期）→ 复查 `backfilled=0` 零重复 → 复原 only_new；两处落盘红线 0/0 不变，无残留进程 |
 
 ---
 
@@ -121,7 +122,12 @@
     仍空、第二次成功仍走建基线分支）
   - 文件：`downloadkit/subscription.py`、`subscription_service.py`、`server.py`、`js/subscriptions.js`
 
-**P2 验收**：新增回归测试（范围三种模式 × 水位线不重复）→ `pytest` 全量 → 重打包 → 真实创作者实测补下 N 个
+**P2 验收**（2026-09-27 通过）：新增回归测试（范围三种模式 × 水位线不重复）→ `pytest` 全量
+**378 passed / 6 skipped** → 重打包 **105.87MB** → `test-exe.ps1` 6 API 全 200、
+`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9 → **真实创作者实测补下 2 个**
+（`build/test-exe-backfill.py`：笔吧评测室 backfill_n=2 → 入队 2 → 真实落盘
+`videos` 1→3 → 复查 `backfilled=0` 零重复、文件数不变 → 范围复原 only_new）。
+红线：两处落盘 0/0 不变，`videos` +2 是验收预期；无残留进程
 
 ---
 
