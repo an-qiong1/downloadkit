@@ -303,45 +303,54 @@
                   <span id="setting-download-dir-status" style="font-size:11px"></span>
                   <button class="btn btn-secondary" id="setting-open-dir" style="padding:2px 8px;font-size:11px" title="在文件管理器中打开此目录">📂 打开</button>
                 </div>
-                <div style="margin-top:6px;font-size:11px;line-height:1.6;color:var(--text-secondary)">
-                  音乐、视频、图片、实况照片默认都存放在这个总目录下的
-                  <code>music</code> / <code>videos</code> / <code>images</code> / <code>animated</code>
-                  子文件夹里，不会直接散落在系统下载目录中。
-                  改这里时，下面没单独自定义过的分类目录会一起更新。
+                <div class="dir-preview" style="margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.9;color:var(--text-secondary)">
+                  <div style="margin-bottom:2px">各类文件实际存放在：</div>
+                  <div>音乐 → <code class="dir-preview-value" id="dir-preview-music"></code></div>
+                  <div>视频 → <code class="dir-preview-value" id="dir-preview-video"></code></div>
+                  <div>图片 → <code class="dir-preview-value" id="dir-preview-images"></code></div>
+                  <div>实况照片 → <code class="dir-preview-value" id="dir-preview-animated"></code></div>
                 </div>
               </div>
               
-              <div style="margin-bottom:10px">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">音乐下载目录</label>
-                <div style="display:flex;gap:6px">
-                  <input class="search-input" id="setting-download-dir-music" type="text" placeholder="" style="flex:1">
-                  <button class="btn btn-secondary" id="setting-browse-dir-music" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+              <details id="dir-advanced" style="margin-top:10px">
+                <summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);padding:4px 0;list-style:none">
+                  <span style="display:inline-block;transition:transform .15s" id="dir-advanced-arrow">▸</span>
+                  高级：单独指定某个分类的目录（留空则跟随总目录）
+                </summary>
+                <div style="margin-top:8px;padding-top:4px;border-top:1px dashed var(--border)">
+                  <div style="margin-bottom:10px">
+                    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">音乐下载目录</label>
+                    <div style="display:flex;gap:6px">
+                      <input class="search-input" id="setting-download-dir-music" type="text" placeholder="跟随总目录" style="flex:1">
+                      <button class="btn btn-secondary" id="setting-browse-dir-music" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                    </div>
+                  </div>
+
+                  <div style="margin-bottom:10px">
+                    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">视频下载目录</label>
+                    <div style="display:flex;gap:6px">
+                      <input class="search-input" id="setting-download-dir-video" type="text" placeholder="跟随总目录" style="flex:1">
+                      <button class="btn btn-secondary" id="setting-browse-dir-video" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                    </div>
+                  </div>
+
+                  <div style="margin-bottom:10px">
+                    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">实况照片目录</label>
+                    <div style="display:flex;gap:6px">
+                      <input class="search-input" id="setting-download-dir-animated" type="text" placeholder="跟随总目录" style="flex:1">
+                      <button class="btn btn-secondary" id="setting-browse-dir-animated" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                    </div>
+                  </div>
+
+                  <div style="margin-bottom:0">
+                    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">图片下载目录</label>
+                    <div style="display:flex;gap:6px">
+                      <input class="search-input" id="setting-download-dir-images" type="text" placeholder="跟随总目录" style="flex:1">
+                      <button class="btn btn-secondary" id="setting-browse-dir-images" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                    </div>
+                  </div>
                 </div>
-              </div>
-              
-              <div style="margin-bottom:10px">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">视频下载目录</label>
-                <div style="display:flex;gap:6px">
-                  <input class="search-input" id="setting-download-dir-video" type="text" placeholder="" style="flex:1">
-                  <button class="btn btn-secondary" id="setting-browse-dir-video" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
-                </div>
-              </div>
-              
-              <div style="margin-bottom:10px">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">实况照片目录</label>
-                <div style="display:flex;gap:6px">
-                  <input class="search-input" id="setting-download-dir-animated" type="text" placeholder="" style="flex:1">
-                  <button class="btn btn-secondary" id="setting-browse-dir-animated" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
-                </div>
-              </div>
-              
-              <div style="margin-bottom:0">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">图片下载目录</label>
-                <div style="display:flex;gap:6px">
-                  <input class="search-input" id="setting-download-dir-images" type="text" placeholder="" style="flex:1">
-                  <button class="btn btn-secondary" id="setting-browse-dir-images" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
-                </div>
-              </div>
+              </details>
             </div>
             
             <div style="margin-bottom:16px">
@@ -514,7 +523,7 @@
 <script src="js/resource.js?v=20260927a"></script>
 <script src="js/files.js?v=20260927a"></script>
 <script src="js/queue.js?v=20260927a"></script>
-<script src="js/settings.js?v=20260712b"></script>
+<script src="js/settings.js?v=20260927a"></script>
 <script src="js/douyin-login.js?v=20260926a"></script>
 <script src="js/subscriptions.js?v=20260926a"></script>
 <script src="js/collections.js?v=20260724b"></script>

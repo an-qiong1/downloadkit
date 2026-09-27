@@ -10,6 +10,7 @@
 | 日期 | 完成项 | 备注 |
 |------|--------|------|
 | 2026-09-27 | P1-1 | 导航 7→6，「已下载+下载队列」合并为「下载」页（进行中/已完成 子 tab）；pytest 249 passed，浏览器走查 console 零错误 |
+| 2026-09-27 | P1-3 | 设置页只留总目录，4 分类收进高级折叠 + 只读路径预览；顺手修了根目录 change 不同步分类的既有 bug；pytest 263 passed |
 
 ---
 
@@ -25,10 +26,12 @@
   - 应用（并发/日志/重名/历史）· 下载（只留总目录）· 网络（代理+登录/Cookie）· 启动与后台 · 关于
   - 文件：`downloadkit/static/index.html`、`js/settings.js`
 
-- [ ] **P1-3 下载目录只留总目录**
+- [x] **P1-3 下载目录只留总目录**（2026-09-27 完成，先于 P1-2 做，同一批 HTML 不返工）
   - 只保留总目录输入框；4 个分类改成只读展示「将存入 …/music、…/videos」，「高级」折叠里才单独改
   - 后端 5 个字段全保留，兼容已有配置（v0.4.1 已做的联动逻辑继续生效）
-  - 文件：`downloadkit/static/index.html`、`js/settings.js`
+  - 附带修复：根目录 change 监听原本闭包捕获 `lastRoot`（初始化时是空串），
+    `loadSettings` 异步填值后不同步，导致首次改根目录分类不跟着走 → 改为模块级 `lastDirRoot`
+  - 文件：`downloadkit/static/index.html`、`js/settings.js`、`css/main.css`
 
 - [ ] **P1-4 备注治理**
   - `立即生效 / 需重启 / 下次启动生效` 统一为一种小徽标
@@ -42,7 +45,7 @@
 
 - [ ] **P1-6 控件样式统一**
   - 只留三种模式：标签在上 / 开关带一句说明 / 下拉右对齐；统一间距与宽度
-  - 文件：`downloadkit/static/index.html`、`css/style.css`
+  - 文件：`downloadkit/static/index.html`、`css/main.css`
 
 **P1 验收**：视觉走查 → `pytest` 全量 → `build\build-release.ps1` 重打包 → 三项 exe 实测 → 分次提交
 

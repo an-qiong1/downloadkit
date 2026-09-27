@@ -305,6 +305,14 @@ body {
   border-bottom-color: var(--primary);
 }
 
+/* ========== 设置页：折叠详情（高级目录等）========== */
+details > summary::-webkit-details-marker { display: none; }
+details[open] #dir-advanced-arrow {
+  display: inline-block;
+  transform: rotate(90deg);
+}
+#dir-advanced-arrow { display: inline-block; }
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }

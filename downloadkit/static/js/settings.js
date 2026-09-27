@@ -64,6 +64,12 @@
 
       // Update download dir display: show actual resolved absolute path + status
       updateDownloadDirDisplay(gen.download_dir || './downloads');
+
+      // 分类路径只读预览跟着填一次
+      renderDirPreview();
+
+      // 异步填完根目录后同步「已知根目录」，否则首次改目录时分类不会跟着走
+      lastDirRoot = String($('#setting-download-dir').value || '').trim();
     }).catch(function(err) {
       toast('加载设置失败: ' + err.message, 'error');
     });
@@ -92,6 +98,30 @@
         var errMsg = (err && err.message) ? err.message : String(err);
         statusEl.innerHTML = '<span style="color:var(--danger)">✗ ' + errMsg + '</span>';
       });
+  }
+
+  // ========== 分类路径只读预览（P1-3：主界面只留总目录）==========
+  // input 后缀 → 实际文件夹名（video 那一栏的文件夹叫 videos）
+  var DIR_PREVIEW_CATS = { music: 'music', video: 'videos', animated: 'animated', images: 'images' };
+
+  // 根目录的「上一次已知值」。放模块级：loadSettings 异步填值时也要刷新，
+  // 否则 change 事件里闭包捕获的还是初始化时的空串，syncCategoryDirs 会提前 return，
+  // 分类目录就不同步了（2026-09-27 走查时发现）。
+  var lastDirRoot = '';
+
+  function renderDirPreview() {
+    var rootEl = $('#setting-download-dir');
+    var root = String(rootEl ? rootEl.value : '').replace(/[\\/]+$/, '');
+    if (!root) return;
+    Object.keys(DIR_PREVIEW_CATS).forEach(function(key) {
+      var code = $('#dir-preview-' + key);
+      if (!code) return;
+      var catEl = $('#setting-download-dir-' + key);
+      var v = String(catEl && catEl.value || '').trim();
+      // 分类没被单独改过（空值 / 等于根目录派生值）就展示派生路径
+      code.textContent = v ? v : (root + '/' + DIR_PREVIEW_CATS[key]);
+      code.title = code.textContent;
+    });
   }
 
   // ========== Windows 原生目录选择 ==========
@@ -322,26 +352,34 @@
       if (changed.length) {
         toast('分类目录已跟随更新：' + changed.length + ' 项', 'success');
       }
+      renderDirPreview();
     }
 
     var dirInput = $('#setting-download-dir');
     if (dirInput) {
       // 根目录失焦 / 被目录对话框改掉时，把分类目录一起带过去
-      var lastRoot = dirInput.value;
       dirInput.addEventListener('change', function() {
-        syncCategoryDirs(lastRoot, dirInput.value);
-        lastRoot = dirInput.value;
+        syncCategoryDirs(lastDirRoot, dirInput.value);
+        lastDirRoot = String(dirInput.value || '').trim();
+        renderDirPreview();
       });
 
       // 输入时实时更新"实际路径"显示
       var debounceTimer = null;
       dirInput.addEventListener('input', function() {
         clearTimeout(debounceTimer);
+        renderDirPreview();
         debounceTimer = setTimeout(function() {
           updateDownloadDirDisplay(dirInput.value);
         }, 300);
       });
     }
+
+    // 高级折叠里单独改了某个分类 → 预览区跟着变
+    Object.keys(DIR_PREVIEW_CATS).forEach(function(key) {
+      var el = $('#setting-download-dir-' + key);
+      if (el) el.addEventListener('input', renderDirPreview);
+    });
 
     // "打开"按钮 - 在文件管理器中打开当前下载目录
     var openDirBtn = $('#setting-open-dir');
