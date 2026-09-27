@@ -179,6 +179,8 @@ class VideoItem:
     cover: str = ""
     stream_url: str = ""
     size: int = 0
+    # 发布日期 YYYY-MM-DD（页面「发布时间：…」字段，取不到为空串）
+    publish_date: str = ""
 
 
 class DouyinLoginRequired(Exception):
@@ -810,7 +812,8 @@ class DouyinBrowser:
                     continue
                 break
 
-            title, author, cover, author_sec_uid = await self._extract_video_meta(page)
+            title, author, cover, author_sec_uid, publish_date = \
+                await self._extract_video_meta(page)
 
             # 优先用 Content-Range 声明的总长
             sized = [r for r in agg.values() if r["total"] > 0]
@@ -841,20 +844,24 @@ class DouyinBrowser:
                 cover=cover,
                 stream_url=best["url"],
                 size=best["total"] or best["max_chunk"],
+                publish_date=publish_date,
             )
         finally:
             page.remove_listener("response", on_response)
             await page.close()
 
     @staticmethod
-    async def _extract_video_meta(page) -> tuple[str, str, str, str]:
+    async def _extract_video_meta(page) -> tuple[str, str, str, str, str]:
         """
-        从作品页提取标题、作者、封面、作者 sec_uid
+        从作品页提取标题、作者、封面、作者 sec_uid、发布日期
 
         页面结构（2026-09 实测）：
           · 标题      [data-e2e="video-desc"]
           · 作者信息  [data-e2e="user-info"]，内含昵称 + 认证徽章 + 粉丝数
           · 作者主页  a[href*="/user/MS4wLj..."]，href 里带 sec_uid
+          · 发布日期  播放器信息区「发布时间：2026-09-24 16:59」
+            （2026-09-27 实测：body 文本正则直接命中；兜底再扫
+             [data-e2e*="time"] 元素。取不到返回空串，命名层会回落）
 
         注意：作者区块的 innerText 混着昵称/徽章/粉丝数，不能直接用，
         需取第一行作为昵称；sec_uid 从链接 href 提取最可靠。
@@ -919,11 +926,27 @@ class DouyinBrowser:
             const c = document.querySelector('[data-e2e="video-cover"] img')
                    || document.querySelector('.video-player img');
 
+            // 发布日期：正文「发布时间：2026-09-24 16:59」，其次扫带 time 的元素
+            let pubDate = '';
+            const body = document.body.innerText || '';
+            const m = body.match(/发布时间\s*[:：]\s*(\d{4}-\d{2}-\d{2})/);
+            if (m) {
+                pubDate = m[1];
+            } else {
+                const cand = document.querySelectorAll('[data-e2e*="time"], time');
+                for (const el of cand) {
+                    const m2 = ((el.innerText || '') + ' ' + (el.textContent || ''))
+                        .match(/(\d{4}-\d{2}-\d{2})/);
+                    if (m2) { pubDate = m2[1]; break; }
+                }
+            }
+
             return {
                 title: t ? t.innerText.trim().slice(0, 300) : '',
                 author: author.slice(0, 60),
                 cover: c ? (c.src || '') : '',
-                secUid: secUid
+                secUid: secUid,
+                pubDate: pubDate
             };
         }""")
         return (
@@ -931,6 +954,7 @@ class DouyinBrowser:
             data.get("author", ""),
             data.get("cover", ""),
             data.get("secUid", ""),
+            data.get("pubDate", ""),
         )
 
     async def download(

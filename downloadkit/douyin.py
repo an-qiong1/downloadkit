@@ -64,6 +64,10 @@ class DouyinContent:
     file_ext: str = "mp4"
     file_path: str = ""
 
+    # 视频发布日期 YYYY-MM-DD（页面「发布时间」/ 详情 create_time）；
+    # 取不到为空串 —— 文件命名层会回落 douyin_<作品ID>，不硬造日期
+    publish_date: str = ""
+
     # ---- 浏览器后端新增字段（2026-09-26）----
     # backend: "browser" 或 "legacy"，标识解析路径
     backend: str = "legacy"
@@ -71,6 +75,55 @@ class DouyinContent:
     author_sec_uid: str = ""
     # stream_size: 视频实际总长（字节），来自 Content-Range
     stream_size: int = 0
+
+
+def _fmt_publish_date(ts) -> str:
+    """create_time（unix 秒/毫秒）→ YYYY-MM-DD；拿不到返回空串
+
+    按 UTC+8 换算（抖音显示的发布时刻即北京时间），与页面「发布时间」
+    抓到的日期保持一致，不随机器时区漂移。
+    """
+    try:
+        ts = int(ts)
+    except (TypeError, ValueError):
+        return ""
+    if ts <= 0:
+        return ""
+    if ts > 10 ** 12:  # 毫秒时间戳
+        ts //= 1000
+    from datetime import datetime, timedelta, timezone
+    try:
+        return datetime.fromtimestamp(
+            ts, tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def build_download_base(content: "DouyinContent") -> str:
+    """下载文件名主干（不含扩展名）。
+
+    用户拍板格式（2026-09-27）：`标题 2026-09-27.mp4` —— 标题在前、
+    发布日期在后；拿不到发布日期就回落旧命名 `douyin_<作品ID>`，不硬造。
+    长度封顶 120 字符：Windows 路径 260 上限，目录 + 日期 + 后缀要留余量。
+    """
+    base = sanitize_filename((content.title or "").strip())
+    if not content.publish_date or base == "unknown":
+        return f"douyin_{content.item_id}"
+    if len(base) > 120:
+        base = base[:120].rstrip()
+    return f"{base} {content.publish_date}"
+
+
+def _existing_target(candidates) -> Optional[Path]:
+    """按候选名找已存在的文件（新命名在前，旧命名 douyin_<id> 兜底）
+
+    旧文件不算「可下载」：同一作品曾以旧命名落盘的，切换新命名后
+    重下不许再下出第二份（订阅增量判定走 aweme_id 水位线，与此无关）。
+    """
+    for p in candidates:
+        if p is not None and p.exists():
+            return p
+    return None
 
 
 class OptimizedOfficialParser:
@@ -1207,6 +1260,9 @@ class OptimizedOfficialParser:
         # 提取描述
         content.title = item_data.get("desc", "") or f"douyin_{item_id}"
         
+        # 发布日期（命名用，P4-2）
+        content.publish_date = _fmt_publish_date(item_data.get("create_time"))
+        
         # 提取作者
         author = item_data.get("author", {})
         if isinstance(author, dict):
@@ -1310,6 +1366,7 @@ class OptimizedOfficialParser:
         content = DouyinContent(item_id=item_id)
         
         content.title = aweme_detail.get("desc", "") or f"douyin_{item_id}"
+        content.publish_date = _fmt_publish_date(aweme_detail.get("create_time"))
         
         author = aweme_detail.get("author", {})
         if isinstance(author, dict):
@@ -1960,6 +2017,7 @@ async def _fetch_content_browser(input_text: str) -> Optional[DouyinContent]:
         backend="browser",
         author_sec_uid=item.author_sec_uid or "",
         stream_size=item.size,
+        publish_date=item.publish_date or "",
     )
 
     logger.info(
@@ -1984,23 +2042,31 @@ async def _browser_download_pending(
     """
     浏览器后端下载
 
-    命名规则沿用旧实现：douyin_<item_id>.mp4
+    命名规则（P4-2，2026-09-27）：`标题 2026-09-27.mp4`；
+    拿不到发布日期回落 `douyin_<item_id>.mp4`。
     """
     browser = await get_browser()
 
     video_dir = get_download_subdir('videos')
-    filename = f"douyin_{content.item_id}"
+    filename = build_download_base(content)
     target = video_dir / f"{filename}.mp4"
 
-    # 已存在且未指定覆盖时，直接跳过
-    if target.exists() and rename_strategy != "overwrite":
-        logger.info(f"[Download:browser] 已存在，跳过: {target.name}")
-        if progress_callback:
-            progress_callback(1.0)
-        if task_id:
-            from .download_queue import download_queue
-            download_queue.update_progress(task_id, 1.0)
-        return [target]
+    # 已存在且未指定覆盖时，直接跳过。
+    # 旧命名 douyin_<item_id>.mp4 也算已存在 —— 切新命名后不许重下出第二份
+    if rename_strategy != "overwrite":
+        existing = _existing_target([
+            target,
+            video_dir / f"douyin_{content.item_id}.mp4",
+        ])
+        if existing:
+            logger.info(f"[Download:browser] 已存在，跳过: {existing.name}")
+            if progress_callback:
+                progress_callback(1.0)
+            if task_id:
+                from .download_queue import download_queue
+                download_queue.update_progress(task_id, 1.0)
+            content.file_path = str(existing)
+            return [existing]
 
     logger.info(f"[Download:browser] 开始下载 {content.item_id}")
 
@@ -2125,6 +2191,13 @@ async def download_content(
         from .utils import load_config
         cfg = load_config()
         merge_motion_photo = cfg.get('general', {}).get('motion_photo_default', True)
+
+    # 重名策略也在这里定死：下面各分支的「已存在跳过（含旧命名文件）」
+    # 预检要用真实生效值，不能一路传 None（None 意味着各处自己猜）
+    if rename_strategy is None:
+        from .utils import load_config
+        cfg = load_config()
+        rename_strategy = cfg.get('general', {}).get('rename_strategy', 'skip')
     
     # 确保output_dir是Path对象
     output_dir = Path(output_dir)
@@ -2163,14 +2236,27 @@ async def download_content(
                 logger.warning(" [!]  无法获取无水印视频，将下载带水印版本")
             
             video_dir = get_download_subdir('videos')
-            filename = f"douyin_{content.item_id}.{content.file_ext}"
-            filepath = video_dir / filename
-            
-            logger.info(f"[Download] 开始下载视频: {filename}")
-            await download_file(client, download_url, filepath, task_id, progress_callback, rename_strategy=rename_strategy)
-            downloaded.append(filepath)
-            content.file_path = str(filepath)
-            logger.info(f"[Download] 下载完成: {filepath}")
+            base = build_download_base(content)
+            filepath = video_dir / f"{base}.{content.file_ext}"
+
+            # 已存在（含旧命名 douyin_<id>.<ext>）且未指定覆盖 → 跳过，
+            # 旧命名文件不许被下成第二份
+            existing = None
+            if rename_strategy != "overwrite":
+                existing = _existing_target([
+                    filepath,
+                    video_dir / f"douyin_{content.item_id}.{content.file_ext}",
+                ])
+            if existing:
+                logger.info(f"[Download] 已存在，跳过: {existing.name}")
+                downloaded.append(existing)
+                content.file_path = str(existing)
+            else:
+                logger.info(f"[Download] 开始下载视频: {filepath.name}")
+                await download_file(client, download_url, filepath, task_id, progress_callback, rename_strategy=rename_strategy)
+                downloaded.append(filepath)
+                content.file_path = str(filepath)
+                logger.info(f"[Download] 下载完成: {filepath}")
         
         elif content.content_type == ContentType.ANIMATED and merge_motion_photo:
             # 实况照片：逐对下载并合并为 Motion Photo
@@ -2191,6 +2277,7 @@ async def download_content(
             
             total = len(pairs)
             logger.info(f"[Download] 检测到 {total} 对实况照片，将逐个合并为 Motion Photo")
+            base = build_download_base(content)
             
             for i, pair in enumerate(pairs):
                 # 检查是否暂停/取消
@@ -2198,14 +2285,18 @@ async def download_content(
                 check_download_status(task_id)
                 
                 pair_label = f"{i+1}/{total}"
-                img_path = animated_dir / f"douyin_{content.item_id}_photo_{i+1}.jpg"
-                vid_path = animated_dir / f"douyin_{content.item_id}_photo_{i+1}.mp4"
-                output_file = animated_dir / f"douyin_{content.item_id}_motion_{i+1}.jpg"
+                img_path = animated_dir / f"{base}_photo_{i+1}.jpg"
+                vid_path = animated_dir / f"{base}_photo_{i+1}.mp4"
+                output_file = animated_dir / f"{base}_motion_{i+1}.jpg"
                 
-                # 跳过已下载的motion文件
-                if output_file.exists():
-                    logger.info(f"[Download] [{pair_label}] 已存在，跳过: {output_file.name}")
-                    downloaded.append(output_file)
+                # 跳过已下载的motion文件（旧命名 douyin_<id>_motion_N 也算已存在）
+                hit = _existing_target([
+                    output_file,
+                    animated_dir / f"douyin_{content.item_id}_motion_{i+1}.jpg",
+                ])
+                if hit:
+                    logger.info(f"[Download] [{pair_label}] 已存在，跳过: {hit.name}")
+                    downloaded.append(hit)
                     continue
                 
                 # 下载图片
@@ -2229,7 +2320,7 @@ async def download_content(
                 await download_file(client, pair.video.url, vid_path, task_id, rename_strategy=rename_strategy)
                 
                 # 合并为 Motion Photo
-                output_file = animated_dir / f"douyin_{content.item_id}_motion_{i+1}.jpg"
+                output_file = animated_dir / f"{base}_motion_{i+1}.jpg"
                 try:
                     create_motion_photo(img_path, vid_path, output_file)
                     img_path.unlink(missing_ok=True)
@@ -2268,15 +2359,26 @@ async def download_content(
         else:
             # 普通图文下载
             images_dir = get_download_subdir('images')
+            base = build_download_base(content)
             for idx, img in enumerate(content.images):
                 # 检查是否暂停/取消
                 from .utils import check_download_status
                 check_download_status(task_id)
                 
-                filename = f"douyin_{content.item_id}_{idx+1}.{img.file_ext}"
-                filepath = images_dir / filename
+                filepath = images_dir / f"{base}_{idx+1}.{img.file_ext}"
                 
-                logger.info(f"[Download] 下载 {img.type} {idx+1}/{len(content.images)}: {filename}")
+                # 已存在（含旧命名 douyin_<id>_N）且未指定覆盖 → 跳过
+                if rename_strategy != "overwrite":
+                    existing = _existing_target([
+                        filepath,
+                        images_dir / f"douyin_{content.item_id}_{idx+1}.{img.file_ext}",
+                    ])
+                    if existing:
+                        logger.info(f"[Download] 已存在，跳过: {existing.name}")
+                        downloaded.append(existing)
+                        continue
+                
+                logger.info(f"[Download] 下载 {img.type} {idx+1}/{len(content.images)}: {filepath.name}")
                 await download_file(client, img.url, filepath, task_id, rename_strategy=rename_strategy)
                 downloaded.append(filepath)
                 

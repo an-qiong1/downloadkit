@@ -24,6 +24,7 @@
 | 2026-09-27 | P3 验收 | pytest 全量 430 passed / 6 skipped → 重打包 105.88MB → `test-exe.ps1` 6 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（含新托盘菜单「图标已启动」）；红线三处 0/0/3 不变，无残留进程 |
 | 2026-09-27 | 用户实测修复 | 订阅「预览成功、订阅必失败」三层连环修复：① `fetch_creator(max_scrolls=0)` 空保护无条件触发挡死所有新订阅 → 保护加滚动条件，`max_scrolls=0` 只取资料不抓列表；② 短链落裸首页被当成功且缓存坏结果 → 不缓存、不重试（省限流额度）、直接转浏览器回退；③ 回退遇「验证码中间页」→ RateLimited 穿透 → server 429 明确文案（原笼统 400）；④ 预览消息 `<b>` 字面显示 → 纯文本化；`test_subscribe_profile_only.py` 5 例（真 fetch_creator 链路，替身浏览器绕过实现的教训）+ `test_resolve_sec_uid.py` +7 例，pytest 442 passed；真实验证：主页直订 200、短链 429 验证码文案、复原删除 |
 | 2026-09-27 | P4-1 两个体验 Bug | Bug⑤ 选中残留：`refreshFiles` 裁剪 `selectedFiles`、空列表回位全选框+工具栏计数、单删同步移出选中集、重绘后恢复有效勾选；Bug⑥ 完成行点击无反应：完成行可点（`queue-item-done`）→ 新端点 `POST /api/open-file`（裸文件名在下载目录递归找分类子目录，遍历/越界 403 拦死、目录 400、缺失 404）打开文件 → `POST /api/queue/{id}/dismiss` 双侧清除（队列 + `_downloads`，只删一边刷新复活）、进行中任务 409 拒绝；headless 回文件路径弹窗（标题「文件位置」）；`tests/test_open_file.py` 17 例，pytest 458 passed |
+| 2026-09-27 | P4-2 文件命名 | 抖音改 `标题 发布日期.ext`（日期在后）：浏览器后端从页面「发布时间：…」抓日期（body 正则 + `[data-e2e*=time]` 兜底，**零额外请求**，探针实测命中），旧接口路径从 `create_time` 按 UTC+8 换算（秒/毫秒/坏值都容错）；缺日期或缺标题回落 `douyin_<作品ID>` 不硬造；四命名点（浏览器视频/旧接口视频/实况/图文）统一走 `build_download_base`（非法字符清洗 + 120 字封顶），各点加 `_existing_target` 旧命名兜底去重，切换命名后重下不出第二份；`download_content` 先定死 `rename_strategy` 再做已存在预检；真实解析实测 `publish_date='2026-09-24'`、文件名 `…2026-09-24.mp4`；`tests/test_douyin_naming.py` 18 例，pytest 477 passed |
 
 ---
 
@@ -178,11 +179,17 @@
   - 文件：`server.py`、`downloadkit/download_queue.py`（`dismiss_task`）、`js/files.js`、`js/queue.js`、`css/main.css`
   - 测试：`tests/test_open_file.py` 17 例（安全解析 7 + 端点 2 + dismiss 5 + 前端接线 3），pytest 458 passed
 
-- [ ] **P4-2 文件命名：抖音按「标题 发布日期」**（格式 `标题 2026-09-27.mp4`）
+- [x] **P4-2 文件命名：抖音按「标题 发布日期」**（格式 `标题 2026-09-27.mp4`，2026-09-27 完成）
   - 发布日期取详情接口的 `create_time`（已确认多抓一个字段）；取不到时回落现有 `douyin_<作品ID>` 命名，不硬造
-  - 改造点：`douyin.py` 视频/动图图片命名与已存在检测、`server.py` 历史 title 提取同步；旧文件不批量重命名；
+  - 实际取值点（探针实测后定）：**浏览器后端（主路径）从页面 DOM 抓「发布时间：2026-09-24 16:59」**
+    （body 正则 + `[data-e2e*="time"]` 兜底，零额外请求零风控），旧接口路径从 `create_time` 按 UTC+8 换算
+  - 改造点：`douyin.py` 视频/动图图片命名与已存在检测；`server.py` 历史 title 提取**验证兼容无需改**
+    （旧 `douyin_\d+_` 前缀正则对新名是 no-op，`_motion_` 替换照常生效）；旧文件不批量重命名，
+    但新命名下载前用 `_existing_target` 兜底查旧命名文件（切命名后重下不出第二份）；
     订阅增量判定走 aweme_id 水位线，与文件名无关
-  - 文件：`downloadkit/douyin.py`、`server.py`
+  - 测试：`tests/test_douyin_naming.py` 18 例；真实解析实测 `publish_date='2026-09-24'`、
+    文件名 `手搓游戏本…长长见识， 2026-09-24.mp4`
+  - 文件：`downloadkit/douyin.py`、`downloadkit/douyin_browser.py`
 
 - [ ] **P4-3 UI 统一：组件样式 → toggle 开关 → 备注收敛**
   - 统一按钮/输入框/开关设计 token，现代化、少备注
