@@ -142,7 +142,11 @@
   - `settings/get` 附带 `proxy_system` 回显系统代理探测值；`/api/proxy/test` 永远 200、可用性放 `body.ok`，超时/连不上给中文分类提示（连不上代理 vs 网络不通）
   - 前端：三态 radio + 手动态才可编辑地址框 + 跟随系统回显 + 测试按钮；`tests/test_proxy.py` 22 例；pytest 400 passed
 
-- [ ] **P3-2 队列打磨**：一键重试全部失败、进度保留
+- [x] **P3-2 队列打磨**：一键重试全部失败、进度保留（2026-09-27）
+  - `retry_task` 不再清 `progress`/`downloaded_size`：downloader 按文件已有字节断点续传，重试是接着下，清零只会让进度条在重试瞬间倒退；`error` 照清
+  - 新端点 `POST /api/queue/retry-failed`：只重试队列里真实存在的 FAILED；`_downloads` 孤儿 failed 卡（实体已被 cleanup 清掉）如实统计成 `orphaned` 上报 —— 视频条目不存原链接、音乐条目 url 是 song_id 走视频接口必然再失败，硬发只会批量制造新失败任务
+  - 队列头部加「N 失败」统计与「重试全部失败」按钮（无失败即隐藏）；toast 把 retried/orphaned 转述清楚
+  - `tests/test_queue_polish.py` 8 例；走查注入 FAILED 实体 + 孤儿卡全链路验证（组合/孤儿 toast、62% 进度跨重试保留、单任务 400 回归、空队列隐藏），console 零错误
 
 - [ ] **P3-3 其他候选**：设置导出导入、托盘菜单快捷项、解答页搜索、音乐/资源页下载按钮状态统一
 

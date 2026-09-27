@@ -28,6 +28,12 @@
       $('#queue-downloading').textContent = data.downloading || 0;
       $('#queue-pending').textContent = data.pending || 0;
       $('#queue-completed').textContent = data.completed || 0;
+      // 失败计数与批量重试按钮同显隐：没失败时按钮毫无用处，
+      // 留着常亮只会让人点了个寂寞
+      var failedCount = data.failed || 0;
+      $('#queue-failed').textContent = failedCount;
+      $('#queue-failed-stat').style.display = failedCount > 0 ? '' : 'none';
+      $('#queue-retry-failed').style.display = failedCount > 0 ? '' : 'none';
       
       var listEl = $('#queue-list');
       var emptyEl = $('#queue-empty');
@@ -175,6 +181,24 @@
   
   // 刷新队列按钮
   $('#queue-refresh').addEventListener('click', refreshQueue);
+
+  // 一键重试全部失败（P3-2）
+  // orphaned = 失败太久已被清理出队列的任务（见 api_retry_failed 注释），
+  // 它们统计得出来但重发不了，必须跟用户说明白，不然点了像没反应
+  $('#queue-retry-failed').addEventListener('click', function() {
+    if (!confirm('重试所有失败任务？')) return;
+    api('/api/queue/retry-failed', { method: 'POST' }).then(function(r) {
+      var n = r.retried || 0;
+      var msg = n > 0 ? ('已重新加入 ' + n + ' 个任务') : '没有可重试的任务';
+      if (r.orphaned > 0) {
+        msg += '；' + r.orphaned + ' 个失败任务已过期被自动清理，无法重试';
+      }
+      toast(msg, n > 0 ? 'success' : 'error');
+      refreshQueue();
+    }).catch(function(err) {
+      toast('重试失败：' + err.message, 'error');
+    });
+  });
   
   // 自动刷新队列状态
   function startQueueAutoRefresh() {

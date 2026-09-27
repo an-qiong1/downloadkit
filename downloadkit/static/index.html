@@ -304,10 +304,16 @@
             <span id="queue-downloading">0</span> 下载中 · 
             <span id="queue-pending">0</span> 等待中 · 
             <span id="queue-completed">0</span> 已完成
+            <span id="queue-failed-stat" style="display:none"> · <span id="queue-failed">0</span> 失败</span>
           </div>
-          <button class="btn btn-secondary" id="queue-refresh">
-            <i data-lucide="refresh-cw" style="width:14px;height:14px;margin-right:6px"></i>刷新
-          </button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-secondary" id="queue-retry-failed" style="display:none">
+              <i data-lucide="refresh-cw" style="width:14px;height:14px;margin-right:6px"></i>重试全部失败
+            </button>
+            <button class="btn btn-secondary" id="queue-refresh">
+              <i data-lucide="refresh-cw" style="width:14px;height:14px;margin-right:6px"></i>刷新
+            </button>
+          </div>
         </div>
         
         <div id="queue-status" class="status-msg" style="display:none"></div>
@@ -737,7 +743,7 @@
 <script src="js/music.js?v=20260927a"></script>
 <script src="js/resource.js?v=20260927a"></script>
 <script src="js/files.js?v=20260927a"></script>
-<script src="js/queue.js?v=20260927a"></script>
+<script src="js/queue.js?v=20260927f"></script>
 <script src="js/settings.js?v=20260927e"></script>
 <script src="js/douyin-login.js?v=20260926a"></script>
 <script src="js/subscriptions.js?v=20260927d"></script>

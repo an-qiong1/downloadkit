@@ -173,11 +173,13 @@ class DownloadQueue:
         if task.status != TaskStatus.FAILED:
             return False
         
-        # 重置任务状态
+        # 重置任务状态（P3-2 进度保留）：
+        # downloader 断点续传看的是目标文件已有字节数（Range），重试是
+        # 接着下 —— 这里把 progress/downloaded_size 清零只会让进度条在
+        # 重试瞬间倒退，明明在续传却显示从头开始。error 必须清，
+        # 否则旧报错会挂在已恢复的任务上。
         task.status = TaskStatus.PENDING
-        task.progress = 0.0
         task.error = ""
-        task.downloaded_size = 0
         
         # 清除取消和暂停状态
         self._cancelled_tasks.discard(task_id)

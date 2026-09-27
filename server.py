@@ -1360,6 +1360,36 @@ async def api_retry_download(task_id: str):
     raise HTTPException(400, "无法重试此任务")
 
 
+@app.post("/api/queue/retry-failed")
+async def api_retry_failed():
+    """一键重试所有失败任务（P3-2）。
+
+    只重试 download_queue 里还存在的 FAILED 任务（失败后约 5 分钟内，
+    超时会被清理循环移出）。_downloads 里的孤儿 failed 卡不在此列：
+    视频条目不存原链接无从重发，音乐条目存的 url 是 song_id、走视频
+    接口必然立刻再失败 —— 硬发只会批量制造新的失败任务。
+    所以把这类如实统计成 orphaned 报给前端，由它向用户说明白。
+
+    Returns:
+        {status, retried: 实际重新入队数, orphaned: 过期无法重试的失败卡数}
+    """
+    retried = 0
+    for task_id in list(download_queue.active_tasks.keys()):
+        # retry_task 内部只放行 FAILED，其余状态返回 False 自动跳过
+        if await download_queue.retry_task(task_id):
+            retried += 1
+            if task_id in _downloads:
+                _downloads[task_id]["status"] = "downloading"
+                _downloads[task_id].pop("error", None)
+
+    orphaned = sum(
+        1 for task_id, info in _downloads.items()
+        if info.get("status") == "failed"
+        and task_id not in download_queue.active_tasks
+    )
+    return {"status": "ok", "retried": retried, "orphaned": orphaned}
+
+
 # ========== 设置接口 ==========
 
 @app.get("/api/settings/get")
