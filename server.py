@@ -1683,6 +1683,7 @@ async def api_subscriptions_check(sec_uid: str, req: CheckCreatorRequest):
       之后只下载基线之后新增的作品。这是订阅功能的默认语义，
       不是临时限制——订阅一个 500 视频的博主不该把 500 个全下下来。
     """
+    from downloadkit import subscription as store
     from downloadkit.subscription_service import (
         LoginRequired, RateLimited, check_creator,
     )
@@ -1695,13 +1696,18 @@ async def api_subscriptions_check(sec_uid: str, req: CheckCreatorRequest):
         )
     except RateLimited as e:
         # 抖音触发风控，让前端提示「稍后再试」而不是当成 500 故障
+        store.mark_creator_result(sec_uid, f"失败：{e}")
         return JSONResponse(status_code=429, content={"ok": False, "error": str(e)})
     except LoginRequired as e:
+        store.mark_creator_result(sec_uid, f"失败：{e}")
         return JSONResponse(status_code=401, content={"ok": False, "error": str(e)})
     except ValueError as e:
+        # 404「没有订阅」也走到 mark，函数对不存在的行静默返回 False
+        store.mark_creator_result(sec_uid, f"失败：{e}")
         raise HTTPException(404, str(e))
     except Exception as e:
         logger.error(f"检查订阅失败: {e}", exc_info=True)
+        store.mark_creator_result(sec_uid, f"失败：{e}")
         raise HTTPException(500, f"检查失败：{e}")
 
 

@@ -100,6 +100,18 @@
       (scope === 'backfill_n' ? '' : ' style="display:none"') + '>';
   }
 
+  // 卡片状态（P2-4）：上次检查的结果或失败原因。
+  // 失败由后端统一拼「失败：」前缀，按前缀判色；没有状态就不占位。
+  // 时间用 last_attempt（成败都更新），老订阅该列为空时回落 last_checked，
+  // 免得升级完满屏「还没检查过」。
+  function statusSpan(c) {
+    var t = c.last_result || '';
+    if (!t) return '';
+    var failed = t.indexOf('失败') === 0;
+    return '<span' + (failed ? ' style="color:var(--error)"' : '') + '>' +
+      escHtml(t) + '</span>';
+  }
+
   function creatorCard(c) {
     var paused = !c.enabled;
     var avatar = c.avatar
@@ -128,7 +140,8 @@
       '<div style="margin-top:6px;font-size:11px;color:var(--text-secondary);display:flex;' +
       'gap:12px;flex-wrap:wrap">' +
       '<span>作品 ' + (c.works_count || 0) + ' 个</span>' +
-      '<span>上次检查 ' + fmtWhen(c.last_checked) + '</span>' +
+      '<span>上次检查 ' + fmtWhen(c.last_attempt || c.last_checked) + '</span>' +
+      statusSpan(c) +
       '<span class="sub-scope-cell">范围 ' + scopeSelect(c) + '</span>' +
       (paused ? '<span style="color:var(--warning)">已暂停</span>' : '') +
       '</div></div>' +

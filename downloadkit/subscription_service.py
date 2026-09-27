@@ -487,6 +487,13 @@ async def check_creator(
                 if bf["left"]:
                     segs.append(f"还剩 {bf['left']} 个待补")
                 result["message"] += "；".join([""] + segs)
+
+        # 卡片状态（P2-4）：短摘要。message 那句有三十多个字，
+        # 塞进卡片的元信息行会被折成两行，这里另拼一句短的
+        status = f"已建立基线，{marked} 个存量不下载"
+        if result.get("backfilled"):
+            status += f"，补下 {result['backfilled']} 个历史"
+        store.mark_creator_result(sec_uid, status)
         return result
 
     # ---- 后续检查：只处理水位线之上的真新作品 ----
@@ -500,6 +507,7 @@ async def check_creator(
         logger.info(
             f"创作者 {info.nickname or sec_uid} 补建基线水位线={watermark}，本轮不下载"
         )
+        store.mark_creator_result(sec_uid, "补建基线水位线，本轮不下载")
         return {
             "sec_uid": sec_uid,
             "nickname": info.nickname or rec["nickname"],
@@ -551,6 +559,8 @@ async def check_creator(
             result["message"] = "没有新作品"
         else:
             result["message"] = f"发现 {len(fresh)} 个新作品（本次不下载）"
+        # 探针也是一次检查，卡片要显示它发现了什么（P2-4）
+        store.mark_creator_result(sec_uid, result["message"])
         return result
 
     # ---- 增量入队：新作品优先占满配额 ----
@@ -611,6 +621,7 @@ async def check_creator(
     if bf["left"]:
         parts.append(f"还剩 {bf['left']} 个历史作品待补")
     result["message"] = "；".join(parts)
+    store.mark_creator_result(sec_uid, result["message"])
     return result
 
 
@@ -653,12 +664,14 @@ async def check_all(download: bool = True, max_new: int = DEFAULT_MAX_NEW,
         except RateLimited as e:
             # 风控：停止本轮，后续交由调度器指数退避
             logger.warning(f"抖音触发风控，中断本轮检查：{e}")
+            store.mark_creator_result(c["sec_uid"], f"失败：{e}")
             results.append({"sec_uid": c["sec_uid"], "nickname": c["nickname"],
                             "error": str(e)})
             rate_limited, stopped_at = True, c["nickname"] or c["sec_uid"]
             break
         except LoginRequired as e:
             logger.warning(f"登录态失效，中断本轮检查：{e}")
+            store.mark_creator_result(c["sec_uid"], f"失败：{e}")
             results.append({"sec_uid": c["sec_uid"], "nickname": c["nickname"],
                             "error": str(e)})
             needs_login, stopped_at = True, c["nickname"] or c["sec_uid"]
@@ -666,6 +679,10 @@ async def check_all(download: bool = True, max_new: int = DEFAULT_MAX_NEW,
         except Exception as e:
             logger.error(f"检查 {c['nickname'] or c['sec_uid']} 失败: {e}",
                          exc_info=True)
+            # 单个创作者失败照常记录到卡片状态（P2-4），
+            # 但只写 last_attempt / last_result —— last_checked 留给
+            # 成功，否则首查失败会被当成「已建基线」，水位线永远空着
+            store.mark_creator_result(c["sec_uid"], f"失败：{e}")
             results.append({"sec_uid": c["sec_uid"], "nickname": c["nickname"],
                             "error": str(e)})
         else:

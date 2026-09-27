@@ -105,6 +105,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE creators ADD COLUMN scope_param "
             "TEXT NOT NULL DEFAULT ''"
         )
+    # P2-4 卡片状态。last_attempt / last_result 成败都更新，
+    # 但 **last_checked 只在成功完成检查时更新** —— 首查判断
+    # `if not rec["last_checked"]` 靠它判「还没建基线」，
+    # 失败也写会把基线判断污染掉（首查失败 → 下次被当成已建过基线）。
+    if "last_attempt" not in cols:
+        conn.execute(
+            "ALTER TABLE creators ADD COLUMN last_attempt "
+            "TEXT NOT NULL DEFAULT ''"
+        )
+    if "last_result" not in cols:
+        conn.execute(
+            "ALTER TABLE creators ADD COLUMN last_result "
+            "TEXT NOT NULL DEFAULT ''"
+        )
 
 
 # 下载范围取值。
@@ -401,6 +415,35 @@ def mark_creator_checked(sec_uid: str, works_seen: int = 0,
             (_now(), last_found or "", works_seen, sec_uid, sec_uid),
         )
         conn.commit()
+
+
+def mark_creator_result(sec_uid: str, result: str) -> bool:
+    """记录上次检查的尝试时间与结果摘要（P2-4，卡片状态用）。
+
+    与 mark_creator_checked 的分工，不能合并：
+      · last_checked 只在**成功完成**检查时更新 —— 首查判断
+        `if not rec["last_checked"]` 靠它，失败也写会污染基线判断
+      · last_attempt 成败都更新，卡片「上次检查时间」显示它
+      · last_result  中文摘要（成功）或「失败：…」（原因）
+
+    Args:
+        sec_uid: 创作者 ID
+        result: 中文状态文本；失败由调用方拼「失败：」前缀
+
+    Returns:
+        是否写到了行；订阅不存在时静默返回 False
+        （单查接口 404「没有订阅」也会走到这里，不该再炸一次）
+    """
+    with _db_lock:
+        _init_db()
+        conn = _get_db()
+        cur = conn.execute(
+            "UPDATE creators SET last_attempt = ?, last_result = ? "
+            "WHERE sec_uid = ?",
+            (_now(), str(result or ""), sec_uid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def set_creator_baseline(sec_uid: str, max_aweme_id: str) -> bool:

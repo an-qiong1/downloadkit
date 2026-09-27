@@ -19,6 +19,7 @@
 | 2026-09-27 | P2-1 | 每创作者下载范围（`only_new`/`backfill_n`/`all`；`since_date` 缺时间源已确认缓做）：加列迁移、补下候选按 `task_id` 判重、N 为累计上限、增量优先吃配额；`mark_works_seen` 改冲突时补登任务号（原 `INSERT OR IGNORE` 会让补下每轮重下同一批）；卡片行内下拉+N 输入、all 前置 confirm；`tests/test_download_scope.py` 22 例，pytest 316 passed |
 | 2026-09-27 | P2-2 | 定时检查双模式：`mode=interval\|daily_at` + `daily_at=HH:MM`，每天定时加 0~3 分钟抖动、退避仍优先、首轮仍 15 秒；前端「检查方式」下拉切两个 label 显隐，`bindPollerField` 加 transform；`tests/test_poller.py` +28 例，pytest 344 passed；走查零错误且全程未跑轮询 |
 | 2026-09-27 | P2-3 | 手动检查策略入口：折叠区（下载开关/单轮上限/范围），默认值=原行为不落库；范围临时覆盖透传 `CheckAllRequest→run_round→check_all→check_creator→_apply_backfill`，校验抽 `validate_scope` 与卡片共用、开跑前 400 拦下；`tests/test_check_strategy.py` 20 例，pytest 364 passed |
+| 2026-09-27 | P2-4 | 订阅卡片状态：加列 `last_attempt`/`last_result`（成败都更新），`last_checked` 仍只在成功时写（首查判断靠它，有命门测试锁死）；check_creator 四个成功出口 + check_all 三个 except + 单查端点写状态，中断只写被检查到的、暂停不写；卡片显示结果、失败标红、时间回落；`tests/test_card_status.py` 14 例，pytest 378 passed |
 
 ---
 
@@ -107,9 +108,18 @@
   - 文件：`server.py`、`downloadkit/poller.py`、`subscription.py`、
     `subscription_service.py`、`index.html`、`js/subscriptions.js`
 
-- [ ] **P2-4 订阅卡片状态**
-  - 显示上次检查时间 + 结果或中文失败原因
-  - 文件：`js/subscriptions.js`
+- [x] **P2-4 订阅卡片状态**（2026-09-27 完成）
+  - 加列 `last_attempt`（成败都更新）+ `last_result`（中文摘要/失败原因）；
+    **`last_checked` 保持只在成功时更新** —— 首查判断 `if not last_checked`
+    靠它，失败也写会让「首查失败」被当成已建基线，水位线判断跑偏（有命门测试）
+  - 写入点：`check_creator` 四个成功出口（基线/补建水位线/探针/常规）、
+    `check_all` 三个 except（风控/未登录/单个异常，中断时**只写被检查到的**）、
+    单查端点四个 except；暂停（skipped）不写状态
+  - 卡片元信息行显示「上次检查 X 分钟前 + 结果」，失败按「失败：」前缀标红，
+    时间列空时回落 `last_checked`（老订阅不显示成「还没检查过」）
+  - 测试：`tests/test_card_status.py` 14 例（含命门：首查失败后 `last_checked`
+    仍空、第二次成功仍走建基线分支）
+  - 文件：`downloadkit/subscription.py`、`subscription_service.py`、`server.py`、`js/subscriptions.js`
 
 **P2 验收**：新增回归测试（范围三种模式 × 水位线不重复）→ `pytest` 全量 → 重打包 → 真实创作者实测补下 N 个
 
