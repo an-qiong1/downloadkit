@@ -63,8 +63,8 @@ def test_controls_sit_in_the_right_group():
     expect = {
         "下载": ["setting-download-dir", "setting-rename-strategy", "setting-motion-photo-default"],
         "应用": ["setting-max-concurrent", "setting-log-level", "setting-history-max-records"],
-        "网络": ["setting-proxy-enabled", "setting-cookie-douyin", "setting-cookie-bilibili",
-                 "dy-login-btn"],
+        "网络": ["setting-proxy-mode-system", "proxy-test-btn", "setting-cookie-douyin",
+                 "setting-cookie-bilibili", "dy-login-btn"],
         "启动与后台": ["setting-autostart", "setting-close-to-tray"],
         "关于": ["setting-version"],
     }
@@ -75,7 +75,7 @@ def test_controls_sit_in_the_right_group():
 
     # 反向：组里不该出现别的组的控件
     assert "setting-history-max-records" not in by_title["下载"]
-    assert "setting-proxy-enabled" not in by_title["应用"]
+    assert "setting-proxy-mode-manual" not in by_title["应用"]
 
 
 def test_network_group_has_subtitles():

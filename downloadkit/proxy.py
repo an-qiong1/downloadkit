@@ -7,6 +7,40 @@ import os
 import sys
 from typing import Optional
 
+# 代理三态（P3-1）：关闭 / 跟随系统 / 手动
+MODES = ("off", "system", "manual")
+DEFAULT_MODE = "system"
+
+
+def resolve_mode(proxy_config: Optional[dict]) -> str:
+    """把 proxy 配置解析成三态之一，含旧配置兼容。
+
+    旧配置只有 enabled 布尔开关，按「尽量不改用户现有行为」推导：
+
+      · enabled=false               → off
+      · enabled=true 且填过任一地址 → manual（尊重用户手填的地址，
+        忽略它等于代理悄悄失效）
+      · enabled=true 且全空         → system（老版本 youtube 下载的实际
+        行为就是「走系统代理」，推 system 保证升级前后一致）
+
+    Args:
+        proxy_config: config["proxy"] 节，可能为 None / 缺失
+
+    Returns:
+        "off" | "system" | "manual"
+    """
+    pc = proxy_config or {}
+    mode = str(pc.get("mode") or "").strip()
+    if mode in MODES:
+        return mode
+
+    if pc.get("enabled", True) is False:
+        return "off"
+    for key in ("global", "youtube", "bilibili", "douyin", "xiaohongshu"):
+        if str(pc.get(key) or "").strip():
+            return "manual"
+    return DEFAULT_MODE
+
 
 def get_system_proxy() -> Optional[str]:
     """
@@ -131,41 +165,40 @@ def _get_linux_proxy() -> Optional[str]:
 
 
 def get_proxy_for_platform(platform: str, config: dict = None) -> Optional[str]:
-    """
-    根据平台决定是否使用代理
-    
+    """按平台解析最终生效的代理（P3-1 三态）。
+
+    三态（config["proxy"]["mode"]）：
+      · off    关闭 —— 一律直连，手动填的地址全部忽略
+      · system 跟随系统 —— 用系统代理设置，手动地址忽略
+      · manual 手动 —— 平台专属地址 > 全局地址 > 直连
+
+    旧配置兼容（只有 enabled 开关、没有 mode）由 resolve_mode 推导：
+      · enabled=false                    → off
+      · enabled=true 且填过任一地址      → manual（尊重手动值）
+      · enabled=true 且全空              → system（老版本 youtube 的
+        实际行为就是「走系统代理」，推 system 保证升级不改行为）
+
     Args:
         platform: 平台名称 ('youtube', 'bilibili', 'douyin', 'xiaohongshu')
-        config: 配置字典（可选）
-    
+        config: 整份配置字典（可选）；不传 = 按空配置解析（默认 system）
+
     Returns:
-        代理URL或None
+        代理URL或None（None = 直连）
     """
-    # 从配置文件读取代理设置
-    if config:
-        proxy_config = config.get('proxy', {})
-        
-        # 检查是否启用代理
-        if not proxy_config.get('enabled', True):
-            return None
-        
-        # 检查平台特定代理
-        platform_proxy = proxy_config.get(platform)
-        if platform_proxy:
-            return platform_proxy
-        
-        # 检查全局代理
-        global_proxy = proxy_config.get('global')
-        if global_proxy:
-            return global_proxy
-    
-    # 默认策略
-    # YouTube需要代理（国内无法直接访问）
-    if platform == 'youtube':
+    pc = (config or {}).get("proxy") or {}
+
+    mode = resolve_mode(pc)
+    if mode == "off":
+        return None
+
+    if mode == "system":
         return get_system_proxy()
-    
-    # 其他平台不使用代理（Clash Verge规则模式会自动处理）
-    # B站、抖音、小红书等国内平台直连
+
+    # manual：平台专属优先，其次全局，都没填就直连
+    for key in (platform, "global"):
+        value = str(pc.get(key) or "").strip()
+        if value:
+            return value
     return None
 
 

@@ -443,11 +443,24 @@
               <div class="setting-subtitle">代理</div>
               <div style="margin-bottom:16px">
 
-                <div class="f-switch">
-                  <label for="setting-proxy-enabled">启用代理</label>
-                  <input type="checkbox" id="setting-proxy-enabled">
-                  <span class="f-hint">取消勾选即完全直连；下方可按平台单独覆盖</span>
+                <!-- 代理三态（P3-1）：关闭 / 跟随系统 / 手动。
+                     system 默认 checked = 服务端 resolve_mode 的无配置默认，
+                     JS 回读时按 config 真实值校正 -->
+                <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:var(--text-secondary)">
+                  <label style="display:flex;gap:5px;align-items:center;cursor:pointer;white-space:nowrap">
+                    <input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-off" value="off" style="cursor:pointer"> 关闭
+                  </label>
+                  <label style="display:flex;gap:5px;align-items:center;cursor:pointer;white-space:nowrap">
+                    <input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-system" value="system" checked style="cursor:pointer"> 跟随系统
+                  </label>
+                  <label style="display:flex;gap:5px;align-items:center;cursor:pointer;white-space:nowrap">
+                    <input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-manual" value="manual" style="cursor:pointer"> 手动
+                  </label>
+                  <button type="button" class="btn btn-secondary" id="proxy-test-btn" style="padding:4px 10px;font-size:12px">测试连接</button>
+                  <span id="proxy-test-result" style="font-size:11px;color:var(--text-tertiary)"></span>
                 </div>
+                <div id="proxy-system-hint" style="display:none;font-size:11px;color:var(--text-tertiary);margin-bottom:8px"></div>
+                <div class="f-hint" style="margin-bottom:8px">关闭 = 一律直连；跟随系统 = 用操作系统的代理设置；手动 = 按下方地址（平台专属优先于全局）</div>
 
                 <div id="proxy-fields" style="display:flex;flex-direction:column;gap:8px">
                   <div><input class="search-input" id="setting-proxy-global" type="text" placeholder="全局代理 (http://127.0.0.1:7890)" style="width:100%"></div>
@@ -629,9 +642,10 @@
                 <h4>代理设置</h4>
                 <p>位置：设置 →「网络」→「代理」</p>
                 <ul>
-                  <li><b>启用代理</b>：总开关，取消勾选就完全走直连</li>
-                  <li><b>全局代理</b>：对所有平台生效，格式 <code>http://127.0.0.1:7890</code>（Clash / v2rayN 默认端口 7890，以你的代理软件为准）</li>
+                  <li><b>三态开关</b>：<b>关闭</b> 一律直连；<b>跟随系统</b> 用操作系统的代理设置（改完系统代理点「测试连接」确认）；<b>手动</b> 按下方地址走</li>
+                  <li><b>全局代理</b>：手动模式下对所有平台生效，格式 <code>http://127.0.0.1:7890</code>（Clash / v2rayN 默认端口 7890，以你的代理软件为准）</li>
                   <li><b>按平台覆盖</b>：YouTube / 抖音 / B站 / 小红书 各自留空即跟随全局</li>
+                  <li><b>测试连接</b>：按当前模式测一次连通性和延迟，不通会给出中文原因（超时 / 端口不通）</li>
                 </ul>
                 <p>改完记得保存。访问不了的平台（比如 YouTube）没配代理时，表现就是一直连不上。</p>
               </section>
@@ -724,7 +738,7 @@
 <script src="js/resource.js?v=20260927a"></script>
 <script src="js/files.js?v=20260927a"></script>
 <script src="js/queue.js?v=20260927a"></script>
-<script src="js/settings.js?v=20260927a"></script>
+<script src="js/settings.js?v=20260927e"></script>
 <script src="js/douyin-login.js?v=20260926a"></script>
 <script src="js/subscriptions.js?v=20260927d"></script>
 <script src="js/collections.js?v=20260724b"></script>

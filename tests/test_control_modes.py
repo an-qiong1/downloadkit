@@ -33,8 +33,8 @@ MODES = ["f-label", "f-row", "f-switch"]
 def test_three_modes_present_with_expected_counts():
     assert len(re.findall(r'class="f-label"', SETTINGS)) >= 9, "标签在上的控件少了"
     assert len(re.findall(r'class="f-row"', SETTINGS)) == 2, "下拉右对齐应为 2 处（重名策略、日志级别）"
-    assert len(re.findall(r'class="f-switch"', SETTINGS)) == 4, \
-        "开关行应为 4 处（实况照片、启用代理、开机自启、关闭到托盘）"
+    assert len(re.findall(r'class="f-switch"', SETTINGS)) == 3, \
+        "开关行应为 3 处（实况照片、开机自启、关闭到托盘；P3-1 后代理换三态 radio）"
     assert len(re.findall(r'class="search-input f-num"', SETTINGS)) == 2, \
         "数字输入应为 2 处（并发、历史）"
 
@@ -84,7 +84,8 @@ def test_f_row_is_label_left_control_right():
 def test_switch_rows_are_labelled():
     """开关行的 label 必须 for 到控件（点文字也能切，也方便读屏）"""
     rows = re.findall(r'<div class="f-switch">(.*?)</div>', SETTINGS, re.S)
-    assert len(rows) == 4
+    # P3-1 后代理区的「启用代理」开关换成三态 radio，不再是 f-switch 行
+    assert len(rows) == 3
     for row in rows:
         m = re.search(r'<label for="([^"]+)"', row)
         assert row, "开关行是空的"
@@ -96,6 +97,8 @@ def test_controls_still_have_their_ids():
     """改样式不能动 id —— settings.js 全靠 id 读写"""
     for _id in ("setting-rename-strategy", "setting-max-concurrent", "setting-log-level",
                 "setting-history-max-records", "setting-motion-photo-default",
-                "setting-proxy-enabled", "setting-autostart", "setting-close-to-tray",
+                "setting-proxy-mode-off", "setting-proxy-mode-system",
+                "setting-proxy-mode-manual", "proxy-test-btn",
+                "setting-autostart", "setting-close-to-tray",
                 "setting-download-dir", "setting-download-dir-music"):
         assert f'id="{_id}"' in SETTINGS, f"#{_id} 不见了"

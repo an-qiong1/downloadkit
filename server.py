@@ -1364,8 +1364,68 @@ async def api_retry_download(task_id: str):
 
 @app.get("/api/settings/get")
 async def api_settings_get():
-    """获取当前配置"""
-    return {"settings": load_config()}
+    """获取当前配置。
+
+    附带 proxy_system：系统代理探测结果（读注册表/环境变量，很快）。
+    前端「跟随系统」态要回显「当前系统代理是什么」，不然用户看不到
+    生效值，等于三态里有一态是黑盒。
+    """
+    from downloadkit.proxy import get_system_proxy
+    try:
+        system_proxy = get_system_proxy() or ""
+    except Exception:
+        system_proxy = ""
+    return {"settings": load_config(), "proxy_system": system_proxy}
+
+
+class ProxyTestRequest(BaseModel):
+    proxy: str = ""   # 要测的代理地址；空 = 测直连
+    url: str = ""     # 目标地址；空 = 用内置默认
+
+
+@app.post("/api/proxy/test")
+async def api_proxy_test(req: ProxyTestRequest):
+    """测一个代理（或直连）的可用性与延迟（P3-1）。
+
+    永远返回 200，可用性放在 body 的 ok 字段里 —— 「代理不通」是
+    测试结果不是服务故障，抛 4xx/5xx 会让前端把两种情况混为一谈。
+
+    Returns:
+        {ok, latency_ms, message}，message 是给用户看的中文结论
+    """
+    target = (req.url or "").strip() or "http://www.baidu.com"
+    proxy = (req.proxy or "").strip() or None
+    timeout = 10.0
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(
+            proxy=proxy, timeout=timeout, follow_redirects=True,
+        ) as client:
+            resp = await client.get(target)
+        ms = int((time.monotonic() - t0) * 1000)
+        if resp.status_code < 400:
+            msg = f"连接成功（HTTP {resp.status_code}），延迟 {ms} ms"
+        else:
+            msg = f"对端返回 HTTP {resp.status_code}，延迟 {ms} ms"
+        return {"ok": resp.status_code < 400, "latency_ms": ms, "message": msg}
+    except httpx.TimeoutException:
+        ms = int((time.monotonic() - t0) * 1000)
+        return {
+            "ok": False, "latency_ms": ms,
+            "message": f"连接超时（{int(timeout)} 秒无响应），代理地址或端口可能不对",
+        }
+    except httpx.ConnectError as e:
+        # 连不上要分代理/直连说：前者九成是地址端口错或代理软件没开，
+        # 后者是网络本身不通 —— 混成一句英文原文用户没法照着排查
+        ms = int((time.monotonic() - t0) * 1000)
+        if proxy:
+            msg = f"连不上代理（{e}）—— 地址/端口可能不对，或代理软件没开"
+        else:
+            msg = f"网络不通（{e}）"
+        return {"ok": False, "latency_ms": ms, "message": msg}
+    except Exception as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        return {"ok": False, "latency_ms": ms, "message": f"连接失败：{e}"}
 
 
 @app.get("/api/settings/download-dir-info")

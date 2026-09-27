@@ -14,6 +14,7 @@ from typing import Optional
 import httpx
 
 from .proxy import get_yt_dlp_proxy
+from .utils import load_config
 from .download_queue import download_queue
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ async def get_video_info(url: str) -> Optional[dict]:
         raise RuntimeError("yt-dlp未安装，请运行: pip install yt-dlp")
     
     # 获取代理
-    proxy = get_yt_dlp_proxy('youtube')
+    proxy = get_yt_dlp_proxy('youtube', load_config())
     
     ydl_opts = {
         'quiet': True,
@@ -166,7 +167,7 @@ async def download_youtube_video(
     output_path = output_dir / f"{filename}.mp4"
     
     # 获取代理
-    proxy = get_yt_dlp_proxy('youtube')
+    proxy = get_yt_dlp_proxy('youtube', load_config())
     
     # 清晰度格式选择
     if quality == "best":

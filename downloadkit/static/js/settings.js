@@ -1,6 +1,9 @@
 (function() {
   'use strict';
 
+  // 系统代理探测值（settings/get 附带），「跟随系统」态回显与测试都用它
+  var systemProxyValue = '';
+
   // ========== 加载设置 ==========
   window.loadSettings = function() {
     api('/api/settings/get').then(function(data) {
@@ -41,9 +44,20 @@
       // 开机自启动写的是注册表、不在 config.toml 里，得单独查一次
       loadAutostartStatus();
 
-      // Proxy
+      // Proxy（三态 P3-1：off / system / manual）
       var proxy = s.proxy || {};
-      $('#setting-proxy-enabled').checked = proxy.enabled !== false;
+      var proxyMode = proxy.mode;
+      if (proxyMode !== 'off' && proxyMode !== 'system' && proxyMode !== 'manual') {
+        // 旧配置没有 mode 字段：与服务端 proxy.resolve_mode 同一套推导，
+        // 两边不一致会出现「界面显示手动、实际走系统代理」的分裂
+        proxyMode = proxy.enabled === false ? 'off'
+          : (proxy.global || proxy.youtube || proxy.douyin ||
+             proxy.bilibili || proxy.xiaohongshu) ? 'manual'
+          : 'system';
+      }
+      var modeRadio = $('#setting-proxy-mode-' + proxyMode);
+      if (modeRadio) modeRadio.checked = true;
+      systemProxyValue = data.proxy_system || '';
       $('#setting-proxy-global').value = proxy.global || '';
       $('#setting-proxy-youtube').value = proxy.youtube || '';
       $('#setting-proxy-douyin').value = proxy.douyin || '';
@@ -165,15 +179,80 @@
   }
 
   // ========== Update proxy field state ==========
+  function currentProxyMode() {
+    var el = document.querySelector('input[name="setting-proxy-mode"]:checked');
+    return el ? el.value : 'system';
+  }
+
   function updateProxyFields() {
-    var enabled = $('#setting-proxy-enabled').checked;
+    var mode = currentProxyMode();
     var fields = [
       'setting-proxy-global', 'setting-proxy-youtube',
       'setting-proxy-douyin', 'setting-proxy-bilibili', 'setting-proxy-xiaohongshu'
     ];
     fields.forEach(function(id) {
-      $('#' + id).disabled = !enabled;
+      // 只有手动模式才让编辑：关闭/跟随系统下填的地址不生效，
+      // 留着可编辑会让人以为改了就有效
+      $('#' + id).disabled = (mode !== 'manual');
     });
+    updateProxySystemHint();
+  }
+
+  // 「跟随系统」态回显系统代理探测值，否则这一态就是个黑盒
+  function updateProxySystemHint() {
+    var hint = $('#proxy-system-hint');
+    if (!hint) return;
+    if (currentProxyMode() === 'system') {
+      hint.style.display = '';
+      hint.textContent = systemProxyValue
+        ? '当前系统代理：' + systemProxyValue
+        : '未检测到系统代理设置（当前等于直连）';
+    } else {
+      hint.style.display = 'none';
+    }
+  }
+
+  // ========== 代理测试（P3-1）==========
+  // 测「当前模式实际会用的出口」：关闭→直连、跟随系统→系统代理、
+  // 手动→全局地址。端点永远 200，可用性看 body.ok。
+  function testProxy() {
+    var mode = currentProxyMode();
+    var out = $('#proxy-test-result');
+    var proxy = '';
+    if (mode === 'system') {
+      proxy = systemProxyValue;
+      if (!proxy) {
+        out.textContent = '未检测到系统代理设置';
+        out.style.color = 'var(--error)';
+        return;
+      }
+    } else if (mode === 'manual') {
+      proxy = ($('#setting-proxy-global').value || '').trim();
+      if (!proxy) {
+        out.textContent = '请先填写全局代理地址';
+        out.style.color = 'var(--error)';
+        return;
+      }
+    }
+    // off / 空值 = 测直连，验证网络本身通不通
+
+    var btn = $('#proxy-test-btn');
+    btn.disabled = true;
+    btn.textContent = '测试中…';
+    out.textContent = '';
+    api('/api/proxy/test', { method: 'POST', body: { proxy: proxy } })
+      .then(function(r) {
+        out.textContent = r.message || (r.ok ? '连接成功' : '连接失败');
+        out.style.color = r.ok ? 'var(--success)' : 'var(--error)';
+      })
+      .catch(function(err) {
+        out.textContent = '测试失败: ' + err.message;
+        out.style.color = 'var(--error)';
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = '测试连接';
+      });
   }
 
   // ========== 开机自启动 ==========
@@ -237,9 +316,10 @@
       close_to_tray: $('#setting-close-to-tray') ? $('#setting-close-to-tray').checked : false
     };
     
-    // Proxy
+    // Proxy（三态：mode 是唯一真值；旧 enabled 字段不再写入，
+    // 服务端 resolve_mode 先读 mode，残留的旧值不会被读到）
     data.proxy = {
-      enabled: $('#setting-proxy-enabled').checked,
+      mode: currentProxyMode(),
       global: $('#setting-proxy-global').value || '',
       youtube: $('#setting-proxy-youtube').value || '',
       douyin: $('#setting-proxy-douyin').value || '',
@@ -277,7 +357,7 @@
     
     var defaults = {
       general: { download_dir: '~/Downloads/DownloadKit', download_dir_music: '~/Downloads/DownloadKit/music', download_dir_video: '~/Downloads/DownloadKit/videos', download_dir_animated: '~/Downloads/DownloadKit/animated', download_dir_images: '~/Downloads/DownloadKit/images', max_concurrent: 3, log_level: 'INFO', rename_strategy: 'skip', motion_photo_default: true, history_max_records: 1000, close_to_tray: false },
-      proxy: { enabled: true, global: '', youtube: '', douyin: '', bilibili: '', xiaohongshu: '' },
+      proxy: { mode: 'system', global: '', youtube: '', douyin: '', bilibili: '', xiaohongshu: '' },
       cookie: { douyin_path: '', bilibili_path: '' }
     };
     
@@ -300,7 +380,12 @@
   document.addEventListener('DOMContentLoaded', function() {
     $('#settings-save').addEventListener('click', saveSettings);
     $('#settings-reset').addEventListener('click', resetDefaults);
-    $('#setting-proxy-enabled').addEventListener('change', updateProxyFields);
+    // 三态 radio 各绑一次（change 不冒泡到 document 的委托里，直接绑最稳）
+    ['off', 'system', 'manual'].forEach(function(m) {
+      var el = $('#setting-proxy-mode-' + m);
+      if (el) el.addEventListener('change', updateProxyFields);
+    });
+    $('#proxy-test-btn').addEventListener('click', testProxy);
 
     // 开机自启动勾完立即写注册表，不等「保存」
     var autostartBox = $('#setting-autostart');

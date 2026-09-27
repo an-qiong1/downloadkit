@@ -133,10 +133,14 @@
 
 ## P3 代理与打磨
 
-- [ ] **P3-1 代理三态 + 按平台覆盖 + 测试连接**
+- [x] **P3-1 代理三态 + 按平台覆盖 + 测试连接**（2026-09-27）
   - `关闭 / 跟随系统 / 手动` 单选；平台覆盖：YouTube / B站 / 抖音 / 小红书
   - 新端点 `POST /api/proxy/test`，回延迟与可用性
   - 文件：`downloadkit/proxy.py`、`server.py`、`index.html`、`js/settings.js`
+  - 旧配置兼容：`resolve_mode` 按「不改现有行为」推导 —— `enabled=false`→off、有地址→manual、全空→system（老 youtube 实际走系统代理）；off 是硬关闭，填过的地址不许悄悄生效
+  - `youtube.py` 两处补传 `load_config()`（此前不传配置，三态对它无效）
+  - `settings/get` 附带 `proxy_system` 回显系统代理探测值；`/api/proxy/test` 永远 200、可用性放 `body.ok`，超时/连不上给中文分类提示（连不上代理 vs 网络不通）
+  - 前端：三态 radio + 手动态才可编辑地址框 + 跟随系统回显 + 测试按钮；`tests/test_proxy.py` 22 例；pytest 400 passed
 
 - [ ] **P3-2 队列打磨**：一键重试全部失败、进度保留
 
