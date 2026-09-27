@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20260927a">
+<link rel="stylesheet" href="css/main.css?v=20260927b">
 </head>
 <body>
 
@@ -285,223 +285,242 @@
       <!-- 设置面板 -->
       <div class="tab-panel" id="panel-settings">
         <div class="search-section">
-          <h3 style="margin-bottom:16px;font-weight:600">应用设置</h3>
-          
-          <div style="max-width:500px">
-            <div style="margin-bottom:16px;padding-top:0">
-              <h4 style="margin-bottom:12px;font-weight:500;font-size:14px">下载目录</h4>
-              
-              <div style="margin-bottom:10px">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">基础下载目录 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
-                <div style="display:flex;gap:6px">
-                  <input class="search-input" id="setting-download-dir" type="text" placeholder="~/Downloads/DownloadKit 或 D:\Downloads\DownloadKit" style="flex:1">
-                  <button class="btn btn-secondary" id="setting-browse-dir" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
-                </div>
-                <div style="margin-top:6px;font-size:12px;line-height:1.5;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                  <span style="color:var(--text-secondary)">实际路径：</span>
-                  <code id="setting-download-dir-actual" style="color:var(--text-primary);background:var(--bg-secondary);padding:2px 6px;border-radius:3px;font-size:11px;word-break:break-all"></code>
-                  <span id="setting-download-dir-status" style="font-size:11px"></span>
-                  <button class="btn btn-secondary" id="setting-open-dir" style="padding:2px 8px;font-size:11px" title="在文件管理器中打开此目录">📂 打开</button>
-                </div>
-                <div class="dir-preview" style="margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.9;color:var(--text-secondary)">
-                  <div style="margin-bottom:2px">各类文件实际存放在：</div>
-                  <div>音乐 → <code class="dir-preview-value" id="dir-preview-music"></code></div>
-                  <div>视频 → <code class="dir-preview-value" id="dir-preview-video"></code></div>
-                  <div>图片 → <code class="dir-preview-value" id="dir-preview-images"></code></div>
-                  <div>实况照片 → <code class="dir-preview-value" id="dir-preview-animated"></code></div>
-                </div>
-              </div>
-              
-              <details id="dir-advanced" style="margin-top:10px">
-                <summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);padding:4px 0;list-style:none">
-                  <span style="display:inline-block;transition:transform .15s" id="dir-advanced-arrow">▸</span>
-                  高级：单独指定某个分类的目录（留空则跟随总目录）
-                </summary>
-                <div style="margin-top:8px;padding-top:4px;border-top:1px dashed var(--border)">
-                  <div style="margin-bottom:10px">
-                    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">音乐下载目录</label>
-                    <div style="display:flex;gap:6px">
-                      <input class="search-input" id="setting-download-dir-music" type="text" placeholder="跟随总目录" style="flex:1">
-                      <button class="btn btn-secondary" id="setting-browse-dir-music" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
-                    </div>
-                  </div>
+          <h3 style="margin-bottom:4px;font-weight:600">设置</h3>
+          <p style="margin:0 0 18px;font-size:12px;color:var(--text-secondary)">按用途分组，改完点右下角「保存」才会生效。</p>
+          <div style="max-width:560px">
+            <!-- ===== 下载 ===== -->
+            <section class="setting-group">
+              <h4 class="setting-group-title"><i data-lucide="download"></i>下载</h4>
+              <div style="margin-bottom:16px;padding-top:0">
 
-                  <div style="margin-bottom:10px">
-                    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">视频下载目录</label>
-                    <div style="display:flex;gap:6px">
-                      <input class="search-input" id="setting-download-dir-video" type="text" placeholder="跟随总目录" style="flex:1">
-                      <button class="btn btn-secondary" id="setting-browse-dir-video" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
-                    </div>
+                <div style="margin-bottom:10px">
+                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">基础下载目录 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
+                  <div style="display:flex;gap:6px">
+                    <input class="search-input" id="setting-download-dir" type="text" placeholder="~/Downloads/DownloadKit 或 D:\Downloads\DownloadKit" style="flex:1">
+                    <button class="btn btn-secondary" id="setting-browse-dir" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
                   </div>
-
-                  <div style="margin-bottom:10px">
-                    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">实况照片目录</label>
-                    <div style="display:flex;gap:6px">
-                      <input class="search-input" id="setting-download-dir-animated" type="text" placeholder="跟随总目录" style="flex:1">
-                      <button class="btn btn-secondary" id="setting-browse-dir-animated" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
-                    </div>
+                  <div style="margin-top:6px;font-size:12px;line-height:1.5;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                    <span style="color:var(--text-secondary)">实际路径：</span>
+                    <code id="setting-download-dir-actual" style="color:var(--text-primary);background:var(--bg-secondary);padding:2px 6px;border-radius:3px;font-size:11px;word-break:break-all"></code>
+                    <span id="setting-download-dir-status" style="font-size:11px"></span>
+                    <button class="btn btn-secondary" id="setting-open-dir" style="padding:2px 8px;font-size:11px" title="在文件管理器中打开此目录">📂 打开</button>
                   </div>
-
-                  <div style="margin-bottom:0">
-                    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">图片下载目录</label>
-                    <div style="display:flex;gap:6px">
-                      <input class="search-input" id="setting-download-dir-images" type="text" placeholder="跟随总目录" style="flex:1">
-                      <button class="btn btn-secondary" id="setting-browse-dir-images" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
-                    </div>
+                  <div class="dir-preview" style="margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.9;color:var(--text-secondary)">
+                    <div style="margin-bottom:2px">各类文件实际存放在：</div>
+                    <div>音乐 → <code class="dir-preview-value" id="dir-preview-music"></code></div>
+                    <div>视频 → <code class="dir-preview-value" id="dir-preview-video"></code></div>
+                    <div>图片 → <code class="dir-preview-value" id="dir-preview-images"></code></div>
+                    <div>实况照片 → <code class="dir-preview-value" id="dir-preview-animated"></code></div>
                   </div>
                 </div>
-              </details>
-            </div>
-            
-            <div style="margin-bottom:16px">
-              <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">最大并发下载数 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
-              <input class="search-input" id="setting-max-concurrent" type="number" min="1" max="10" value="3" style="width:100px">
-            </div>
-            
-            <div style="margin-bottom:16px">
-              <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">日志级别 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
-              <select class="search-input" id="setting-log-level" style="width:140px">
-                <option value="DEBUG">DEBUG</option>
-                <option value="INFO">INFO</option>
-                <option value="WARNING">WARNING</option>
-                <option value="ERROR">ERROR</option>
-              </select>
-            </div>
-            
-            <div style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
-              <h4 style="margin-bottom:12px;font-weight:500;font-size:14px">代理设置</h4>
-              
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-                <label style="font-size:13px;color:var(--text-secondary)">启用代理</label>
-                <input type="checkbox" id="setting-proxy-enabled" style="width:18px;height:18px;cursor:pointer">
+
+                <details id="dir-advanced" style="margin-top:10px">
+                  <summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);padding:4px 0;list-style:none">
+                    <span style="display:inline-block;transition:transform .15s" id="dir-advanced-arrow">▸</span>
+                    高级：单独指定某个分类的目录（留空则跟随总目录）
+                  </summary>
+                  <div style="margin-top:8px;padding-top:4px;border-top:1px dashed var(--border)">
+                    <div style="margin-bottom:10px">
+                      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">音乐下载目录</label>
+                      <div style="display:flex;gap:6px">
+                        <input class="search-input" id="setting-download-dir-music" type="text" placeholder="跟随总目录" style="flex:1">
+                        <button class="btn btn-secondary" id="setting-browse-dir-music" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                      </div>
+                    </div>
+
+                    <div style="margin-bottom:10px">
+                      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">视频下载目录</label>
+                      <div style="display:flex;gap:6px">
+                        <input class="search-input" id="setting-download-dir-video" type="text" placeholder="跟随总目录" style="flex:1">
+                        <button class="btn btn-secondary" id="setting-browse-dir-video" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                      </div>
+                    </div>
+
+                    <div style="margin-bottom:10px">
+                      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">实况照片目录</label>
+                      <div style="display:flex;gap:6px">
+                        <input class="search-input" id="setting-download-dir-animated" type="text" placeholder="跟随总目录" style="flex:1">
+                        <button class="btn btn-secondary" id="setting-browse-dir-animated" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                      </div>
+                    </div>
+
+                    <div style="margin-bottom:0">
+                      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">图片下载目录</label>
+                      <div style="display:flex;gap:6px">
+                        <input class="search-input" id="setting-download-dir-images" type="text" placeholder="跟随总目录" style="flex:1">
+                        <button class="btn btn-secondary" id="setting-browse-dir-images" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                      </div>
+                    </div>
+                  </div>
+                </details>
               </div>
-              
-              <div id="proxy-fields" style="display:flex;flex-direction:column;gap:8px">
-                <div><input class="search-input" id="setting-proxy-global" type="text" placeholder="全局代理 (http://127.0.0.1:7890)" style="width:100%"></div>
-                <div><input class="search-input" id="setting-proxy-youtube" type="text" placeholder="YouTube 代理" style="width:100%"></div>
-                <div><input class="search-input" id="setting-proxy-douyin" type="text" placeholder="抖音 代理" style="width:100%"></div>
-                <div><input class="search-input" id="setting-proxy-bilibili" type="text" placeholder="B站 代理" style="width:100%"></div>
-                <div><input class="search-input" id="setting-proxy-xiaohongshu" type="text" placeholder="小红书 代理" style="width:100%"></div>
-              </div>
-            </div>
-            
-            <!-- 抖音账号登录（新方案，优先用这个） -->
-            <div style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
-              <h4 style="margin-bottom:8px;font-weight:500;font-size:14px">抖音账号登录</h4>
-              <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px;font-size:12px;line-height:1.6">
-                <div style="color:var(--text-secondary)">
-                  <b>订阅创作者</b>功能需要登录抖音。点下面的按钮会弹出一个浏览器窗口，
-                  用抖音 App 扫码即可，<b>登录一次长期有效</b>，之后不用再管 Cookie。
+
+                <div style="margin-bottom:12px">
+                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">文件重名策略 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
+                  <select class="search-input" id="setting-rename-strategy" style="width:160px">
+                    <option value="skip">跳过</option>
+                    <option value="rename">自动重命名</option>
+                    <option value="overwrite">覆盖</option>
+                  </select>
                 </div>
-                <div style="color:var(--text-tertiary);margin-top:6px">
-                  ⚠ 登录窗口和下载不能同时进行，有下载任务时会暂时无法登录。
+
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                  <label style="font-size:13px;color:var(--text-secondary)">默认生成实况照片</label>
+                  <input type="checkbox" id="setting-motion-photo-default" style="width:18px;height:18px;cursor:pointer" checked>
                 </div>
-              </div>
-              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <button class="btn btn-primary" id="dy-login-btn" style="padding:6px 14px;font-size:13px">扫码登录抖音</button>
-                <button class="btn btn-secondary" id="dy-logout-btn" style="padding:6px 12px;font-size:13px;display:none">退出登录</button>
-                <button class="btn btn-secondary" id="dy-login-refresh" style="padding:6px 10px;font-size:12px" title="重新检查登录状态">刷新状态</button>
-                <span id="dy-login-status" style="font-size:12px;flex:1;min-width:160px">正在检查登录状态…</span>
-              </div>
-              <div id="dy-login-box" style="display:none;margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:6px;font-size:12px;line-height:1.6"></div>
-            </div>
+            </section>
 
-            <div style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
-              <h4 style="margin-bottom:12px;font-weight:500;font-size:14px">Cookie 设置 <span style="font-size:11px;color:var(--text-tertiary);font-weight:400">（旧方案，抖音请优先用上面的扫码登录）</span></h4>
-
-              <!-- Cookie 说明卡片（新增） -->
-              <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12px;line-height:1.6">
-                <div style="font-weight:500;margin-bottom:6px">🔑 哪些平台需要 Cookie？</div>
-                <div style="color:var(--text-secondary);margin-bottom:8px">
-                  ✅ <b>抖音</b>：必须（否则视频解析失败）&nbsp;&nbsp;
-                  ✅ <b>B站</b>：建议（1080P 高清需登录）<br>
-                  ❌ <b>YouTube / 小红书 / 网易云</b>：公开内容不需要
-                </div>
-                <div style="font-weight:500;margin-bottom:6px">📄 Cookie 文件格式（任选一种）：</div>
-                <ul style="margin:0 0 8px 16px;color:var(--text-secondary);padding:0">
-                  <li><b>纯文本</b>：<code style="background:var(--bg-tertiary);padding:1px 4px">name1=value1; name2=value2</code></li>
-                  <li><b>JSON</b>：<code style="background:var(--bg-tertiary);padding:1px 4px">{"name1": "value1", "name2": "value2"}</code></li>
-                  <li><b>Netscape</b>：<code style="background:var(--bg-tertiary);padding:1px 4px"># Netscape HTTP Cookie File</code> 开头的 tab 分隔格式（yt-dlp 风格）</li>
-                </ul>
-                <div style="font-weight:500;margin-bottom:6px">🛠 怎么获取 Cookie？</div>
-                <ol style="margin:0 0 8px 20px;color:var(--text-secondary);padding:0">
-                  <li>在浏览器（Edge/Chrome）中登录目标网站</li>
-                  <li>按 F12 → <b>Application</b> → <b>Cookies</b> → 复制需要的键值对</li>
-                  <li>粘贴到下方文本框，或保存为文件后再选文件</li>
-                </ol>
-                <div style="font-size:11px;color:var(--text-tertiary)">💡 下方的"从浏览器读取"按钮可以一键从 Edge / Chrome 中读取已登录的 Cookie</div>
+            <!-- ===== 应用 ===== -->
+            <section class="setting-group">
+              <h4 class="setting-group-title"><i data-lucide="cpu"></i>应用</h4>
+              <div style="margin-bottom:16px">
+                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">最大并发下载数 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
+                <input class="search-input" id="setting-max-concurrent" type="number" min="1" max="10" value="3" style="width:100px">
               </div>
 
-              <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">抖音 Cookie 文件路径 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
-              <input class="search-input" id="setting-cookie-douyin" type="text" placeholder="~/.downloadkit/cookies/douyin.json" style="width:100%">
-
-              <!-- 抖音 Cookie 助手（新增：登录并获取） -->
-              <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <button class="btn btn-primary" id="cookie-login-douyin" style="padding:4px 10px;font-size:12px" data-platform="douyin">🌐 登录并获取</button>
-                <button class="btn btn-secondary" id="cookie-load-douyin" style="padding:4px 10px;font-size:12px" data-platform="douyin">🔍 立即读取</button>
-                <select class="search-input" id="cookie-browser-douyin" style="padding:4px 6px;font-size:12px;width:auto">
-                  <option value="edge">Edge</option>
-                  <option value="chrome">Chrome</option>
-                </select>
-                <span id="cookie-status-douyin" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
-              </div>
-
-              <div style="margin-top:12px">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">B站 Cookie 文件路径 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
-                <input class="search-input" id="setting-cookie-bilibili" type="text" placeholder="~/.downloadkit/cookies/bilibili.json" style="width:100%">
-              </div>
-
-              <!-- B站 Cookie 助手（新增：登录并获取） -->
-              <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <button class="btn btn-primary" id="cookie-login-bilibili" style="padding:4px 10px;font-size:12px" data-platform="bilibili">🌐 登录并获取</button>
-                <button class="btn btn-secondary" id="cookie-load-bilibili" style="padding:4px 10px;font-size:12px" data-platform="bilibili">🔍 立即读取</button>
-                <select class="search-input" id="cookie-browser-bilibili" style="padding:4px 6px;font-size:12px;width:auto">
-                  <option value="edge">Edge</option>
-                  <option value="chrome">Chrome</option>
-                </select>
-                <span id="cookie-status-bilibili" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
-              </div>
-            </div>
-            
-            <div style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
-              <h4 style="margin-bottom:12px;font-weight:500;font-size:14px">下载设置</h4>
-              
-              <div style="margin-bottom:12px">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">文件重名策略 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
-                <select class="search-input" id="setting-rename-strategy" style="width:160px">
-                  <option value="skip">跳过</option>
-                  <option value="rename">自动重命名</option>
-                  <option value="overwrite">覆盖</option>
+              <div style="margin-bottom:16px">
+                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">日志级别 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
+                <select class="search-input" id="setting-log-level" style="width:140px">
+                  <option value="DEBUG">DEBUG</option>
+                  <option value="INFO">INFO</option>
+                  <option value="WARNING">WARNING</option>
+                  <option value="ERROR">ERROR</option>
                 </select>
               </div>
-              
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-                <label style="font-size:13px;color:var(--text-secondary)">默认生成实况照片</label>
-                <input type="checkbox" id="setting-motion-photo-default" style="width:18px;height:18px;cursor:pointer" checked>
+
+                <div style="margin-bottom:0">
+                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">历史记录最大保留条数 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
+                  <input class="search-input" id="setting-history-max-records" type="number" min="100" max="100000" value="1000" style="width:120px">
+                </div>
+            </section>
+
+            <!-- ===== 网络 ===== -->
+            <section class="setting-group">
+              <h4 class="setting-group-title"><i data-lucide="wifi"></i>网络</h4>
+              <div class="setting-subtitle">代理</div>
+              <div style="margin-bottom:16px">
+
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                  <label style="font-size:13px;color:var(--text-secondary)">启用代理</label>
+                  <input type="checkbox" id="setting-proxy-enabled" style="width:18px;height:18px;cursor:pointer">
+                </div>
+
+                <div id="proxy-fields" style="display:flex;flex-direction:column;gap:8px">
+                  <div><input class="search-input" id="setting-proxy-global" type="text" placeholder="全局代理 (http://127.0.0.1:7890)" style="width:100%"></div>
+                  <div><input class="search-input" id="setting-proxy-youtube" type="text" placeholder="YouTube 代理" style="width:100%"></div>
+                  <div><input class="search-input" id="setting-proxy-douyin" type="text" placeholder="抖音 代理" style="width:100%"></div>
+                  <div><input class="search-input" id="setting-proxy-bilibili" type="text" placeholder="B站 代理" style="width:100%"></div>
+                  <div><input class="search-input" id="setting-proxy-xiaohongshu" type="text" placeholder="小红书 代理" style="width:100%"></div>
+                </div>
               </div>
-              
-              <div style="margin-bottom:0">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">历史记录最大保留条数 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
-                <input class="search-input" id="setting-history-max-records" type="number" min="100" max="100000" value="1000" style="width:120px">
+
+              <div class="setting-subtitle">抖音扫码登录（订阅功能需要）</div>
+              <!-- 抖音账号登录（新方案，优先用这个） -->
+              <div style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
+                <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px;font-size:12px;line-height:1.6">
+                  <div style="color:var(--text-secondary)">
+                    <b>订阅创作者</b>功能需要登录抖音。点下面的按钮会弹出一个浏览器窗口，
+                    用抖音 App 扫码即可，<b>登录一次长期有效</b>，之后不用再管 Cookie。
+                  </div>
+                  <div style="color:var(--text-tertiary);margin-top:6px">
+                    ⚠ 登录窗口和下载不能同时进行，有下载任务时会暂时无法登录。
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                  <button class="btn btn-primary" id="dy-login-btn" style="padding:6px 14px;font-size:13px">扫码登录抖音</button>
+                  <button class="btn btn-secondary" id="dy-logout-btn" style="padding:6px 12px;font-size:13px;display:none">退出登录</button>
+                  <button class="btn btn-secondary" id="dy-login-refresh" style="padding:6px 10px;font-size:12px" title="重新检查登录状态">刷新状态</button>
+                  <span id="dy-login-status" style="font-size:12px;flex:1;min-width:160px">正在检查登录状态…</span>
+                </div>
+                <div id="dy-login-box" style="display:none;margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:6px;font-size:12px;line-height:1.6"></div>
               </div>
-            </div>
-            
-            <div style="margin-bottom:0;padding-top:12px;border-top:1px solid var(--border)">
-              <h4 style="margin-bottom:12px;font-weight:500;font-size:14px">启动与后台</h4>
-              
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-                <label style="font-size:13px;color:var(--text-secondary)">开机自动启动</label>
-                <input type="checkbox" id="setting-autostart" style="width:18px;height:18px;cursor:pointer">
-                <span id="setting-autostart-hint" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
+
+              <div class="setting-subtitle">Cookie（旧方案，抖音/B站可改用扫码）</div>
+              <div style="margin-bottom:16px">
+
+                <!-- Cookie 说明卡片（新增） -->
+                <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12px;line-height:1.6">
+                  <div style="font-weight:500;margin-bottom:6px">🔑 哪些平台需要 Cookie？</div>
+                  <div style="color:var(--text-secondary);margin-bottom:8px">
+                    ✅ <b>抖音</b>：必须（否则视频解析失败）&nbsp;&nbsp;
+                    ✅ <b>B站</b>：建议（1080P 高清需登录）<br>
+                    ❌ <b>YouTube / 小红书 / 网易云</b>：公开内容不需要
+                  </div>
+                  <div style="font-weight:500;margin-bottom:6px">📄 Cookie 文件格式（任选一种）：</div>
+                  <ul style="margin:0 0 8px 16px;color:var(--text-secondary);padding:0">
+                    <li><b>纯文本</b>：<code style="background:var(--bg-tertiary);padding:1px 4px">name1=value1; name2=value2</code></li>
+                    <li><b>JSON</b>：<code style="background:var(--bg-tertiary);padding:1px 4px">{"name1": "value1", "name2": "value2"}</code></li>
+                    <li><b>Netscape</b>：<code style="background:var(--bg-tertiary);padding:1px 4px"># Netscape HTTP Cookie File</code> 开头的 tab 分隔格式（yt-dlp 风格）</li>
+                  </ul>
+                  <div style="font-weight:500;margin-bottom:6px">🛠 怎么获取 Cookie？</div>
+                  <ol style="margin:0 0 8px 20px;color:var(--text-secondary);padding:0">
+                    <li>在浏览器（Edge/Chrome）中登录目标网站</li>
+                    <li>按 F12 → <b>Application</b> → <b>Cookies</b> → 复制需要的键值对</li>
+                    <li>粘贴到下方文本框，或保存为文件后再选文件</li>
+                  </ol>
+                  <div style="font-size:11px;color:var(--text-tertiary)">💡 下方的"从浏览器读取"按钮可以一键从 Edge / Chrome 中读取已登录的 Cookie</div>
+                </div>
+
+                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">抖音 Cookie 文件路径 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
+                <input class="search-input" id="setting-cookie-douyin" type="text" placeholder="~/.downloadkit/cookies/douyin.json" style="width:100%">
+
+                <!-- 抖音 Cookie 助手（新增：登录并获取） -->
+                <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                  <button class="btn btn-primary" id="cookie-login-douyin" style="padding:4px 10px;font-size:12px" data-platform="douyin">🌐 登录并获取</button>
+                  <button class="btn btn-secondary" id="cookie-load-douyin" style="padding:4px 10px;font-size:12px" data-platform="douyin">🔍 立即读取</button>
+                  <select class="search-input" id="cookie-browser-douyin" style="padding:4px 6px;font-size:12px;width:auto">
+                    <option value="edge">Edge</option>
+                    <option value="chrome">Chrome</option>
+                  </select>
+                  <span id="cookie-status-douyin" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
+                </div>
+
+                <div style="margin-top:12px">
+                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">B站 Cookie 文件路径 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
+                  <input class="search-input" id="setting-cookie-bilibili" type="text" placeholder="~/.downloadkit/cookies/bilibili.json" style="width:100%">
+                </div>
+
+                <!-- B站 Cookie 助手（新增：登录并获取） -->
+                <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                  <button class="btn btn-primary" id="cookie-login-bilibili" style="padding:4px 10px;font-size:12px" data-platform="bilibili">🌐 登录并获取</button>
+                  <button class="btn btn-secondary" id="cookie-load-bilibili" style="padding:4px 10px;font-size:12px" data-platform="bilibili">🔍 立即读取</button>
+                  <select class="search-input" id="cookie-browser-bilibili" style="padding:4px 6px;font-size:12px;width:auto">
+                    <option value="edge">Edge</option>
+                    <option value="chrome">Chrome</option>
+                  </select>
+                  <span id="cookie-status-bilibili" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
+                </div>
               </div>
-              
-              <div style="display:flex;align-items:center;gap:8px">
-                <label style="font-size:13px;color:var(--text-secondary)">关闭窗口时最小化到托盘</label>
-                <input type="checkbox" id="setting-close-to-tray" style="width:18px;height:18px;cursor:pointer">
-                <span style="font-size:11px;color:var(--text-secondary)">开启后程序常驻后台，订阅检查不中断 <span style="color:var(--warning)">下次启动生效</span></span>
+            </section>
+
+            <!-- ===== 启动与后台 ===== -->
+            <section class="setting-group">
+              <h4 class="setting-group-title"><i data-lucide="power"></i>启动与后台</h4>
+              <div style="margin-bottom:16px">
+
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                  <label style="font-size:13px;color:var(--text-secondary)">开机自动启动</label>
+                  <input type="checkbox" id="setting-autostart" style="width:18px;height:18px;cursor:pointer">
+                  <span id="setting-autostart-hint" style="font-size:11px;color:var(--text-secondary);flex:1"></span>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:8px">
+                  <label style="font-size:13px;color:var(--text-secondary)">关闭窗口时最小化到托盘</label>
+                  <input type="checkbox" id="setting-close-to-tray" style="width:18px;height:18px;cursor:pointer">
+                  <span style="font-size:11px;color:var(--text-secondary)">开启后程序常驻后台，订阅检查不中断 <span style="color:var(--warning)">下次启动生效</span></span>
+                </div>
               </div>
-            </div>
-            
+            </section>
+
+            <!-- ===== 关于 ===== -->
+            <section class="setting-group">
+              <h4 class="setting-group-title"><i data-lucide="info"></i>关于</h4>
+              <div style="font-size:13px;line-height:1.9;color:var(--text-secondary)">
+                <div>DownloadKit <b id="setting-version" style="color:var(--text-primary)">v0.4.1</b></div>
+                <div>程序在本机运行，下载内容只保存在你设置的目录里。</div>
+              </div>
+            </section>
+
             <div style="display:flex;gap:8px;margin-top:24px;padding-top:16px;border-top:1px solid var(--border)">
               <button class="btn btn-primary" id="settings-save"><i data-lucide="save" style="width:14px;height:14px;margin-right:6px"></i>保存</button>
               <button class="btn btn-secondary" id="settings-reset">恢复默认</button>
@@ -509,6 +528,7 @@
           </div>
         </div>
       </div>
+    </div>
 
 
 
