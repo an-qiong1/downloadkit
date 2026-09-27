@@ -583,6 +583,9 @@
               <h3 style="margin-bottom:2px;font-weight:600">解答</h3>
               <div style="font-size:12px;color:var(--text-secondary)">配置说明 · 常见问题 · 报错对照</div>
             </div>
+            <input id="help-search" class="search-input" type="search" aria-label="搜索解答"
+                   placeholder="搜索解答…（标题 / 报错 / 关键词）"
+                   style="margin-left:auto;flex:1;max-width:300px;min-width:0">
           </div>
 
           <div class="help-body">
@@ -725,6 +728,14 @@
                 </table>
                 <p class="help-note">拿不准就把设置 →「应用」→「日志级别」调成 DEBUG（需重启），重现一次问题，报错会带出更多信息。</p>
               </section>
+
+              <!-- 搜索无结果时的空状态（help.js filterHelp 控制） -->
+              <div id="help-empty" class="empty-state" style="display:none">
+                <div class="empty-title">没有找到相关解答</div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">
+                  换个关键词试试，比如「代理」「Cookie」，或直接粘贴报错文字
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -748,7 +759,7 @@
 <script src="js/douyin-login.js?v=20260926a"></script>
 <script src="js/subscriptions.js?v=20260927d"></script>
 <script src="js/collections.js?v=20260724b"></script>
-<script src="js/help.js?v=20260927c"></script>
+<script src="js/help.js?v=20260927g"></script>
 <script src="js/app.js?v=20260927c"></script>
 </body>
 </html>

@@ -108,3 +108,36 @@ def test_help_js_ids_exist():
         assert ref in ids, f"help.js 引用了不存在的 #{ref}"
     for ref in re.findall(r"getElementById\('([A-Za-z0-9_-]+)'\)", HELP):
         assert ref in ids, f"help.js 引用了不存在的 #{ref}"
+
+
+# ---------------- 搜索过滤（P3-3） ----------------
+
+def test_help_search_input_and_empty_state_exist():
+    """搜索框在页头、无结果空状态在内容区末尾"""
+    assert 'id="help-search"' in HELP_HTML, "解答页缺搜索框"
+    assert 'id="help-empty"' in HELP_HTML, "缺无结果空状态"
+    head = HELP_HTML.split('id="help-search"')[1][:120]
+    assert 'type="search"' in head, "该用 type=search（自带清除按钮）"
+
+
+def test_help_search_wiring():
+    """input 事件绑定、进入解答页重置搜索（带着旧关键词进来=半页空白）"""
+    assert "addEventListener('input', filterHelp)" in HELP, "搜索框没绑 input 事件"
+    assert re.search(r"resetSearch\(\);", HELP), "openHelp 进入时没重置搜索"
+    # 空输入走复原分支，不是「不处理」
+    assert re.search(r"if\s*\(!q\)", HELP), "空搜索没有复原分支"
+
+
+def test_help_search_filter_granularity():
+    """过滤粒度的四个关键点，改坏任何一条搜索体验就变形"""
+    # 1. 标题命中 → 整块恢复（不是继续按行切碎）
+    assert "function showBlock" in HELP, "缺整块恢复函数"
+    # 2. dt+dd 成对：只留问题不带答案 = 残缺条目
+    assert "tagName === 'DD'" in HELP, "dt+dd 没成对判定"
+    # 3. 表头豁免：数据行藏光了列名不能也丢
+    assert "closest('thead')" in HELP, "表头行没豁免过滤"
+    # 4. li 内嵌 p 跟 li 走，不单独拆
+    assert "closest('li')" in HELP, "li 内嵌段落没跟随 li"
+    # 目录与空状态联动
+    assert "help-toc-link" in HELP, "目录没跟着内容显隐"
+    assert "help-empty" in HELP, "无结果没切空状态"
