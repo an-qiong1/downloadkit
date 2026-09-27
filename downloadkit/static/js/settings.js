@@ -152,7 +152,7 @@
 
     api('/api/utils/pick-directory', {
       method: 'POST',
-      body: JSON.stringify({ initial: initial })
+      body: { initial: initial }
     })
     .then(function(res) {
       allBrowse.forEach(function(b) { b.disabled = false; });
@@ -571,7 +571,7 @@
               // 调用后端在系统文件管理器中打开目录
               api('/api/open-dir', {
                 method: 'POST',
-                body: JSON.stringify({ path: info.absolute })
+                body: { path: info.absolute }
               })
                 .then(function() { toast('已打开：' + info.absolute, 'success'); })
                 .catch(function(err) { toast('打开失败: ' + err.message, 'error'); });
@@ -595,7 +595,7 @@
           if (status) status.textContent = '正在读取...';
           api('/api/cookies/load-from-browser', {
             method: 'POST',
-            body: JSON.stringify({ platform: platform, browser: browser })
+            body: { platform: platform, browser: browser }
           })
           .then(async function(res) {
             btn.disabled = false;
@@ -617,11 +617,11 @@
             if (ok && res.cookie_string) {
               api('/api/cookies/save', {
                 method: 'POST',
-                body: JSON.stringify({
+                body: {
                   platform: platform,
                   cookie_string: res.cookie_string,
                   save_to_config: true
-                })
+                }
               })
               .then(function(saveRes) {
                 toast('已保存到：' + saveRes.path, 'success');
@@ -717,7 +717,7 @@
 
             api('/api/cookies/load-from-browser', {
               method: 'POST',
-              body: JSON.stringify({ platform: platform, browser: browser })
+              body: { platform: platform, browser: browser }
             })
             .then(function(loadRes) {
               close();
@@ -734,11 +734,11 @@
               // 4. 直接保存（无需 confirm，已经过"已完成登录"确认）
               api('/api/cookies/save', {
                 method: 'POST',
-                body: JSON.stringify({
+                body: {
                   platform: platform,
                   cookie_string: loadRes.cookie_string,
                   save_to_config: true
-                })
+                }
               })
               .then(function(saveRes) {
                 toast('已保存 ' + loadRes.count + ' 个 ' + platformName + ' Cookie', 'success');

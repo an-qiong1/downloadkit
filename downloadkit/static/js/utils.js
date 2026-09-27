@@ -24,6 +24,12 @@ function api(path, opts) {
   if (opts.body && typeof opts.body === 'object') {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
+  } else if (opts.body && typeof opts.body === 'string' && !opts.headers['Content-Type']) {
+    // 防御：string body 默认也按 JSON 发。fetch 对字符串 body 兜底是
+    // text/plain，FastAPI 0.141+ 见非 application/json 不解析 body，
+    // Pydantic 收到裸字符串直接 422「Input should be a valid dictionary」。
+    // 本项目的 string body 只会是 JSON.stringify 的产物。
+    opts.headers['Content-Type'] = 'application/json';
   }
   return fetch(window.location.origin + path, opts).then(function(r) {
     if (!r.ok) return r.json().then(function(e) {

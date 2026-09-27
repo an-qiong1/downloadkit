@@ -100,6 +100,27 @@ try {
     Write-Host "  POST /api/cookies/save : FAIL: $($_.Exception.Message)" -ForegroundColor Red
 }
 
+# 3f. Open-dir body parsing regression (2026-09-27): fetch sends
+#     string bodies as text/plain, FastAPI 0.141+ skips body parsing
+#     for non-JSON content types -> 422 "Input should be a valid
+#     dictionary". Assert application/json body passes Pydantic: a 404
+#     "file not found" proves parsing succeeded, and this path never
+#     opens an explorer window.
+try {
+    $body = '{"path":"__nonexistent_regression__.txt"}'
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/open-dir" `
+        -Method POST -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 5
+    Write-Host "  POST /api/open-dir : $($r.StatusCode) (unexpected but not 422)" -ForegroundColor Green
+} catch {
+    $code = $null
+    try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+    if ($code -eq 404) {
+        Write-Host "  POST /api/open-dir : 404 body parsed OK (file-not-found is correct)" -ForegroundColor Green
+    } else {
+        Write-Host "  POST /api/open-dir : FAIL($code): $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 # Cleanup
 Write-Host ""
 Write-Host "=== Cleanup ===" -ForegroundColor Cyan
