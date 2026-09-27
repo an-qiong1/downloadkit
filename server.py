@@ -1624,6 +1624,7 @@ async def api_subscriptions_add(req: AddSubscriptionRequest):
     传主页链接、短链或 sec_uid 都行。
     未登录抖音时返回 401，提示去设置页登录。
     """
+    from downloadkit.douyin_browser import RateLimited
     from downloadkit.subscription_service import (
         LoginRequired, add_subscription,
     )
@@ -1631,6 +1632,10 @@ async def api_subscriptions_add(req: AddSubscriptionRequest):
         rec = await add_subscription(req.url, fetch_profile=req.fetch_profile)
     except LoginRequired as e:
         return JSONResponse(status_code=401, content={"ok": False, "error": str(e)})
+    except RateLimited as e:
+        # 短链撞上验证码中间页：429 让前端原样展示，用户等窗口过
+        # 或直接贴主页链接（主页不走短链域，不受这个限流影响）
+        return JSONResponse(status_code=429, content={"ok": False, "error": str(e)})
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -1843,11 +1848,14 @@ async def api_subscriptions_check_all(req: CheckAllRequest):
 @app.post("/api/subscriptions/preview")
 async def api_subscriptions_preview(req: PreviewCreatorRequest):
     """订阅前预览：抓一次主页看有多少作品，但不入库"""
+    from downloadkit.douyin_browser import RateLimited
     from downloadkit.subscription_service import LoginRequired, preview_creator
     try:
         return await preview_creator(req.url, max_scrolls=req.max_scrolls)
     except LoginRequired as e:
         return JSONResponse(status_code=401, content={"ok": False, "error": str(e)})
+    except RateLimited as e:
+        return JSONResponse(status_code=429, content={"ok": False, "error": str(e)})
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:

@@ -119,7 +119,10 @@ async def _resolve_sec_uid(url: str) -> str:
         sec_uid = extract_sec_uid(final_url)
         if sec_uid:
             return sec_uid
-        raise ValueError("短链跳转后没找到创作者 ID，请直接复制主页链接")
+        raise ValueError(
+            "短链跳转后没找到创作者 ID（可能已失效或触发了验证），"
+            "请直接复制主页链接"
+        )
 
     # 裸 sec_uid
     if text.startswith("MS4wLjABAAAA") and len(text) >= 40:

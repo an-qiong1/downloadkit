@@ -27,6 +27,7 @@ import asyncio
 import base64
 import re
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -632,16 +633,24 @@ class DouyinBrowser:
             except Exception:
                 total = -1
 
-            if not video_ids:
+            if not video_ids and max_scrolls > 0:
                 # 空结果必须报错而不是返回空列表：调用方会拿它建基线，
                 # 空基线意味着「没有水位线」，下一轮会把所有存量作品
                 # 当成新作品下载下来。
+                #
+                # max_scrolls=0 是「只取昵称头像、不抓列表」的调用
+                # （add_subscription 订阅时就走这条）：循环一次都不跑，
+                # 空列表是预期而不是故障。2026-09-27 用户实测：保护
+                # 无条件触发，把每一个新订阅都挡死，预览（滚动 3 次）
+                # 却一切正常，一好一坏很难往这上面想。
                 raise RuntimeError(
                     f"主页没抓到任何作品（作品区选择器可能失效）。"
                     f"页面 /video/ 链接共 {total} 条"
                 )
 
-            if total and total > len(video_ids):
+            if not max_scrolls:
+                logger.info(f"创作者 {nickname or sec_uid}: 只取主页资料，未抓作品列表")
+            elif total and total > len(video_ids):
                 logger.info(
                     f"创作者 {nickname or sec_uid}: 作品区提取 {len(video_ids)} 条，"
                     f"整页 {total} 条，过滤掉 {total - len(video_ids)} 条非本人作品链接"
@@ -1249,6 +1258,20 @@ async def resolve_short_url(
         logger.debug(f"短链缓存命中: {url}")
         return cached
 
+    def _useless_landing(final: str) -> bool:
+        """落到裸首页 = 被风控拦了，不是创作者主页。
+
+        v.douyin.com 风控时会把无 JS/无 cookie 的请求直接重定向到
+        www.douyin.com/ —— 跳是跳了，但提不出 sec_uid。这种结果
+        一旦写进缓存，整个进程都拿首页去提 ID，怎么提都是
+        「短链跳转后没找到创作者 ID」。2026-09-27 用户实测：
+        预览刚成功、紧接着订阅就 400，坏落地/坏缓存就是元凶。
+        """
+        try:
+            return urllib.parse.urlparse(final).path in ("", "/")
+        except Exception:
+            return True
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1267,6 +1290,12 @@ async def resolve_short_url(
                 final = str(resp.url)
                 if final.rstrip("/") == url.rstrip("/"):
                     raise RuntimeError("短链未跳转")
+                if _useless_landing(final):
+                    # 落到裸首页 = 确定性拦截（验证码/风控降级），不是
+                    # 瞬时网络错：重试只会白白消耗 v.douyin.com 的限流
+                    # 额度、加重风控，直接 break 去浏览器回退（带 cookie）
+                    logger.info(f"短链被拦到首页（疑似风控），转浏览器回退: {final[:80]}")
+                    break
                 _SHORT_URL_CACHE[url] = final
                 logger.info(f"短链解析: {url} -> {final[:80]}")
                 return final
@@ -1288,11 +1317,27 @@ async def resolve_short_url(
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 final = page.url
+                if _useless_landing(final):
+                    # 落首页先看是不是验证码中间页 —— 两种情况处置完全不同：
+                    # 验证码要按风控语义上报（RateLimited 穿透出去，调用方
+                    # 退避，继续请求只会让风控更严）；普通落首页按链接无效
+                    # 处理（不缓存坏结果，返回原文让调用方引导贴主页链接）。
+                    try:
+                        title = (await page.title() or "").strip()
+                    except Exception:
+                        title = ""
+                    if looks_like_captcha(title, final):
+                        raise RateLimited(
+                            f"短链触发抖音风控验证：{title or final[:80]}"
+                        )
+                    raise RuntimeError(f"浏览器回退也落到首页: {final[:80]}")
                 _SHORT_URL_CACHE[url] = final
                 logger.info(f"短链解析(浏览器回退): {url} -> {final[:80]}")
                 return final
             finally:
                 await page.close()
+        except RateLimited:
+            raise
         except Exception as e:
             logger.warning(f"短链浏览器回退失败 {url}: {e}")
 

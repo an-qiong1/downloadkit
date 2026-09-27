@@ -253,3 +253,244 @@ async def test_share_text_without_link_raises_valueerror(fake_browser):
     """认不出的输入要给中文提示，而不是抛 TypeError"""
     with pytest.raises(ValueError):
         await _resolve_sec_uid("这里什么链接都没有")
+
+
+# ------------------------------------------------------------------
+# 2026-09-27 第二次用户实测：预览刚成功、紧接着订阅报 400
+#   「短链跳转后没找到创作者 ID」
+# 根因：v.douyin.com 风控把无 JS/无 cookie 的 httpx 请求拦到裸首页
+# www.douyin.com/ —— 代码只挡「没跳转」（final==url），跳到首页算
+# 成功，还写进 _SHORT_URL_CACHE：之后整个进程拿首页去提 sec_uid，
+# 怎么提都是「没找到」，浏览器回退的机会也没了。
+# ------------------------------------------------------------------
+
+class _HomePageClient:
+    """模拟 httpx 跟随后落在裸首页（风控拦截）"""
+
+    def __init__(self, *a, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, *a, **kw):
+        class R:
+            url = "https://www.douyin.com/"
+        return R()
+
+
+class _UserPageClient:
+    """模拟 httpx 正常落到 /user/ 主页（不能被新判定误伤）"""
+
+    def __init__(self, *a, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, *a, **kw):
+        class R:
+            url = "https://www.douyin.com/user/MS4wLjABAAAAokuserpage00000"
+        return R()
+
+
+class _FailClient:
+    def __init__(self, *a, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, *a, **kw):
+        raise RuntimeError("模拟网络故障")
+
+
+@pytest.fixture()
+def clean_short_cache(monkeypatch):
+    from downloadkit import douyin_browser as db
+
+    db._SHORT_URL_CACHE.clear()
+
+    async def _noop_sleep(*a, **kw):
+        return None
+
+    monkeypatch.setattr("asyncio.sleep", _noop_sleep)
+    yield db._SHORT_URL_CACHE
+    db._SHORT_URL_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_resolve_short_url_rejects_homepage_redirect(
+        monkeypatch, clean_short_cache):
+    """落到裸首页不算成功：不能返回、更不能缓存"""
+    from downloadkit.douyin_browser import resolve_short_url
+
+    monkeypatch.setattr("httpx.AsyncClient", _HomePageClient)
+
+    out = await resolve_short_url("https://v.douyin.com/HomePgX/")
+    assert out == "https://v.douyin.com/HomePgX/", \
+        "没浏览器回退时应返回原文，让调用方报「请直接复制主页链接」"
+    assert "https://v.douyin.com/HomePgX/" not in clean_short_cache, \
+        "首页被缓存了 —— 整个进程之后都拿首页提 sec_uid，必 400"
+
+
+@pytest.mark.asyncio
+async def test_resolve_short_url_caches_valid_user_page(
+        monkeypatch, clean_short_cache):
+    """正常落 /user/ 主页要照常返回并缓存（别把新判定改成矫枉过正）"""
+    from downloadkit.douyin_browser import resolve_short_url
+
+    monkeypatch.setattr("httpx.AsyncClient", _UserPageClient)
+
+    out = await resolve_short_url("https://v.douyin.com/OkUserX/")
+    assert out == "https://www.douyin.com/user/MS4wLjABAAAAokuserpage00000"
+    assert clean_short_cache.get("https://v.douyin.com/OkUserX/") == out
+
+
+@pytest.mark.asyncio
+async def test_browser_fallback_homepage_not_cached(
+        monkeypatch, clean_short_cache):
+    """浏览器回退也落到首页：返回原文且不缓存坏结果"""
+    from downloadkit.douyin_browser import resolve_short_url
+
+    monkeypatch.setattr("httpx.AsyncClient", _FailClient)
+
+    class _HomeBrowser:
+        async def start(self):
+            return None
+
+        async def _get_page(self, reuse=True):
+            class _P:
+                url = "https://www.douyin.com/"
+
+                async def goto(self, *a, **k):
+                    return None
+
+                async def close(self):
+                    return None
+            return _P()
+
+    out = await resolve_short_url(
+        "https://v.douyin.com/FbHomeX/", browser=_HomeBrowser())
+    assert out == "https://v.douyin.com/FbHomeX/"
+    assert "https://v.douyin.com/FbHomeX/" not in clean_short_cache
+
+
+@pytest.mark.asyncio
+async def test_browser_fallback_user_page_cached(
+        monkeypatch, clean_short_cache):
+    """浏览器回退拿到 /user/ 主页要正常返回并缓存（回退路径的正例）"""
+    from downloadkit.douyin_browser import resolve_short_url
+
+    monkeypatch.setattr("httpx.AsyncClient", _FailClient)
+
+    class _UserBrowser:
+        async def start(self):
+            return None
+
+        async def _get_page(self, reuse=True):
+            class _P:
+                url = "https://www.douyin.com/user/MS4wLjABAAAAfbuser000000"
+
+                async def goto(self, *a, **k):
+                    return None
+
+                async def close(self):
+                    return None
+            return _P()
+
+    out = await resolve_short_url(
+        "https://v.douyin.com/FbOkX/", browser=_UserBrowser())
+    assert out == "https://www.douyin.com/user/MS4wLjABAAAAfbuser000000"
+    assert clean_short_cache.get("https://v.douyin.com/FbOkX/") == out
+
+
+# ------------------------------------------------------------------
+# 验证码中间页（2026-09-27 第三次实测：多时机读 URL 诊断出
+# title=「验证码中间页」稳定不变 —— 不是读早了，是真实风控拦截）
+# ------------------------------------------------------------------
+
+class _CaptchaPage:
+    url = "https://www.douyin.com/"
+
+    async def goto(self, *a, **k):
+        return None
+
+    async def close(self):
+        return None
+
+    async def title(self):
+        return "验证码中间页"
+
+
+class _CaptchaBrowser:
+    async def start(self):
+        return None
+
+    async def _get_page(self, reuse=True):
+        return _CaptchaPage()
+
+
+@pytest.mark.asyncio
+async def test_browser_fallback_captcha_raises_rate_limited(
+        monkeypatch, clean_short_cache):
+    """验证码要按风控上报 RateLimited，不能笼统报「落到首页」
+
+    两种情况处置完全不同：验证码 = 停下来退避（继续请求只会更严），
+    普通落首页 = 链接无效、引导贴主页链接。混成一种，调用方没法退避。
+    """
+    from downloadkit.douyin_browser import RateLimited, resolve_short_url
+
+    # httpx 落首页（真实场景第一步）→ break → 浏览器回退 → 验证码页
+    monkeypatch.setattr("httpx.AsyncClient", _HomePageClient)
+
+    with pytest.raises(RateLimited) as e:
+        await resolve_short_url(
+            "https://v.douyin.com/CaptchaX/", browser=_CaptchaBrowser())
+
+    assert "风控验证" in str(e.value)
+    assert "https://v.douyin.com/CaptchaX/" not in clean_short_cache, \
+        "验证码结果不许进缓存"
+
+
+@pytest.mark.asyncio
+async def test_browser_fallback_captcha_not_treated_as_plain_error(
+        monkeypatch, clean_short_cache):
+    """验证码不该被回退段的 except 吞成「回退失败」—— RateLimited 必须穿透"""
+    from downloadkit.douyin_browser import RateLimited, resolve_short_url
+
+    monkeypatch.setattr("httpx.AsyncClient", _FailClient)
+
+    with pytest.raises(RateLimited):
+        await resolve_short_url(
+            "https://v.douyin.com/CaptchaY/", browser=_CaptchaBrowser())
+
+
+@pytest.mark.asyncio
+async def test_httpx_homepage_lands_once_no_retry(monkeypatch, clean_short_cache):
+    """落首页是确定性拦截：httpx 打一次就转浏览器回退，不重试烧限流额度"""
+    from downloadkit.douyin_browser import resolve_short_url
+
+    class _CountingClient(_HomePageClient):
+        calls = 0
+
+        async def get(self, *a, **kw):
+            type(self).calls += 1
+            return await super().get(*a, **kw)
+
+    monkeypatch.setattr("httpx.AsyncClient", _CountingClient)
+
+    out = await resolve_short_url("https://v.douyin.com/OnceX/")
+
+    assert out == "https://v.douyin.com/OnceX/"
+    assert _CountingClient.calls == 1, \
+        f"落首页还重试 {_CountingClient.calls} 次 = 白烧 v.douyin.com 限流额度"

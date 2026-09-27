@@ -343,12 +343,15 @@
     showMsg('正在抓取主页，约需 10~20 秒…', 'busy');
     api(API + '/preview', { method: 'POST', body: { url: url, max_scrolls: 3 } })
       .then(function (d) {
-        var lines = ['<b>' + escHtml(d.nickname || '(未取到昵称)') + '</b>',
-          '共抓到 <b>' + d.video_count + '</b> 个作品'];
-        if (d.subscribed) lines.push('<span style="color:var(--warning)">已经订阅过了</span>');
+        // showMsg 走 textContent（防注入），这里必须拼纯文本 ——
+        // 以前塞 <b>/<span> 进去，标签被字面显示在消息框里
+        // （2026-09-27 用户截图实锤）
+        var lines = [d.nickname || '(未取到昵称)',
+          '共抓到 ' + d.video_count + ' 个作品'];
+        if (d.subscribed) lines.push('已经订阅过了');
         if (d.video_count === 0) {
-          lines.push('<span style="color:var(--error)">一个作品都没抓到。' +
-            '可能是需要登录、主页被限制，或者滚动次数不够。</span>');
+          lines.push('一个作品都没抓到。' +
+            '可能是需要登录、主页被限制，或者滚动次数不够。');
         }
         showMsg(lines.join('　'), d.video_count > 0 ? 'ok' : 'error');
       })

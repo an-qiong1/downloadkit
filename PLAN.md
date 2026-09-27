@@ -22,6 +22,7 @@
 | 2026-09-27 | P2-4 | 订阅卡片状态：加列 `last_attempt`/`last_result`（成败都更新），`last_checked` 仍只在成功时写（首查判断靠它，有命门测试锁死）；check_creator 四个成功出口 + check_all 三个 except + 单查端点写状态，中断只写被检查到的、暂停不写；卡片显示结果、失败标红、时间回落；`tests/test_card_status.py` 14 例，pytest 378 passed |
 | 2026-09-27 | P2 验收 | 重打包 105.87MB → `test-exe.ps1` 6 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9；新增 `build/test-exe-backfill.py` 真实补下实测：backfill_n=2 入队 2 → 落盘 `videos` 1→3（+2 共 162MB，验收预期）→ 复查 `backfilled=0` 零重复 → 复原 only_new；两处落盘红线 0/0 不变，无残留进程 |
 | 2026-09-27 | P3 验收 | pytest 全量 430 passed / 6 skipped → 重打包 105.88MB → `test-exe.ps1` 6 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（含新托盘菜单「图标已启动」）；红线三处 0/0/3 不变，无残留进程 |
+| 2026-09-27 | 用户实测修复 | 订阅「预览成功、订阅必失败」三层连环修复：① `fetch_creator(max_scrolls=0)` 空保护无条件触发挡死所有新订阅 → 保护加滚动条件，`max_scrolls=0` 只取资料不抓列表；② 短链落裸首页被当成功且缓存坏结果 → 不缓存、不重试（省限流额度）、直接转浏览器回退；③ 回退遇「验证码中间页」→ RateLimited 穿透 → server 429 明确文案（原笼统 400）；④ 预览消息 `<b>` 字面显示 → 纯文本化；`test_subscribe_profile_only.py` 5 例（真 fetch_creator 链路，替身浏览器绕过实现的教训）+ `test_resolve_sec_uid.py` +7 例，pytest 442 passed；真实验证：主页直订 200、短链 429 验证码文案、复原删除 |
 
 ---
 
