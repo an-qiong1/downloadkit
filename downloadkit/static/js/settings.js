@@ -376,10 +376,104 @@
     });
   }
 
+  // ========== 设置导出 / 导入（P3-3）==========
+  // 导出：现拉一次 /api/settings/get（不拿页面里可能过期的值），
+  // 落成带时间戳的 JSON 文件。只含 general/proxy/cookie/subscription
+  // 四段 —— cookie 段是文件路径不是 Cookie 内容，导出文件不携带
+  // 登录态；subscription 是轮询偏好（开关/周期），换机时也该跟着走。
+  function exportSettings() {
+    api('/api/settings/get').then(function(data) {
+      var s = data.settings || {};
+      var payload = {
+        app: 'downloadkit',
+        exported_at: new Date().toISOString(),
+        settings: {
+          general: s.general || {},
+          proxy: s.proxy || {},
+          cookie: s.cookie || {},
+          subscription: s.subscription || {}
+        }
+      };
+      var blob = new Blob([JSON.stringify(payload, null, 2)],
+                          { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      var d = new Date();
+      function pad(n) { return (n < 10 ? '0' : '') + n; }
+      a.href = url;
+      a.download = 'downloadkit-settings-' +
+        d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast('设置已导出为 JSON 文件', 'success');
+    }).catch(function(err) {
+      toast('导出失败: ' + err.message, 'error');
+    });
+  }
+
+  // 导入：段级白名单（general/proxy/cookie/subscription 且必须是
+  // 对象），其它键一律丢掉 —— config.toml 只该有应用认识的段，
+  // 脏数据进去了没有地方报错，只会安静地留着。每段都允许缺失，
+  // 文件里有哪段就更哪段（settings/update 本来就按段更新）。
+  function handleImportFile(e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = '';   // 先清掉，同一个文件改完再导一次才选得动
+    if (!file) return;
+
+    var reader = new FileReader();
+    reader.onload = function() {
+      var data;
+      try {
+        data = JSON.parse(reader.result);
+      } catch (err) {
+        toast('导入失败：不是有效的 JSON 文件', 'error');
+        return;
+      }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        toast('导入失败：文件内容不是设置对象', 'error');
+        return;
+      }
+      // 兼容带壳（{settings:{...}}）与裸（直接三段）两种写法
+      var s = (data.settings && typeof data.settings === 'object')
+        ? data.settings : data;
+      var payload = {};
+      ['general', 'proxy', 'cookie', 'subscription'].forEach(function(k) {
+        if (s[k] && typeof s[k] === 'object' && !Array.isArray(s[k])) {
+          payload[k] = s[k];
+        }
+      });
+      var keys = Object.keys(payload);
+      if (keys.length === 0) {
+        toast('导入失败：没有可识别的设置段（general / proxy / cookie / subscription）', 'error');
+        return;
+      }
+      if (!confirm('导入将覆盖当前的【' + keys.join('、') + '】设置，确定？')) {
+        return;
+      }
+      api('/api/settings/update', { method: 'POST', body: payload }).then(function() {
+        toast('设置已导入：' + keys.join('、'), 'success');
+        loadSettings();
+      }).catch(function(err) {
+        toast('导入失败: ' + err.message, 'error');
+      });
+    };
+    reader.onerror = function() {
+      toast('导入失败：文件读取不出来', 'error');
+    };
+    reader.readAsText(file, 'utf-8');
+  }
+
   // ========== 事件绑定 ==========
   document.addEventListener('DOMContentLoaded', function() {
     $('#settings-save').addEventListener('click', saveSettings);
     $('#settings-reset').addEventListener('click', resetDefaults);
+    $('#settings-export').addEventListener('click', exportSettings);
+    $('#settings-import').addEventListener('click', function() {
+      $('#settings-import-file').click();
+    });
+    $('#settings-import-file').addEventListener('change', handleImportFile);
     // 三态 radio 各绑一次（change 不冒泡到 document 的委托里，直接绑最稳）
     ['off', 'system', 'manual'].forEach(function(m) {
       var el = $('#setting-proxy-mode-' + m);
