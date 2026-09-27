@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20260604b">
+<link rel="stylesheet" href="css/main.css?v=20260927a">
 </head>
 <body>
 
@@ -44,13 +44,9 @@
       
       <div class="nav-section">
         <div class="nav-label">管理</div>
-        <a class="nav-item" data-tab="files">
-          <i data-lucide="folder" class="nav-icon"></i>
-          <span>已下载</span>
-        </a>
-        <a class="nav-item" data-tab="queue">
+        <a class="nav-item" data-tab="downloads">
           <i data-lucide="download" class="nav-icon"></i>
-          <span>下载队列</span>
+          <span>下载</span>
         </a>
         <a class="nav-item" data-tab="collections">
           <i data-lucide="heart" class="nav-icon"></i>
@@ -225,8 +221,15 @@
         </div>
       </div>
 
-      <!-- 已下载面板 -->
-      <div class="tab-panel" id="panel-files">
+      <!-- 下载面板：进行中(原下载队列) + 已完成(原已下载)，2026-09-27 合并为一页 -->
+      <div class="tab-panel" id="panel-downloads">
+        <div class="dl-subtabs" role="tablist">
+          <button type="button" class="dl-subtab active" data-view="queue" role="tab" aria-selected="true">进行中</button>
+          <button type="button" class="dl-subtab" data-view="files" role="tab" aria-selected="false">已完成</button>
+        </div>
+
+        <!-- 已完成：原「已下载」 -->
+        <div class="dl-view" id="dl-view-files" style="display:none">
         <div class="files-toolbar">
           <div class="files-select-all">
             <input type="checkbox" id="select-all">
@@ -251,8 +254,8 @@
         </div>
       </div>
       
-      <!-- 下载队列面板 -->
-      <div class="tab-panel" id="panel-queue">
+        <!-- 进行中：原「下载队列」 -->
+        <div class="dl-view" id="dl-view-queue">
         <div class="queue-header">
           <div class="queue-stats">
             <span id="queue-downloading">0</span> 下载中 · 
@@ -271,7 +274,8 @@
           <div class="empty-title">下载队列为空</div>
           <div class="empty-text">添加下载任务后将在这里显示</div>
         </div>
-    </div>
+        </div>
+      </div>
 
       <!-- 收藏歌单面板 -->
       <div class="tab-panel" id="panel-collections">
@@ -505,15 +509,15 @@
 <!-- Toast容器 -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="js/utils.js?v=20260604b"></script>
-<script src="js/music.js?v=20260604b"></script>
-<script src="js/resource.js?v=20260604b"></script>
-<script src="js/files.js?v=20260604b"></script>
-<script src="js/queue.js?v=20260604b"></script>
+<script src="js/utils.js?v=20260927a"></script>
+<script src="js/music.js?v=20260927a"></script>
+<script src="js/resource.js?v=20260927a"></script>
+<script src="js/files.js?v=20260927a"></script>
+<script src="js/queue.js?v=20260927a"></script>
 <script src="js/settings.js?v=20260712b"></script>
 <script src="js/douyin-login.js?v=20260926a"></script>
 <script src="js/subscriptions.js?v=20260926a"></script>
 <script src="js/collections.js?v=20260724b"></script>
-<script src="js/app.js?v=20260604b"></script>
+<script src="js/app.js?v=20260927a"></script>
 </body>
 </html>

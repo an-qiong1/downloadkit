@@ -180,7 +180,7 @@
   function startQueueAutoRefresh() {
     if (queueRefreshTimer) clearInterval(queueRefreshTimer);
     queueRefreshTimer = setInterval(function() {
-      if (state.activeTab === 'queue') {
+      if (state.activeTab === 'downloads' && state.downloadView === 'queue') {
         refreshQueue();
       }
     }, 2000);

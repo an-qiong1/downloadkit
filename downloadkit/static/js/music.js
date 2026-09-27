@@ -298,7 +298,7 @@
       
       if (info.status === 'done') {
         toast('下载完成：' + info.filename, 'success');
-        if (state.activeTab === 'files') refreshFiles();
+        if (state.activeTab === 'downloads' && state.downloadView === 'files') refreshFiles();
       } else if (info.status === 'failed') {
         toast('下载失败：' + (info.error || '未知错误'), 'error');
       } else if (info.status === 'downloading') {

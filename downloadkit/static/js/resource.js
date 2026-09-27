@@ -512,7 +512,7 @@
         btn.innerHTML = iconHtml + '下载完成';
         lucide.createIcons();
         toast('下载完成' + (info.files ? '：' + info.files.join(', ') : ''), 'success');
-        if (state.activeTab === 'files') refreshFiles();
+        if (state.activeTab === 'downloads' && state.downloadView === 'files') refreshFiles();
       } else if (info.status === 'failed') {
         btn.innerHTML = iconHtml + '下载失败';
         lucide.createIcons();
@@ -760,7 +760,7 @@
       if (info.status === 'done') {
         var msg = '批量下载完成！成功: ' + info.completed + ', 失败: ' + info.failed;
         toast(msg, info.failed > 0 ? 'warning' : 'success');
-        if (state.activeTab === 'files') refreshFiles();
+        if (state.activeTab === 'downloads' && state.downloadView === 'files') refreshFiles();
       } else if (info.status === 'failed') {
         toast('批量下载失败', 'error');
       } else {

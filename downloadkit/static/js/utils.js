@@ -64,6 +64,8 @@ function escAttr(s) {
 // ========== 状态管理 ==========
 var state = {
   activeTab: 'music',
+  // 「下载」页的子视图：queue=进行中（原下载队列），files=已完成（原已下载）
+  downloadView: 'queue',
   songs: [],
   selectedSongs: {},
   playlistSongs: null,
@@ -76,8 +78,7 @@ var tabTitles = {
   'music': '音乐下载',
   'resource': '资源解析',
   'subscriptions': '创作者订阅',
-  'files': '已下载',
-  'queue': '下载队列',
+  'downloads': '下载',
   'collections': '我的歌单',
   'settings': '设置',
 

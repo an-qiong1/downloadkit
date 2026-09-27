@@ -20,12 +20,9 @@
     
     $('#page-title').textContent = tabTitles[tab] || tab;
     
-    if (tab === 'files') {
-      refreshFiles();
-    }
-    
-    if (tab === 'queue') {
-      refreshQueue();
+    if (tab === 'downloads') {
+      // 「下载」页有子视图（进行中/已完成），只刷新当前那个
+      refreshDownloadView();
     }
     
     if (tab === 'settings') {
@@ -34,6 +31,39 @@
     
     closeSidebar();
   }
+  
+  // ========== 「下载」页子视图（进行中 / 已完成）==========
+  function refreshDownloadView() {
+    if (state.downloadView === 'files') {
+      refreshFiles();
+    } else {
+      refreshQueue();
+    }
+  }
+  
+  function switchDownloadView(view) {
+    if (view !== 'queue' && view !== 'files') view = 'queue';
+    state.downloadView = view;
+    
+    $$('.dl-subtab').forEach(function(btn) {
+      var on = btn.dataset.view === view;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    
+    var queueView = $('#dl-view-queue');
+    var filesView = $('#dl-view-files');
+    if (queueView) queueView.style.display = view === 'queue' ? '' : 'none';
+    if (filesView) filesView.style.display = view === 'files' ? '' : 'none';
+    
+    refreshDownloadView();
+  }
+  
+  $$('.dl-subtab').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      switchDownloadView(btn.dataset.view);
+    });
+  });
   
   $$('.nav-item').forEach(function(item) {
     item.addEventListener('click', function() {
