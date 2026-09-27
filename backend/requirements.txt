@@ -1,15 +1,21 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.0
+# 依赖钉死版本（2026-09-27 对齐 .venv 实际安装版本，起因：fastapi
+# 钉 0.115.0 而环境已升 0.141.1，两处不一致会让重装环境与打包产物
+# 行为不同）。两个用途：backend/Dockerfile 构建 NAS 版镜像；此处同
+# 时是 .venv 的版本快照。Windows 桌面版的权威依赖声明在
+# pyproject.toml（下限约束）。下方 sqlalchemy/celery/redis 等为
+# NAS 版专用项，当前 .venv 未安装。
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
 sqlalchemy==2.0.35
 alembic==1.13.0
 celery==5.4.0
 redis==5.1.0
-yt-dlp==2024.8.0
-mutagen==1.47.0
-httpx==0.27.0
-pydantic==2.9.0
+yt-dlp==2026.8.19
+mutagen==1.48.1
+httpx==0.28.1
+pydantic==2.13.5
 pydantic-settings==2.5.0
 python-multipart==0.0.9
-python-dotenv==1.0.1
+python-dotenv==1.2.3
 aiofiles==24.1.0
 websockets==13.0
