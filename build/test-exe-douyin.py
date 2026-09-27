@@ -27,6 +27,8 @@ OUT = os.path.join(os.environ.get("TEMP", ROOT), "exe_douyin_test.txt")
 
 # 笔吧评测室（已有订阅、水位线已建）
 SEC_UID = "MS4wLjABAAAA9jVXMI9P5Gye45GdF88OIr1Frk2Gf1q7PS416m3PxGo"
+# ↑ 兜底值：曾是订阅创作者，退订后动态取值失败才用它（会 404）。
+# 正常路径在 [2] 步从 /api/subscriptions 实时取，避免订阅变化把测试打挂。
 
 L = []
 
@@ -216,14 +218,25 @@ def main():
                   f"  seen={s.get('works_seen')}")
 
         # ---- 3. 核心：触发真实浏览器抓取 ----
+        # sec_uid 用 [2] 步的实时列表（订阅随环境增删，硬编码会 404）
+        sec_uid = ""
+        for s in subs:
+            if isinstance(s, dict) and s.get("sec_uid"):
+                if s.get("enabled", 1):
+                    sec_uid = s["sec_uid"]
+                    break
+                if not sec_uid:
+                    sec_uid = s["sec_uid"]
+        if not sec_uid:
+            sec_uid = SEC_UID
         w("")
         w("[3] 核心 —— 触发浏览器抓取创作者主页")
-        w("     POST /api/subscriptions/{sec_uid}/check")
+        w(f"     POST /api/subscriptions/{sec_uid[:18]}…/check")
         w("     body = {'download': False, 'max_new': 1, 'max_scrolls': 1}")
         w("     >>> download=false：只检测、不入队、不下载 <<<")
         t0 = time.time()
         st, data = http(
-            "POST", f"{base}/api/subscriptions/{SEC_UID}/check",
+            "POST", f"{base}/api/subscriptions/{sec_uid}/check",
             body={"download": False, "max_new": 1, "max_scrolls": 1},
             timeout=180,
         )

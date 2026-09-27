@@ -27,6 +27,7 @@
 | 2026-09-27 | P4-2 文件命名 | 抖音改 `标题 发布日期.ext`（日期在后）：浏览器后端从页面「发布时间：…」抓日期（body 正则 + `[data-e2e*=time]` 兜底，**零额外请求**，探针实测命中），旧接口路径从 `create_time` 按 UTC+8 换算（秒/毫秒/坏值都容错）；缺日期或缺标题回落 `douyin_<作品ID>` 不硬造；四命名点（浏览器视频/旧接口视频/实况/图文）统一走 `build_download_base`（非法字符清洗 + 120 字封顶），各点加 `_existing_target` 旧命名兜底去重，切换命名后重下不出第二份；`download_content` 先定死 `rename_strategy` 再做已存在预检；真实解析实测 `publish_date='2026-09-24'`、文件名 `…2026-09-24.mp4`；`tests/test_douyin_naming.py` 18 例，pytest 477 passed |
 | 2026-09-27 | P4-3 UI 统一 | 5 个真开关改 `.switch` 平移 toggle（appearance:none + `::after` 滑块，原生 checkbox/`label[for]` 保留，JS 零改动）；代理三态 radio 改 `.segmented` 分段按钮（radio 视觉隐藏留 DOM，`test_proxy`/`test_control_modes` 结构断言零改动全兼容）；`.search-input` 统一带边框盒（`.search-box` 内清透明防双边框）+ `.compact` 紧凑档收编订阅面板内联；`.btn-xs`/`.btn [data-lucide] 15px` 收编 16 处内联，📂🌐🔍→lucide；订阅「自动检查」两句并一句；走查 7 面板 console 零错误 + 截图核对（误点启用跑了 1 轮空轮询，0 下载已恢复关闭）；pytest 477 passed / 6 skipped |
 | 2026-09-27 | P4-4 confirm 弹窗 + 内联收编 | 原生 `confirm` 全换 `uiConfirm`（utils.js 返回 Promise，Enter/Esc/遮罩/焦点陷阱，textContent 防注入、不用 id），13 处调用方 async 化、文案不动；两处测试断言 `confirm(`→`uiConfirm(`；新增 `.row`/`.card`/`.card-title` 收编 11 处内联，JS 模板 10 处图标内联尺寸清零；修 settings.js 8 处不存在的 `var(--danger)`（红字失效）→ `var(--error)`；走查四路径 + 订阅范围取消回滚 API 零写入 console 零错误；pytest 477 passed / 6 skipped |
+| 2026-09-27 | P4 整体验收 | 重打包 105.89MB → `test-exe.ps1` 6 API 全响应、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（首次 7/8 系脚本硬编码旧 sec_uid 撞退订 404，改用实时订阅列表后全过，非 P4 回归）；红线三处 0/0/0 与打包前一致（videos 基线因用户手删从 3→0），无残留进程 |
 
 ---
 
@@ -227,6 +228,13 @@
   - 走查：Esc/Enter/确认钮/遮罩四路径全对；真实业务路径（订阅范围改「全部补下」→ 取消）回滚到
     `only_new` 且 API 零写入；console 零错误；pytest 477 passed / 6 skipped
   - 版本 bump：utils/main.css/settings/subscriptions/files/queue/collections/resource/douyin-login → `20260927l`
+
+**P4 验收**（2026-09-27 全部通过）：四批全勾（P4-1 `2ca7802` → P4-2 `fb99388` → P4-3 `c4a0660` → P4-4 `ccd5a75`）✓ →
+`pytest` 全量 **477 passed / 6 skipped** ✓ → `build\build-release.ps1` 重打包 **105.89MB** ✓ →
+三项 exe 实测（`test-exe.ps1` 6 个 API 全响应、`test-exe-tray.py` **33/33**、`test-exe-douyin.py` **9/9**：
+首次 7/8 是脚本硬编码旧 sec_uid 撞上退订 404，已改为用 [2] 步实时订阅列表取值，属脚本缺陷非 P4 回归）✓ →
+红线三处 **0/0/0** 与打包前基线一致（用户手删过 videos，基线从 P3 的 0/0/3 变 0/0/0，以本次为准）✓ →
+无残留进程（8765 仅 TIME_WAIT）✓ → 分次提交 ✓
 
 ---
 
