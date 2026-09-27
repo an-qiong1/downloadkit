@@ -21,6 +21,7 @@
 | 2026-09-27 | P2-3 | 手动检查策略入口：折叠区（下载开关/单轮上限/范围），默认值=原行为不落库；范围临时覆盖透传 `CheckAllRequest→run_round→check_all→check_creator→_apply_backfill`，校验抽 `validate_scope` 与卡片共用、开跑前 400 拦下；`tests/test_check_strategy.py` 20 例，pytest 364 passed |
 | 2026-09-27 | P2-4 | 订阅卡片状态：加列 `last_attempt`/`last_result`（成败都更新），`last_checked` 仍只在成功时写（首查判断靠它，有命门测试锁死）；check_creator 四个成功出口 + check_all 三个 except + 单查端点写状态，中断只写被检查到的、暂停不写；卡片显示结果、失败标红、时间回落；`tests/test_card_status.py` 14 例，pytest 378 passed |
 | 2026-09-27 | P2 验收 | 重打包 105.87MB → `test-exe.ps1` 6 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9；新增 `build/test-exe-backfill.py` 真实补下实测：backfill_n=2 入队 2 → 落盘 `videos` 1→3（+2 共 162MB，验收预期）→ 复查 `backfilled=0` 零重复 → 复原 only_new；两处落盘红线 0/0 不变，无残留进程 |
+| 2026-09-27 | P3 验收 | pytest 全量 430 passed / 6 skipped → 重打包 105.88MB → `test-exe.ps1` 6 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（含新托盘菜单「图标已启动」）；红线三处 0/0/3 不变，无残留进程 |
 
 ---
 
@@ -154,7 +155,7 @@
   - **按钮状态统一**：`downloadResource` 收 btn 参数（内联按钮状态落自己，修掉主按钮不在 DOM 时的 null 崩），完成/失败态保留不 2 秒抹回，两页三态文案一致（下载中…/已下载/下载失败），音乐页补「下载中」title；`test_button_states.py` 8 例
   - **托盘快捷项**：菜单加「打开下载目录」「检查订阅更新」+ 分隔；两个动作抽 run.py 顶层函数（open_download_dir / check_subscription_update）便于单测 mock，检查动作起 daemon 线程不卡托盘 UI，气泡通知转后端 message；`test_tray_menu.py` 7 例（含 pystray 实际构造菜单）；点击无法自动化，构造与接线靠单测 + exe 日志断言覆盖
 
-**P3 验收**：`pytest` 全量 → 重打包 → 三项 exe 实测 → 红线核对（三处落盘目录文件数不变）
+**P3 验收**（2026-09-27 全部通过）：`pytest` 全量 **430 passed / 6 skipped** ✓ → `build\build-release.ps1` 重打包 105.88MB ✓ → 三项 exe 实测（`test-exe.ps1` 6 个 API 全 200、`test-exe-tray.py` **33/33**、`test-exe-douyin.py` **9/9**）✓ → 红线三处 0/0/3 与打包前一致、无残留进程 ✓ → 提交 ✓
 
 ---
 
