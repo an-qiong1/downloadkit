@@ -369,6 +369,68 @@ body {
 
 .help-link:hover { border-bottom-style: solid; }
 
+/* ========== 设置页：三种控件模式（P1-6 统一）==========
+   A 标签在上   .f + .f-label + 控件（路径类 100%，数字类 .f-num 160px）
+   B 开关带说明 .f-switch（复选框 + 标签 + 一句说明）
+   C 下拉右对齐 .f-row（标签左，select 右，固定 160px）
+   其余控件一律不要自定义宽度，宽度只有 100% 和 160px 两档。 */
+.f { margin-bottom: 16px; }
+
+.f-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.f-num { width: 160px; }
+
+.f-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.f-switch label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.f-switch input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.f-switch .f-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.f-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.f-row > label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.f-row > select {
+  flex: none;
+  width: 160px;
+}
+
 /* ========== 解答页（P1-5）========== */
 .help-head {
   display: flex;

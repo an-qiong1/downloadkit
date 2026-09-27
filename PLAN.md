@@ -14,6 +14,7 @@
 | 2026-09-27 | P1-2 | 设置页重排为 5 组卡片（下载/应用/网络/启动与后台/关于），网络组用子标题分三段；补 `.content` 缺失闭合，整份 HTML 标签首次严格配平；pytest 270 passed |
 | 2026-09-27 | P1-5 | 新增解答页 `panel-help`（不占侧边栏、设置页内链进出）：目录 6 锚点 + 下载目录/Cookie/扫码登录/代理说明 + FAQ 7 条 + 报错对照 6 行；锚点改瞬时滚 `.content`；pytest 279 passed |
 | 2026-09-27 | P1-4 | 备注治理：8 处生效提示统一为 `.eff` 药丸徽标（live/restart/next 三类）；Cookie 长卡与扫码登录长说明迁出设置页，改为 `data-help` 内链直达解答页；pytest 286 passed |
+| 2026-09-27 | P1-6 | 控件三模式统一：`.f-label` 标签在上 / `.f-switch` 开关带说明 / `.f-row` 下拉右对齐；宽度收敛到 100% 与 160px 两档，内联宽度与内联开关样式清零；pytest 294 passed |
 
 ---
 
@@ -50,8 +51,10 @@
     锚点必须 `behavior:'auto'` 且滚 `.content`（`.main` 是 overflow:hidden，smooth 动画不跑等于没反应）
   - 文件：新增 `downloadkit/static/js/help.js`、`index.html`、`css/main.css`、`js/app.js`、`js/utils.js`
 
-- [ ] **P1-6 控件样式统一**
-  - 只留三种模式：标签在上 / 开关带一句说明 / 下拉右对齐；统一间距与宽度
+- [x] **P1-6 控件样式统一**（2026-09-27 完成）
+  - 只留三种模式：标签在上 `.f-label` / 开关带一句说明 `.f-switch` + `.f-hint` / 下拉右对齐 `.f-row`
+  - 间距与宽度统一：宽度只有 `100%` 与 `160px` 两档，内联 width 与内联开关样式在设置页清零
+  - 范围限定设置页；订阅页卡片头的行内下拉（句中嵌入）保持原样
   - 文件：`downloadkit/static/index.html`、`css/main.css`
 
 **P1 验收**：视觉走查 → `pytest` 全量 → `build\build-release.ps1` 重打包 → 三项 exe 实测 → 分次提交
