@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20260927c">
+<link rel="stylesheet" href="css/main.css?v=20260927d">
 </head>
 <body>
 
@@ -294,7 +294,7 @@
               <div style="margin-bottom:16px;padding-top:0">
 
                 <div style="margin-bottom:10px">
-                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">基础下载目录 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
+                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">基础下载目录 <span class="eff eff-live">立即生效</span></label>
                   <div style="display:flex;gap:6px">
                     <input class="search-input" id="setting-download-dir" type="text" placeholder="~/Downloads/DownloadKit 或 D:\Downloads\DownloadKit" style="flex:1">
                     <button class="btn btn-secondary" id="setting-browse-dir" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
@@ -356,7 +356,7 @@
               </div>
 
                 <div style="margin-bottom:12px">
-                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">文件重名策略 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
+                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">文件重名策略 <span class="eff eff-restart">需重启</span></label>
                   <select class="search-input" id="setting-rename-strategy" style="width:160px">
                     <option value="skip">跳过</option>
                     <option value="rename">自动重命名</option>
@@ -374,12 +374,12 @@
             <section class="setting-group">
               <h4 class="setting-group-title"><i data-lucide="cpu"></i>应用</h4>
               <div style="margin-bottom:16px">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">最大并发下载数 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
+                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">最大并发下载数 <span class="eff eff-live">立即生效</span></label>
                 <input class="search-input" id="setting-max-concurrent" type="number" min="1" max="10" value="3" style="width:100px">
               </div>
 
               <div style="margin-bottom:16px">
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">日志级别 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
+                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">日志级别 <span class="eff eff-restart">需重启</span></label>
                 <select class="search-input" id="setting-log-level" style="width:140px">
                   <option value="DEBUG">DEBUG</option>
                   <option value="INFO">INFO</option>
@@ -389,7 +389,7 @@
               </div>
 
                 <div style="margin-bottom:0">
-                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">历史记录最大保留条数 <span style="font-size:11px;color:var(--warning);margin-left:8px">需重启</span></label>
+                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">历史记录最大保留条数 <span class="eff eff-restart">需重启</span></label>
                   <input class="search-input" id="setting-history-max-records" type="number" min="100" max="100000" value="1000" style="width:120px">
                 </div>
             </section>
@@ -417,14 +417,10 @@
               <div class="setting-subtitle">抖音扫码登录（订阅功能需要）</div>
               <!-- 抖音账号登录（新方案，优先用这个） -->
               <div style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
-                <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px;font-size:12px;line-height:1.6">
-                  <div style="color:var(--text-secondary)">
-                    <b>订阅创作者</b>功能需要登录抖音。点下面的按钮会弹出一个浏览器窗口，
-                    用抖音 App 扫码即可，<b>登录一次长期有效</b>，之后不用再管 Cookie。
-                  </div>
-                  <div style="color:var(--text-tertiary);margin-top:6px">
-                    ⚠ 登录窗口和下载不能同时进行，有下载任务时会暂时无法登录。
-                  </div>
+                <div style="margin-bottom:10px;font-size:12px;line-height:1.7;color:var(--text-secondary)">
+                  弹出浏览器窗口用抖音 App 扫码，登录一次长期有效。
+                  <span style="color:var(--text-tertiary)">有下载任务时无法登录，先把队列清空。</span>
+                  <a class="help-link" data-help="help-douyin" href="#">详细说明 →</a>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   <button class="btn btn-primary" id="dy-login-btn" style="padding:6px 14px;font-size:13px">扫码登录抖音</button>
@@ -438,30 +434,12 @@
               <div class="setting-subtitle">Cookie（旧方案，抖音/B站可改用扫码）</div>
               <div style="margin-bottom:16px">
 
-                <!-- Cookie 说明卡片（新增） -->
-                <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12px;line-height:1.6">
-                  <div style="font-weight:500;margin-bottom:6px">🔑 哪些平台需要 Cookie？</div>
-                  <div style="color:var(--text-secondary);margin-bottom:8px">
-                    ✅ <b>抖音</b>：必须（否则视频解析失败）&nbsp;&nbsp;
-                    ✅ <b>B站</b>：建议（1080P 高清需登录）<br>
-                    ❌ <b>YouTube / 小红书 / 网易云</b>：公开内容不需要
-                  </div>
-                  <div style="font-weight:500;margin-bottom:6px">📄 Cookie 文件格式（任选一种）：</div>
-                  <ul style="margin:0 0 8px 16px;color:var(--text-secondary);padding:0">
-                    <li><b>纯文本</b>：<code style="background:var(--bg-tertiary);padding:1px 4px">name1=value1; name2=value2</code></li>
-                    <li><b>JSON</b>：<code style="background:var(--bg-tertiary);padding:1px 4px">{"name1": "value1", "name2": "value2"}</code></li>
-                    <li><b>Netscape</b>：<code style="background:var(--bg-tertiary);padding:1px 4px"># Netscape HTTP Cookie File</code> 开头的 tab 分隔格式（yt-dlp 风格）</li>
-                  </ul>
-                  <div style="font-weight:500;margin-bottom:6px">🛠 怎么获取 Cookie？</div>
-                  <ol style="margin:0 0 8px 20px;color:var(--text-secondary);padding:0">
-                    <li>在浏览器（Edge/Chrome）中登录目标网站</li>
-                    <li>按 F12 → <b>Application</b> → <b>Cookies</b> → 复制需要的键值对</li>
-                    <li>粘贴到下方文本框，或保存为文件后再选文件</li>
-                  </ol>
-                  <div style="font-size:11px;color:var(--text-tertiary)">💡 下方的"从浏览器读取"按钮可以一键从 Edge / Chrome 中读取已登录的 Cookie</div>
+                <div style="margin-bottom:12px;font-size:12px;line-height:1.7;color:var(--text-secondary)">
+                  哪些平台需要 Cookie、三种文件格式、F12 怎么取，都写在解答页里。
+                  <a class="help-link" data-help="help-cookie" href="#">Cookie 配置详解 →</a>
                 </div>
 
-                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">抖音 Cookie 文件路径 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
+                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">抖音 Cookie 文件路径 <span class="eff eff-live">立即生效</span></label>
                 <input class="search-input" id="setting-cookie-douyin" type="text" placeholder="~/.downloadkit/cookies/douyin.json" style="width:100%">
 
                 <!-- 抖音 Cookie 助手（新增：登录并获取） -->
@@ -476,7 +454,7 @@
                 </div>
 
                 <div style="margin-top:12px">
-                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">B站 Cookie 文件路径 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
+                  <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">B站 Cookie 文件路径 <span class="eff eff-live">立即生效</span></label>
                   <input class="search-input" id="setting-cookie-bilibili" type="text" placeholder="~/.downloadkit/cookies/bilibili.json" style="width:100%">
                 </div>
 
@@ -507,7 +485,7 @@
                 <div style="display:flex;align-items:center;gap:8px">
                   <label style="font-size:13px;color:var(--text-secondary)">关闭窗口时最小化到托盘</label>
                   <input type="checkbox" id="setting-close-to-tray" style="width:18px;height:18px;cursor:pointer">
-                  <span style="font-size:11px;color:var(--text-secondary)">开启后程序常驻后台，订阅检查不中断 <span style="color:var(--warning)">下次启动生效</span></span>
+                  <span style="font-size:11px;color:var(--text-secondary)">开启后程序常驻后台，订阅检查不中断 <span class="eff eff-next">下次启动生效</span></span>
                 </div>
               </div>
             </section>

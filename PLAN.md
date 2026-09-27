@@ -13,6 +13,7 @@
 | 2026-09-27 | P1-3 | 设置页只留总目录，4 分类收进高级折叠 + 只读路径预览；顺手修了根目录 change 不同步分类的既有 bug；pytest 263 passed |
 | 2026-09-27 | P1-2 | 设置页重排为 5 组卡片（下载/应用/网络/启动与后台/关于），网络组用子标题分三段；补 `.content` 缺失闭合，整份 HTML 标签首次严格配平；pytest 270 passed |
 | 2026-09-27 | P1-5 | 新增解答页 `panel-help`（不占侧边栏、设置页内链进出）：目录 6 锚点 + 下载目录/Cookie/扫码登录/代理说明 + FAQ 7 条 + 报错对照 6 行；锚点改瞬时滚 `.content`；pytest 279 passed |
+| 2026-09-27 | P1-4 | 备注治理：8 处生效提示统一为 `.eff` 药丸徽标（live/restart/next 三类）；Cookie 长卡与扫码登录长说明迁出设置页，改为 `data-help` 内链直达解答页；pytest 286 passed |
 
 ---
 
@@ -37,10 +38,10 @@
     `loadSettings` 异步填值后不同步，导致首次改根目录分类不跟着走 → 改为模块级 `lastDirRoot`
   - 文件：`downloadkit/static/index.html`、`js/settings.js`、`css/main.css`
 
-- [ ] **P1-4 备注治理**
-  - `立即生效 / 需重启 / 下次启动生效` 统一为一种小徽标
-  - 长文（Cookie 格式、扫码登录说明、报错解释）整体迁出设置页
-  - 文件：`downloadkit/static/index.html`
+- [x] **P1-4 备注治理**（2026-09-27 完成，长文迁去 P1-5 建好的解答页）
+  - `立即生效 / 需重启 / 下次启动生效` 统一为一种小徽标 `.eff`（+ `eff-live/restart/next` 三个语义类）
+  - Cookie 长卡、扫码登录长说明整体迁出设置页，原位置留一句话 + `data-help` 内链（点击直达解答页对应锚点）
+  - 文件：`downloadkit/static/index.html`、`css/main.css`
 
 - [x] **P1-5 新增「解答」页**（2026-09-27 完成；先建页，P1-4 才往里迁长文）
   - 新建 `panel-help`：**不占侧边栏导航**，从设置页内链进入，带返回（回进来的那个页面）

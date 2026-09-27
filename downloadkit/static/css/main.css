@@ -338,6 +338,37 @@ body {
   margin-bottom: 8px;
 }
 
+/* ========== 设置页：生效方式徽标（P1-4 统一成一种样式）========== */
+.eff {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  font-weight: 500;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.eff-live { color: var(--success); }
+.eff-restart { color: var(--warning); }
+.eff-next { color: var(--warning); }
+
+/* 设置页 → 解答页的内链 */
+.help-link {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.help-link:hover { border-bottom-style: solid; }
+
 /* ========== 解答页（P1-5）========== */
 .help-head {
   display: flex;
