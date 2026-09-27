@@ -15,6 +15,7 @@
 | 2026-09-27 | P1-5 | 新增解答页 `panel-help`（不占侧边栏、设置页内链进出）：目录 6 锚点 + 下载目录/Cookie/扫码登录/代理说明 + FAQ 7 条 + 报错对照 6 行；锚点改瞬时滚 `.content`；pytest 279 passed |
 | 2026-09-27 | P1-4 | 备注治理：8 处生效提示统一为 `.eff` 药丸徽标（live/restart/next 三类）；Cookie 长卡与扫码登录长说明迁出设置页，改为 `data-help` 内链直达解答页；pytest 286 passed |
 | 2026-09-27 | P1-6 | 控件三模式统一：`.f-label` 标签在上 / `.f-switch` 开关带说明 / `.f-row` 下拉右对齐；宽度收敛到 100% 与 160px 两档，内联宽度与内联开关样式清零；pytest 294 passed |
+| 2026-09-27 | P1 整体验收 | 重打包 105.86MB → `test-exe.ps1` 6 个 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（playwright 进包、抖音登录有效、抓 55 作品零下载）；红线三处 0/0/1 不变，无残留进程 |
 
 ---
 
@@ -57,7 +58,7 @@
   - 范围限定设置页；订阅页卡片头的行内下拉（句中嵌入）保持原样
   - 文件：`downloadkit/static/index.html`、`css/main.css`
 
-**P1 验收**：视觉走查 → `pytest` 全量 → `build\build-release.ps1` 重打包 → 三项 exe 实测 → 分次提交
+**P1 验收**（2026-09-27 全部通过）：视觉走查 ✓ → `pytest` 全量 294 passed / 6 skipped ✓ → `build\build-release.ps1` 重打包 105.86MB ✓ → 三项 exe 实测（`test-exe.ps1` 6 个 API 全 200、`test-exe-tray.py` **33/33**、`test-exe-douyin.py` **9/9**）✓ → 红线三处文件数 0 / 0 / 1 与打包前一致 ✓ → 分次提交 ✓
 
 ---
 
