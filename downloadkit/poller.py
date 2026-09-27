@@ -16,6 +16,7 @@
 
 import asyncio
 import random
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -31,6 +32,17 @@ MAX_INTERVAL = 1440          # 24 小时
 DEFAULT_INTERVAL = 60
 MIN_JITTER = 0
 MAX_JITTER = 50
+
+# 检查方式（P2-2）：
+#   interval  每隔 interval_minutes 检查一次（原有行为）
+#   daily_at  每天在 daily_at 这个时刻检查一次
+MODES = ("interval", "daily_at")
+DEFAULT_DAILY_AT = "09:00"
+# daily_at 模式的随机抖动上限（秒）。固定到秒地敲同样是一种固定节律，
+# 抖一点站点看不出规律；0-3 分钟用户完全无感。
+DAILY_JITTER_MAX = 180
+
+_DAILY_AT_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 # 退避封顶：连续触发风控时最长等 24 小时，不无限翻倍
 MAX_BACKOFF_MINUTES = 24 * 60
@@ -52,11 +64,27 @@ def _clamp_int(value, lo: int, hi: int, default: int) -> int:
     return max(lo, min(hi, n))
 
 
+def _valid_daily_at(value) -> str:
+    """把任意值修成合法的 'HH:MM'（00:00-23:59），修不了回落 09:00。
+
+    配置文件可能被手改成 `9点`、`25:70`、`''` 这类东西，静默修正是
+    这个模块对配置的一贯态度（见 _clamp_int）——修完 load_settings
+    返回的就是实际生效值，前端回读时显示的是真的那个时间。
+    """
+    m = _DAILY_AT_RE.match(str(value or "").strip())
+    if not m:
+        return DEFAULT_DAILY_AT
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+
 def load_settings() -> dict:
     """读轮询配置，做边界裁剪（配置文件可能被手改成离谱的值）"""
     sec = load_config().get("subscription") or {}
+    mode = str(sec.get("mode") or "").strip()
     return {
         "enabled": bool(sec.get("enabled", False)),
+        "mode": mode if mode in MODES else "interval",
+        "daily_at": _valid_daily_at(sec.get("daily_at")),
         "interval_minutes": _clamp_int(
             sec.get("interval_minutes"), MIN_INTERVAL, MAX_INTERVAL, DEFAULT_INTERVAL
         ),
@@ -73,6 +101,11 @@ def save_settings(**kwargs) -> dict:
     """更新轮询配置。只写传入的字段，返回裁剪后的完整配置。"""
     current = load_settings()
     updates = {k: v for k, v in kwargs.items() if v is not None}
+    if "mode" in updates:
+        m = str(updates["mode"] or "").strip()
+        updates["mode"] = m if m in MODES else "interval"
+    if "daily_at" in updates:
+        updates["daily_at"] = _valid_daily_at(updates["daily_at"])
     if "enabled" in updates:
         updates["enabled"] = bool(updates["enabled"])
     if "interval_minutes" in updates:
@@ -346,20 +379,55 @@ def _apply_backoff(cfg: dict) -> None:
 # 主循环
 # ==================================================================
 
+def _wait_until_daily(at: str) -> float:
+    """到下一个 daily_at 的秒数，外加 0~DAILY_JITTER_MAX 的随机抖动。
+
+    今天这个点已经过了就算明天的：09:01 打开「每天 09:00」的开关，
+    该等的是明天 09:00，而不是立刻跑一轮。
+
+    首轮是例外：_compute_wait 会把「从没跑过」的等待压到 15 秒，
+    让用户打开开关马上看到效果，跑完这一轮才进入每天的节律 ——
+    否则等上十几个小时才见第一次检查，会被当成开关没生效。
+    """
+    hh, mm = 9, 0
+    try:
+        h, m = str(at).split(":")
+        hh, mm = int(h), int(m)
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    now = datetime.now()
+    target = now.replace(
+        hour=max(0, min(23, hh)), minute=max(0, min(59, mm)),
+        second=0, microsecond=0,
+    )
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds() + random.uniform(0, DAILY_JITTER_MAX)
+
+
 def _compute_wait(cfg: dict) -> float:
     """算下一次醒来等多久。
 
-    正常 = interval ± jitter；退避未过则至少等到退避结束。
+    两种检查方式（P2-2）：
+      · interval  按 interval ± jitter
+      · daily_at  等到下一个每天固定时刻，加 0~3 分钟随机抖动
 
-    三步的顺序有讲究，不能随便调：
-      1. 先按 interval ± jitter 算，再套 60 秒下限 —— 保证不会忙轮询
+    两种模式共用的三步（顺序有讲究，不能随便调）：
+      1. 先按模式算出基础 wait，再套 60 秒下限 —— 保证不会忙轮询
       2. 从没跑过 → 提前到 FIRST_RUN_DELAY，让打开开关马上看到效果
          （必须在下限**之后**做，否则 15 秒会被下限顶回 60 秒，形同虚设）
-      3. 退避最后做，且只往上抬 —— 风控退避的优先级高于一切
+      3. 退避最后做，且只往上抬 —— 风控退避的优先级高于一切，
+         每天定时的那一轮也一样要让路（模式换掉的只是「基础等待」）
     """
-    base = cfg["interval_minutes"] * 60
-    jitter = base * cfg["jitter_percent"] / 100.0
-    wait = max(60.0, base + random.uniform(-jitter, jitter))
+    if cfg.get("mode") == "daily_at":
+        wait = _wait_until_daily(cfg.get("daily_at") or DEFAULT_DAILY_AT)
+    else:
+        base = cfg["interval_minutes"] * 60
+        jitter = base * cfg["jitter_percent"] / 100.0
+        wait = base + random.uniform(-jitter, jitter)
+
+    wait = max(60.0, wait)
 
     # 从没跑过 → 快速来一轮
     if not _state["last_run_at"]:

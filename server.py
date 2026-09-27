@@ -1610,6 +1610,8 @@ async def api_subscriptions_scope(sec_uid: str, req: ScopeSubscriptionRequest):
 class PollerConfigRequest(BaseModel):
     """轮询配置，None = 不改"""
     enabled: Optional[bool] = None
+    mode: Optional[str] = None            # interval | daily_at（P2-2 双模式）
+    daily_at: Optional[str] = None        # "HH:MM"，仅 daily_at 模式用
     interval_minutes: Optional[int] = None
     max_new_per_check: Optional[int] = None
     jitter_percent: Optional[int] = None
@@ -1635,6 +1637,8 @@ async def api_subscriptions_poller_config(req: PollerConfigRequest):
         before = poller.load_settings().get("enabled")
         settings = poller.save_settings(
             enabled=req.enabled,
+            mode=req.mode,
+            daily_at=req.daily_at,
             interval_minutes=req.interval_minutes,
             max_new_per_check=req.max_new_per_check,
             jitter_percent=req.jitter_percent,

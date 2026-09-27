@@ -17,6 +17,7 @@
 | 2026-09-27 | P1-6 | 控件三模式统一：`.f-label` 标签在上 / `.f-switch` 开关带说明 / `.f-row` 下拉右对齐；宽度收敛到 100% 与 160px 两档，内联宽度与内联开关样式清零；pytest 294 passed |
 | 2026-09-27 | P1 整体验收 | 重打包 105.86MB → `test-exe.ps1` 6 个 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（playwright 进包、抖音登录有效、抓 55 作品零下载）；红线三处 0/0/1 不变，无残留进程 |
 | 2026-09-27 | P2-1 | 每创作者下载范围（`only_new`/`backfill_n`/`all`；`since_date` 缺时间源已确认缓做）：加列迁移、补下候选按 `task_id` 判重、N 为累计上限、增量优先吃配额；`mark_works_seen` 改冲突时补登任务号（原 `INSERT OR IGNORE` 会让补下每轮重下同一批）；卡片行内下拉+N 输入、all 前置 confirm；`tests/test_download_scope.py` 22 例，pytest 316 passed |
+| 2026-09-27 | P2-2 | 定时检查双模式：`mode=interval\|daily_at` + `daily_at=HH:MM`，每天定时加 0~3 分钟抖动、退避仍优先、首轮仍 15 秒；前端「检查方式」下拉切两个 label 显隐，`bindPollerField` 加 transform；`tests/test_poller.py` +28 例，pytest 344 passed；走查零错误且全程未跑轮询 |
 
 ---
 
@@ -80,10 +81,16 @@
   - 测试：`tests/test_download_scope.py` 22 例（含反复检查不重复入队、增量优先、探针零入队、迁移幂等）
   - 文件：`downloadkit/subscription.py`、`subscription_service.py`、`server.py`、`js/subscriptions.js`、`css/main.css`
 
-- [ ] **P2-2 定时检查双模式**
+- [x] **P2-2 定时检查双模式**（2026-09-27 完成）
   - `mode = interval | daily_at` + `daily_at="09:00"`，状态区显示「下次检查 14:30」
-  - 保留现有间隔模式与风控指数退避
-  - 文件：`downloadkit/poller.py`、`index.html`、`js/subscriptions.js`
+  - 保留现有间隔模式与风控指数退避：退避优先级高于每天定时（只抬基础等待）
+  - daily_at 等到下一个时刻再加 0~3 分钟随机抖动（固定到秒敲也是固定节律）；
+    今天已过等明天；首轮仍 15 秒（打开开关马上见效，之后才进入每天节律）
+  - 配置校验静默修正（`_valid_daily_at`），回读显示实际生效值
+  - 前端：「检查方式」下拉切换「检查间隔 / 每天时刻(time)」两个 label 显隐，
+    `bindPollerField` 加 `transform` 参数（mode/daily_at 是字符串，原来写死 `parseInt`）
+  - 测试：`tests/test_poller.py` 新增 28 例（取值校验、跨天翻转、抖动、首轮、退避优先、界面结构）
+  - 文件：`downloadkit/poller.py`、`server.py`、`index.html`、`js/subscriptions.js`
 
 - [ ] **P2-3 下载策略入口**
   - 手动「检查全部更新」前可选：下载开关 / 单轮上限 / 范围

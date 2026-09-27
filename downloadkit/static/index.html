@@ -189,7 +189,13 @@
 
             <div id="sub-poller-options" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
               <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--text-secondary)">
-                <label>检查间隔
+                <label>检查方式
+                  <select class="search-input" id="sub-poller-mode" style="width:auto;margin-left:6px;padding:4px 6px;font-size:12px">
+                    <option value="interval">按间隔</option>
+                    <option value="daily_at">每天定时</option>
+                  </select>
+                </label>
+                <label id="sub-poller-interval-label">检查间隔
                   <select class="search-input" id="sub-poller-interval" style="width:auto;margin-left:6px;padding:4px 6px;font-size:12px">
                     <option value="15">15 分钟</option>
                     <option value="30">30 分钟</option>
@@ -199,6 +205,11 @@
                     <option value="720">12 小时</option>
                     <option value="1440">24 小时</option>
                   </select>
+                </label>
+                <label id="sub-poller-daily-label" style="display:none">每天时刻
+                  <input type="time" id="sub-poller-daily" value="09:00" step="60"
+                         style="margin-left:6px;padding:3px 6px;font-size:12px;color:var(--text-primary);
+                                background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px">
                 </label>
                 <label>单轮最多下载
                   <select class="search-input" id="sub-poller-maxnew" style="width:auto;margin-left:6px;padding:4px 6px;font-size:12px">
@@ -683,7 +694,7 @@
 <script src="js/queue.js?v=20260927a"></script>
 <script src="js/settings.js?v=20260927a"></script>
 <script src="js/douyin-login.js?v=20260926a"></script>
-<script src="js/subscriptions.js?v=20260927a"></script>
+<script src="js/subscriptions.js?v=20260927b"></script>
 <script src="js/collections.js?v=20260724b"></script>
 <script src="js/help.js?v=20260927c"></script>
 <script src="js/app.js?v=20260927c"></script>

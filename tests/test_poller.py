@@ -12,6 +12,7 @@
 
 import asyncio
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -593,3 +594,151 @@ def test_status_snapshot_is_serializable(cfg, temp_db):
 
 def test_is_round_running_false_by_default():
     assert poller.is_round_running() is False
+
+
+# ------------------------------------------------------------------
+# 每天定时模式（P2-2）
+# ------------------------------------------------------------------
+
+def test_mode_defaults_to_interval(cfg):
+    """老配置升级后行为不变：没有 mode 字段就是按间隔"""
+    s = poller.load_settings()
+    assert s["mode"] == "interval"
+    assert s["daily_at"] == "09:00"
+
+
+@pytest.mark.parametrize("raw, want", [
+    ("daily_at", "daily_at"),
+    ("interval", "interval"),
+    ("  daily_at  ", "daily_at"),     # 手改配置带空格
+    ("whenever", "interval"),         # 非法 → 回落
+    ("", "interval"),
+    (None, "interval"),
+    (123, "interval"),
+])
+def test_mode_validated(cfg, raw, want):
+    cfg["subscription"]["mode"] = raw
+    assert poller.load_settings()["mode"] == want
+
+
+@pytest.mark.parametrize("raw, want", [
+    ("09:00", "09:00"),
+    ("9:30", "09:30"),        # 补零
+    ("23:59", "23:59"),
+    ("0:00", "00:00"),
+    ("09:60", "09:00"),       # 分钟越界 → 回落
+    ("24:00", "09:00"),       # 小时越界
+    ("9:5", "09:00"),         # 分钟必须两位
+    ("早上九点", "09:00"),
+    ("", "09:00"),
+    (None, "09:00"),
+])
+def test_daily_at_validated(cfg, raw, want):
+    cfg["subscription"]["daily_at"] = raw
+    assert poller.load_settings()["daily_at"] == want
+
+
+def test_save_settings_persists_mode(cfg):
+    out = poller.save_settings(mode="daily_at", daily_at="21:05")
+    assert out["mode"] == "daily_at"
+    assert out["daily_at"] == "21:05"
+    assert cfg["subscription"]["mode"] == "daily_at", "没写进配置"
+
+    out = poller.save_settings(mode="haha")
+    assert out["mode"] == "interval", "非法模式写入时必须回落"
+
+    out = poller.save_settings(daily_at="25:00")
+    assert out["daily_at"] == "09:00", "非法时刻写入时必须回落"
+
+
+def test_wait_until_daily_rolls_to_tomorrow_when_passed():
+    """今天这个点已经过了 → 等明天的（≈23 小时，留出 0~3 分钟抖动）"""
+    passed = (datetime.now() - timedelta(hours=1)).strftime("%H:%M")
+    w = poller._wait_until_daily(passed)
+    assert 22 * 3600 < w <= 24 * 3600 + poller.DAILY_JITTER_MAX
+
+
+def test_wait_until_daily_today_when_ahead():
+    ahead = (datetime.now() + timedelta(hours=1)).strftime("%H:%M")
+    w = poller._wait_until_daily(ahead)
+    assert 3600 - 60 <= w <= 3600 + poller.DAILY_JITTER_MAX + 60
+
+
+def test_wait_until_daily_jitters():
+    """同一天的同一时刻不能每次算出一样的等待（固定节律会撞风控）"""
+    at = (datetime.now() + timedelta(hours=2)).strftime("%H:%M")
+    waits = {round(poller._wait_until_daily(at)) for _ in range(20)}
+    assert len(waits) > 1, "daily_at 模式没有抖动"
+
+
+def test_compute_wait_daily_mode(cfg):
+    cfg["subscription"]["mode"] = "daily_at"
+    cfg["subscription"]["daily_at"] = (
+        datetime.now() + timedelta(hours=2)
+    ).strftime("%H:%M")
+    poller._state["last_run_at"] = "2026-09-26 10:00:00"
+
+    w = poller._compute_wait(poller.load_settings())
+    assert 2 * 3600 - 60 <= w <= 2 * 3600 + poller.DAILY_JITTER_MAX + 60, \
+        f"daily_at 模式没有等到目标时刻（wait={w:.0f}s）"
+
+
+def test_daily_mode_first_run_is_soon(cfg):
+    """每天定时模式也要给首轮 15 秒：打开开关马上见效，之后才进入每天节律"""
+    cfg["subscription"]["mode"] = "daily_at"
+    cfg["subscription"]["daily_at"] = "09:00"
+    poller._state["last_run_at"] = ""
+    w = poller._compute_wait(poller.load_settings())
+    assert 14 <= w <= 16
+
+
+def test_daily_mode_still_honours_backoff(cfg):
+    """风控退避优先级高于每天定时 —— 模式换掉的只是基础等待"""
+    cfg["subscription"]["mode"] = "daily_at"
+    cfg["subscription"]["daily_at"] = (
+        datetime.now() + timedelta(hours=1)
+    ).strftime("%H:%M")
+    poller._state["last_run_at"] = "2026-09-26 10:00:00"
+    poller._state["backoff_until"] = (
+        datetime.now() + timedelta(hours=5)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
+    w = poller._compute_wait(poller.load_settings())
+    assert w >= 5 * 3600 - 5, f"退避 5 小时却只等 {w:.0f}s"
+
+
+def test_status_includes_mode(cfg, temp_db):
+    cfg["subscription"]["mode"] = "daily_at"
+    cfg["subscription"]["daily_at"] = "07:30"
+    st = poller.status()
+    assert st["mode"] == "daily_at"
+    assert st["daily_at"] == "07:30"
+
+
+# ------------------------------------------------------------------
+# 双模式的界面
+# ------------------------------------------------------------------
+
+STATIC = Path(__file__).resolve().parent.parent / "downloadkit" / "static"
+
+
+def test_poller_mode_controls_in_html():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'id="sub-poller-mode"' in html, "缺检查方式下拉"
+    assert 'value="daily_at"' in html, "缺每天定时选项"
+    assert 'id="sub-poller-daily"' in html, "缺时刻输入框"
+    assert '<input type="time"' in html, "时刻输入要用 time 控件"
+    assert 'id="sub-poller-interval-label"' in html, \
+        "检查间隔标签缺 id，renderPoller 没法切显隐"
+
+
+def test_poller_mode_rendered_in_js():
+    js = (STATIC / "js" / "subscriptions.js").read_text(encoding="utf-8")
+    assert "daily_at" in js
+    assert "'sub-poller-daily'" in js, "没绑时刻输入"
+    assert "'sub-poller-mode'" in js, "没绑方式选择"
+    # 状态文案要按模式分家
+    assert "每天 <b>" in js or "每天 <b>' +" in js, "缺每天定时的状态文案"
+    # bindPollerField 的 transform 扩展：mode/daily_at 是字符串，
+    # 没有恒等 transform 就会被 parseInt 吃成 NaN
+    assert "transform" in js, "bindPollerField 缺 transform 参数"

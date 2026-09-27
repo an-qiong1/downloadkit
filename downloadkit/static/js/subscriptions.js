@@ -183,6 +183,17 @@
     var mx = el('sub-poller-maxnew');
     if (mx && document.activeElement !== mx) mx.value = String(p.max_new_per_check);
 
+    // 双模式（P2-2）：方式决定显示「检查间隔」还是「每天时刻」
+    var isDaily = p.mode === 'daily_at';
+    var md = el('sub-poller-mode');
+    if (md && document.activeElement !== md) md.value = isDaily ? 'daily_at' : 'interval';
+    var dv = el('sub-poller-daily');
+    if (dv && document.activeElement !== dv) dv.value = p.daily_at || '09:00';
+    var ivLabel = el('sub-poller-interval-label');
+    if (ivLabel) ivLabel.style.display = isDaily ? 'none' : '';
+    var dlLabel = el('sub-poller-daily-label');
+    if (dlLabel) dlLabel.style.display = isDaily ? '' : 'none';
+
     if (!box) return;
     if (!p.enabled) {
       box.style.display = 'none';
@@ -197,8 +208,13 @@
     if (inBackoff || p.needs_login) { tone = 'rgba(220,38,38,0.10)'; fg = 'var(--error)'; }
 
     var lines = [];
-    lines.push('每 <b>' + fmtInterval(p.interval_minutes) + '</b> 检查一次' +
-               '（±' + p.jitter_percent + '% 随机浮动）');
+    if (isDaily) {
+      lines.push('每天 <b>' + escHtml(p.daily_at || '09:00') + '</b> 检查一次' +
+                 '（±3 分钟随机浮动）');
+    } else {
+      lines.push('每 <b>' + fmtInterval(p.interval_minutes) + '</b> 检查一次' +
+                 '（±' + p.jitter_percent + '% 随机浮动）');
+    }
 
     if (p.running) {
       lines.push('<span style="color:var(--warning)">正在检查中…</span>');
@@ -251,12 +267,14 @@
     });
   }
 
-  function bindPollerField(id, key, labelOf) {
+  function bindPollerField(id, key, labelOf, transform) {
     var sel = el(id);
     if (!sel) return;
     sel.addEventListener('change', function () {
       var patch = {};
-      patch[key] = parseInt(sel.value, 10);
+      // 默认按数字解析（间隔、上限、抖动都是数）；
+      // mode / daily_at 这类字符串字段传恒等 transform 进来
+      patch[key] = (transform || function (v) { return parseInt(v, 10); })(sel.value);
       sel.disabled = true;
       savePoller(patch).then(function () {
         showMsg(labelOf(sel), 'ok');
@@ -569,6 +587,12 @@
       });
     });
 
+    bindPollerField('sub-poller-mode', 'mode', function (sel) {
+      return sel.value === 'daily_at' ? '已改为每天定时检查' : '已改为按间隔检查';
+    }, function (v) { return v; });
+    bindPollerField('sub-poller-daily', 'daily_at', function (sel) {
+      return '每天 ' + sel.value + ' 自动检查';
+    }, function (v) { return v; });
     bindPollerField('sub-poller-interval', 'interval_minutes', function (sel) {
       return '检查间隔已改为 ' + fmtInterval(parseInt(sel.value, 10));
     });
