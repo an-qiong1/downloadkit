@@ -386,14 +386,52 @@
     });
   }
 
+  // ---- 本次检查策略（P2-3）----
+  // 控件是静态 HTML，默认值就是原有行为（下载、单轮 1 个、跟随各创作者），
+  // 不落库；每次点「检查全部更新」现读现用。
+  function readStrategy() {
+    var dl = el('strat-download');
+    var mx = el('strat-maxnew');
+    var sc = el('strat-scope');
+    var n = el('strat-n');
+    var nVal = 3;
+    if (n) {
+      nVal = parseInt(n.value, 10);
+      if (!(nVal >= 1 && nVal <= 9999)) nVal = 3;
+    }
+    return {
+      download: dl ? !!dl.checked : true,
+      max_new: mx ? parseInt(mx.value, 10) : MAX_NEW_PER_CHECK,
+      // '' = 跟随各创作者自己设的范围（后端不覆盖）
+      scope: sc ? sc.value : '',
+      scope_param: String(nVal)
+    };
+  }
+
   function checkAll() {
+    var strat = readStrategy();
+    if (strat.scope === 'all') {
+      // 与卡片上选「全部补下」同一个防呆：可能一次排队几十上百个
+      var ok = confirm(
+        '本次检查把所有创作者的历史作品全部补下？\n\n' +
+        '水位线之下没下过的作品会按单轮上限分批入队，' +
+        '已下载过的不会重复。'
+      );
+      if (!ok) return;
+    }
+
     var btn = el('sub-check-all');
     if (btn) { btn.disabled = true; btn.innerHTML = '检查中…'; }
     showMsg('正在逐个检查（串行，避免触发抖音限流），创作者多时耗时较长…', 'busy');
 
     api(API + '/check-all', {
       method: 'POST',
-      body: { download: true, max_new: MAX_NEW_PER_CHECK }
+      body: {
+        download: strat.download,
+        max_new: strat.max_new,
+        scope: strat.scope || undefined,   // undefined 会被 JSON 丢掉 = 跟随
+        scope_param: strat.scope === 'backfill_n' ? strat.scope_param : ''
+      }
     }).then(function (r) {
       if (r.skipped) {
         // 没真正跑：退避中 / 登录窗口开着 / 另一轮还在跑
@@ -402,9 +440,24 @@
       }
       var lines = (r.results || []).map(function (x) {
         if (x.error) return '· ' + escHtml(x.nickname || x.sec_uid) + '：' + escHtml(x.error);
-        if (x.baselined) return '· ' + escHtml(x.nickname || x.sec_uid) + '：建立基线，' + x.marked_as_seen + ' 个存量作品不下载';
+        if (x.baselined) {
+          var bl = '· ' + escHtml(x.nickname || x.sec_uid) + '：建立基线，' + x.marked_as_seen + ' 个存量作品不下载';
+          // 首查建基线时若策略选了补下，基线当轮就开始补（P2-1），说清楚
+          if (x.backfilled) {
+            bl += '，同时补下 ' + x.backfilled + ' 个历史作品';
+            if (x.backfill_left) bl += '（还剩 ' + x.backfill_left + ' 个）';
+          }
+          return bl;
+        }
         if (x.skipped) return '· ' + escHtml(x.nickname || x.sec_uid) + '：已暂停';
-        return '· ' + escHtml(x.nickname || x.sec_uid) + '：新作品 ' + x.new_count + ' 个，入队 ' + x.queued + ' 个';
+        var line = '· ' + escHtml(x.nickname || x.sec_uid) + '：新作品 ' + x.new_count + ' 个，入队 ' + x.queued + ' 个';
+        // 按策略补下的历史作品单独说清楚：queued 里混着增量和补下，
+        // 只报一个数用户分不清「新发的」还是「翻旧账的」
+        if (x.backfilled) {
+          line += '，补下历史 ' + x.backfilled + ' 个';
+          if (x.backfill_left) line += '（还剩 ' + x.backfill_left + ' 个待补）';
+        }
+        return line;
       });
       var head = '检查完成';
       if (r.rate_limited) head = '<b style="color:var(--error)">触发抖音风控，已自动退避</b>';
@@ -537,6 +590,39 @@
     saveScope(inp.dataset.sec, 'backfill_n', String(n));
   }
 
+  // 策略区的控件是静态 HTML，init 时绑一次即可。
+  // data-prev 记「上次确认过的值」，选 all 被取消时靠它回滚。
+  function bindStrategy() {
+    var sc = el('strat-scope');
+    if (sc) {
+      sc.dataset.prev = sc.value;
+      sc.addEventListener('change', function () {
+        if (sc.value === 'all') {
+          var ok = confirm(
+            '本次检查把所有创作者的历史作品全部补下？\n\n' +
+            '水位线之下没下过的作品会按单轮上限分批入队，' +
+            '已下载过的不会重复。'
+          );
+          if (!ok) { sc.value = sc.dataset.prev || ''; return; }
+        }
+        sc.dataset.prev = sc.value;
+        var lab = el('strat-n-label');
+        if (lab) lab.style.display = sc.value === 'backfill_n' ? '' : 'none';
+      });
+    }
+    var n = el('strat-n');
+    if (n) {
+      // 失焦时把越界值掰回 1-9999（服务端也校验，这里只是别把明显
+      // 手滑的值发出去），服务端用的是 validate_scope 同一套规则
+      n.addEventListener('change', function () {
+        var v = parseInt(n.value, 10);
+        if (!(v >= 1)) v = 1;
+        if (v > 9999) v = 9999;
+        n.value = v;
+      });
+    }
+  }
+
   // ---------- 绑定 ----------
 
   function isActive() {
@@ -562,6 +648,8 @@
       var t = e.target;
       if (t && t.closest && t.closest('#sub-check-all')) checkAll();
     });
+    // 检查策略（P2-3）：静态控件，直接绑
+    bindStrategy();
 
     var input = el('sub-url');
     if (input) {

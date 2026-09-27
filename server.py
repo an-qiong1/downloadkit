@@ -1708,6 +1708,10 @@ async def api_subscriptions_check(sec_uid: str, req: CheckCreatorRequest):
 class CheckAllRequest(BaseModel):
     download: bool = True
     max_new: int = 3
+    # P2-3 手动检查策略：scope 空 = 跟随各创作者自己设置的下载范围；
+    # 给值则本轮临时覆盖（不落库）。backfill_n 必须配合法的 scope_param。
+    scope: Optional[str] = None
+    scope_param: str = ""
 
 
 @app.post("/api/subscriptions/check-all")
@@ -1719,12 +1723,22 @@ async def api_subscriptions_check_all(req: CheckAllRequest):
     手动触发不计入退避，用户说了算。
     """
     from downloadkit import poller
+    from downloadkit.subscription import validate_scope
     try:
+        # scope 校验放在这里而不是 run_round 里：非法值要 400 中文报错
+        # 挡在开跑之前，不能等抓完主页才发现策略写错了
+        scope, scope_param = "", ""
+        if req.scope is not None:
+            scope, scope_param = validate_scope(req.scope, req.scope_param)
         return await poller.run_round(
             manual=True,
             download=req.download,
             max_new=req.max_new,
+            scope=scope,
+            scope_param=scope_param,
         )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         logger.error(f"批量检查失败: {e}", exc_info=True)
         raise HTTPException(500, f"批量检查失败：{e}")

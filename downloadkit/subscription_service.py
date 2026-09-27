@@ -297,7 +297,8 @@ def _budget(max_new: int, used: int = 0) -> int:
 
 
 async def _apply_backfill(rec: dict, video_ids: list[str], watermark: str,
-                          budget: int, nickname: str = "") -> dict:
+                          budget: int, nickname: str = "",
+                          scope: str = "", scope_param: str = "") -> dict:
     """按下载范围补下水位线之下的历史作品（P2-1）。
 
     与增量检查共用一套防重复：候选由 store.list_backfill_candidates
@@ -315,12 +316,15 @@ async def _apply_backfill(rec: dict, video_ids: list[str], watermark: str,
             必须和「不限」区分开，否则增量吃满配额时余量是 0，
             会被当成不限，把历史一口气全塞进队列）
         nickname: 入队任务的标题用
+        scope: 临时覆盖下载范围（P2-3 手动「检查全部更新」的策略），
+            空 = 用 rec 里各创作者自己设的。**不落库**，只影响本轮
+        scope_param: 配合 scope=backfill_n 的 N；空 = 用 rec 的
 
     Returns:
         {"backfilled": 本轮入队数, "left": 按范围还差几个, "task_ids": [...]}
         scope 为 only_new 时直接回全 0。
     """
-    scope = rec.get("download_scope") or "only_new"
+    scope = scope or rec.get("download_scope") or "only_new"
     sec_uid = rec["sec_uid"]
     if scope == "only_new":
         return {"backfilled": 0, "left": 0, "task_ids": []}
@@ -332,8 +336,10 @@ async def _apply_backfill(rec: dict, video_ids: list[str], watermark: str,
     if scope == "backfill_n":
         # N 是累计上限：先看水位线之下已经补过几个，还差多少补多少。
         # 没有这一步，每次检查都取「未下的前 N 个」，N 会被无限刷新。
+        # N 的来源优先级：本轮临时策略 > 各创作者自己设的。
+        raw = scope_param or rec.get("scope_param") or 0
         try:
-            target = int(rec.get("scope_param") or 0)
+            target = int(raw)
         except (TypeError, ValueError):
             target = 0
         already = store.count_backfilled(sec_uid, watermark)
@@ -376,6 +382,8 @@ async def check_creator(
     download: bool = True,
     max_new: int = DEFAULT_MAX_NEW,
     max_scrolls: int = CHECK_SCROLLS,
+    scope: str = "",
+    scope_param: str = "",
 ) -> dict:
     """检查一个创作者有没有新作品。
 
@@ -393,6 +401,9 @@ async def check_creator(
         download: False = 只检测不入队（用于「看看有没有更新」）
         max_new: 本次最多入队几个，0 = 不限制。超出的留到下次检查。
         max_scrolls: 抓主页时滚动次数
+        scope: 临时覆盖下载范围（P2-3 手动检查策略），空 = 用该创作者
+            自己设置的；只影响本轮，不写库
+        scope_param: 配合 scope=backfill_n 的 N，空 = 用自己设置的
 
     Returns:
         检查结果摘要
@@ -463,6 +474,7 @@ async def check_creator(
             bf = await _apply_backfill(
                 rec, info.video_ids, watermark, budget=_budget(max_new),
                 nickname=info.nickname or rec["nickname"],
+                scope=scope, scope_param=scope_param,
             )
             if bf["backfilled"] or bf["left"]:
                 result["queued"] = bf["backfilled"]
@@ -574,6 +586,7 @@ async def check_creator(
         rec, info.video_ids, rec.get("baseline_max_id") or "",
         budget=_budget(max_new, fresh_slots),
         nickname=info.nickname or rec["nickname"],
+        scope=scope, scope_param=scope_param,
     )
     if bf["backfilled"]:
         result["queued"] += bf["backfilled"]
@@ -601,7 +614,8 @@ async def check_creator(
     return result
 
 
-async def check_all(download: bool = True, max_new: int = DEFAULT_MAX_NEW) -> dict:
+async def check_all(download: bool = True, max_new: int = DEFAULT_MAX_NEW,
+                    scope: str = "", scope_param: str = "") -> dict:
     """检查所有启用的订阅
 
     串行执行，不并发。理由：
@@ -612,6 +626,13 @@ async def check_all(download: bool = True, max_new: int = DEFAULT_MAX_NEW) -> di
     遇到下面两种情况会**立即中断整轮**，不继续逐个试：
       · RateLimited —— 已经触发风控，再敲只会更严
       · LoginRequired —— 没登录，每个创作者都会以同样方式失败
+
+    Args:
+        download: False = 只发现不入队
+        max_new: 单轮入队上限，0 = 不限
+        scope: 临时覆盖下载范围（P2-3 手动检查策略），空 = 各创作者
+            自己设置的；逐个透传给 check_creator，不落库
+        scope_param: 配合 scope=backfill_n 的 N
 
     Returns:
         results / total / queued / new_found，
@@ -626,7 +647,9 @@ async def check_all(download: bool = True, max_new: int = DEFAULT_MAX_NEW) -> di
 
     for c in creators:
         try:
-            r = await check_creator(c["sec_uid"], download=download, max_new=max_new)
+            r = await check_creator(c["sec_uid"], download=download,
+                                    max_new=max_new,
+                                    scope=scope, scope_param=scope_param)
         except RateLimited as e:
             # 风控：停止本轮，后续交由调度器指数退避
             logger.warning(f"抖音触发风控，中断本轮检查：{e}")

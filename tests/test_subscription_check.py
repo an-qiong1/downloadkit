@@ -296,7 +296,8 @@ async def test_check_all_reports_per_creator_errors(env, monkeypatch):
     """一个创作者失败不影响其它创作者"""
     calls = {"n": 0}
 
-    async def boom(sec_uid, download=True, max_new=3, max_scrolls=3):
+    async def boom(sec_uid, download=True, max_new=3, max_scrolls=3, **kw):
+        # **kw 接住 check_all 透传的 scope / scope_param（P2-3 策略）
         calls["n"] += 1
         if sec_uid == SEC:
             raise RuntimeError("页面超时")

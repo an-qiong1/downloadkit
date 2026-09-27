@@ -231,7 +231,8 @@ def _backoff_minutes(base_interval: int, failures: int) -> int:
 
 
 async def run_round(manual: bool = False, download: bool = True,
-                    max_new: int | None = None) -> dict:
+                    max_new: int | None = None,
+                    scope: str = "", scope_param: str = "") -> dict:
     """跑一轮检查。
 
     自动轮询和手动「检查全部更新」都走这里，靠 round_lock 串起来，
@@ -250,6 +251,9 @@ async def run_round(manual: bool = False, download: bool = True,
                  max_new_per_check。手动接口必须能覆盖它 —— 测试期
                  前端固定传 1，如果这里只读配置，接口上的 max_new
                  会被静默丢掉
+        scope: 临时覆盖下载范围（P2-3 手动检查策略），空 = 各创作者
+                 自己设置的。自动轮询不传，永远跟随
+        scope_param: 配合 scope=backfill_n 的 N
 
     Returns:
         本轮结果摘要；跳过时带 skipped=True 和 reason
@@ -287,7 +291,8 @@ async def run_round(manual: bool = False, download: bool = True,
         try:
             from . import subscription_service as svc
             result = await svc.check_all(
-                download=download, max_new=effective_max_new
+                download=download, max_new=effective_max_new,
+                scope=scope, scope_param=scope_param,
             )
         except Exception as e:
             # check_all 自己会捕获大部分异常，走到这里说明是意外

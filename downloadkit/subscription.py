@@ -205,21 +205,17 @@ def set_creator_enabled(sec_uid: str, enabled: bool) -> bool:
         return cur.rowcount > 0
 
 
-def set_creator_scope(sec_uid: str, scope: str, param: str = "") -> dict:
-    """设置某创作者的下载范围（P2-1）。
+def validate_scope(scope, param: str = "") -> tuple[str, str]:
+    """校验并规范化下载范围与参数，纯校验不碰数据库（P2-1/P2-3）。
 
-    Args:
-        sec_uid: 创作者 ID
-        scope: only_new（只下订阅后新发的，默认）
-             / backfill_n（往回补 param 个）
-             / all（水位线之下的历史全补下）
-        param: 仅 backfill_n 用，1-9999 的整数
+    卡片上的「范围」与「检查全部更新」的临时策略共用这一份规则 ——
+    两处各写一份，迟早一边放宽一边收紧，行为就分裂了。
 
     Returns:
-        更新后的订阅记录
+        (scope, param)：规范化后的取值；非 backfill_n 模式 param 恒为空串
 
     Raises:
-        ValueError: 范围取值非法，或 backfill_n 的 param 不是合法整数
+        ValueError: 取值非法，或 backfill_n 的 param 不是 1-9999 的整数
     """
     scope = (scope or "").strip()
     if scope not in SCOPES:
@@ -238,8 +234,28 @@ def set_creator_scope(sec_uid: str, scope: str, param: str = "") -> dict:
         param = str(n)
     else:
         # 另外两种模式不带参数，顺手清掉残留值，免得来回切之后
-        # 数据库里躺着一个没人读的旧 N，读出来误导排查
+        # 留一个没人读的旧 N，读出来误导排查
         param = ""
+    return scope, param
+
+
+def set_creator_scope(sec_uid: str, scope: str, param: str = "") -> dict:
+    """设置某创作者的下载范围（P2-1）。
+
+    Args:
+        sec_uid: 创作者 ID
+        scope: only_new（只下订阅后新发的，默认）
+             / backfill_n（往回补 param 个）
+             / all（水位线之下的历史全补下）
+        param: 仅 backfill_n 用，1-9999 的整数
+
+    Returns:
+        更新后的订阅记录
+
+    Raises:
+        ValueError: 范围取值非法，或 backfill_n 的 param 不是合法整数
+    """
+    scope, param = validate_scope(scope, param)
 
     with _db_lock:
         _init_db()

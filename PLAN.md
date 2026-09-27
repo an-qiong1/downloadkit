@@ -18,6 +18,7 @@
 | 2026-09-27 | P1 整体验收 | 重打包 105.86MB → `test-exe.ps1` 6 个 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（playwright 进包、抖音登录有效、抓 55 作品零下载）；红线三处 0/0/1 不变，无残留进程 |
 | 2026-09-27 | P2-1 | 每创作者下载范围（`only_new`/`backfill_n`/`all`；`since_date` 缺时间源已确认缓做）：加列迁移、补下候选按 `task_id` 判重、N 为累计上限、增量优先吃配额；`mark_works_seen` 改冲突时补登任务号（原 `INSERT OR IGNORE` 会让补下每轮重下同一批）；卡片行内下拉+N 输入、all 前置 confirm；`tests/test_download_scope.py` 22 例，pytest 316 passed |
 | 2026-09-27 | P2-2 | 定时检查双模式：`mode=interval\|daily_at` + `daily_at=HH:MM`，每天定时加 0~3 分钟抖动、退避仍优先、首轮仍 15 秒；前端「检查方式」下拉切两个 label 显隐，`bindPollerField` 加 transform；`tests/test_poller.py` +28 例，pytest 344 passed；走查零错误且全程未跑轮询 |
+| 2026-09-27 | P2-3 | 手动检查策略入口：折叠区（下载开关/单轮上限/范围），默认值=原行为不落库；范围临时覆盖透传 `CheckAllRequest→run_round→check_all→check_creator→_apply_backfill`，校验抽 `validate_scope` 与卡片共用、开跑前 400 拦下；`tests/test_check_strategy.py` 20 例，pytest 364 passed |
 
 ---
 
@@ -92,9 +93,19 @@
   - 测试：`tests/test_poller.py` 新增 28 例（取值校验、跨天翻转、抖动、首轮、退避优先、界面结构）
   - 文件：`downloadkit/poller.py`、`server.py`、`index.html`、`js/subscriptions.js`
 
-- [ ] **P2-3 下载策略入口**
-  - 手动「检查全部更新」前可选：下载开关 / 单轮上限 / 范围
-  - 文件：`js/subscriptions.js`、`index.html`
+- [x] **P2-3 下载策略入口**（2026-09-27 完成）
+  - 「检查全部更新」上方加折叠策略区：下载开关 / 单轮上限 / 下载范围
+  - 默认值 = 改造前行为（下载、单轮 1 个、跟随各创作者设置），**不落库**，
+    每次点检查现读现用；范围选 `all` 与卡片同样前置 confirm
+  - 范围临时覆盖走完整链路：`CheckAllRequest` → `run_round` → `check_all`
+    → `check_creator` → `_apply_backfill`，全程只影响本轮，绝不写 `creators`
+  - 校验在开跑前拦（`validate_scope` 与卡片 `set_creator_scope` 同一函数，
+    非法值 400 中文报错，不等抓完主页才发现策略写错）
+  - 结果行区分「新作品入队」与「补下历史 N 个（还剩 M）」
+  - 测试：`tests/test_check_strategy.py` 20 例（不落库、开跑前拦截、
+    两层透传、策略受配额约束、界面默认值锁死）
+  - 文件：`server.py`、`downloadkit/poller.py`、`subscription.py`、
+    `subscription_service.py`、`index.html`、`js/subscriptions.js`
 
 - [ ] **P2-4 订阅卡片状态**
   - 显示上次检查时间 + 结果或中文失败原因

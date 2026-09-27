@@ -227,6 +227,38 @@
           <!-- 总览 -->
           <div id="sub-stats" style="display:flex;gap:16px;font-size:12px;color:var(--text-secondary);margin-bottom:10px;align-items:center;flex-wrap:wrap"></div>
 
+          <!-- 本次检查策略（P2-3）：默认收起，点「检查全部更新」时读当前值。
+               默认值 = 现有行为（下载、单轮 1 个、跟随各创作者设置），不改任何人的订阅配置 -->
+          <details id="sub-check-strategy" style="margin:-4px 0 10px">
+            <summary style="cursor:pointer;font-size:12px;color:var(--text-tertiary);user-select:none">本次检查策略</summary>
+            <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text-secondary)">
+              <label style="display:flex;gap:6px;align-items:center;cursor:pointer;white-space:nowrap">
+                <input type="checkbox" id="strat-download" checked style="width:15px;height:15px;cursor:pointer"> 发现新作品就下载
+              </label>
+              <label style="white-space:nowrap">单轮最多
+                <select class="search-input" id="strat-maxnew" style="width:auto;margin-left:6px;padding:3px 6px;font-size:12px">
+                  <option value="1">1 个</option>
+                  <option value="3">3 个</option>
+                  <option value="5">5 个</option>
+                  <option value="0">不限</option>
+                </select>
+              </label>
+              <label style="white-space:nowrap">下载范围
+                <select class="search-input" id="strat-scope" style="width:auto;margin-left:6px;padding:3px 6px;font-size:12px">
+                  <option value="">跟随各创作者设置</option>
+                  <option value="only_new">仅新作品</option>
+                  <option value="backfill_n">往回补 N 个</option>
+                  <option value="all">全部补下</option>
+                </select>
+              </label>
+              <label id="strat-n-label" style="display:none;white-space:nowrap">N
+                <input type="number" id="strat-n" min="1" max="9999" value="3"
+                       style="width:66px;margin-left:6px;padding:3px 6px;font-size:12px;color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px">
+              </label>
+              <span style="color:var(--text-tertiary);font-size:11px">仅对本次手动检查生效，不修改各创作者的订阅设置</span>
+            </div>
+          </details>
+
           <!-- 列表 -->
           <div id="sub-list"></div>
         </div>
@@ -694,7 +726,7 @@
 <script src="js/queue.js?v=20260927a"></script>
 <script src="js/settings.js?v=20260927a"></script>
 <script src="js/douyin-login.js?v=20260926a"></script>
-<script src="js/subscriptions.js?v=20260927b"></script>
+<script src="js/subscriptions.js?v=20260927c"></script>
 <script src="js/collections.js?v=20260724b"></script>
 <script src="js/help.js?v=20260927c"></script>
 <script src="js/app.js?v=20260927c"></script>
