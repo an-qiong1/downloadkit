@@ -267,6 +267,18 @@ class DownloadQueue:
         
         return completed_ids
 
+    def dismiss_task(self, task_id: str) -> bool:
+        """手动把任务移出队列（前端点已完成项后调用），返回是否真的移除了
+
+        与 cleanup_completed 同一套清理：除了 active_tasks，还要把暂停/取消
+        集合里的残留一起丢掉，否则同 id 复用时旧状态会串到新任务上。
+        """
+        existed = task_id in self.active_tasks
+        self.active_tasks.pop(task_id, None)
+        self._paused_tasks.discard(task_id)
+        self._cancelled_tasks.discard(task_id)
+        return existed
+
 
 # 全局实例
 download_queue = DownloadQueue(max_concurrent=3)

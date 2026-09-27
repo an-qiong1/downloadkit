@@ -91,6 +91,9 @@ class PlaylistRequest(BaseModel):
 class OpenDirRequest(BaseModel):
     path: str = ""  # 文件相对路径，为空则打开下载根目录
 
+class OpenFileRequest(BaseModel):
+    path: str = ""  # 文件名或相对路径（队列任务只记文件名，可传裸文件名）
+
 class BatchDeleteRequest(BaseModel):
     files: list[str]  # 文件相对路径列表
 
@@ -417,6 +420,30 @@ def _is_container():
     return False
 
 
+def _build_headless_info(target: Path, title: str = "目录位置",
+                         hint: str = "该目录在 NAS 上的位置：") -> dict:
+    """容器 / headless 模式：拼出文件或目录在 NAS 上的位置信息，由前端弹窗展示"""
+    download_dir = get_download_dir()
+
+    rel_path = str(target.relative_to(download_dir)) if target != download_dir else ''
+    info = {
+        "status": "headless",
+        "path": str(target),
+        "container_path": str(target),
+        "nas_path": os.environ.get('NAS_FILES_PATH', ''),
+        "smb_path": os.environ.get('NAS_SMB_PATH', ''),
+        "base_url": os.environ.get('NAS_BASE_URL', ''),
+        "rel_path": rel_path,
+        "title": title,
+        "hint": hint,
+    }
+    if info["nas_path"] and rel_path:
+        info["nas_path"] = os.path.join(info["nas_path"], rel_path).replace('\\', '/')
+    if info["smb_path"] and rel_path:
+        info["smb_path"] = os.path.join(info["smb_path"], rel_path).replace('/', '\\')
+    return info
+
+
 @app.post("/api/open-dir")
 async def api_open_dir(req: OpenDirRequest):
     """打开文件所在目录（容器内返回路径信息由前端弹窗展示）"""
@@ -441,21 +468,7 @@ async def api_open_dir(req: OpenDirRequest):
     
     # ── 容器 / headless 模式：返回路径信息，由前端弹窗展示 ──
     if _is_container():
-        rel_path = str(dir_path.relative_to(download_dir)) if dir_path != download_dir else ''
-        info = {
-            "status": "headless",
-            "path": str(dir_path),
-            "container_path": str(dir_path),
-            "nas_path": os.environ.get('NAS_FILES_PATH', ''),
-            "smb_path": os.environ.get('NAS_SMB_PATH', ''),
-            "base_url": os.environ.get('NAS_BASE_URL', ''),
-            "rel_path": rel_path,
-        }
-        if info["nas_path"] and rel_path:
-            info["nas_path"] = os.path.join(info["nas_path"], rel_path).replace('\\', '/')
-        if info["smb_path"] and rel_path:
-            info["smb_path"] = os.path.join(info["smb_path"], rel_path).replace('/', '\\')
-        return info
+        return _build_headless_info(dir_path)
     
     # ── 桌面环境：直接调用系统文件管理器 ──
     try:
@@ -468,6 +481,66 @@ async def api_open_dir(req: OpenDirRequest):
         return {"status": "opened", "path": str(dir_path)}
     except Exception as e:
         raise HTTPException(500, f"打开目录失败: {str(e)}")
+
+
+def _resolve_open_file(path: str) -> Path:
+    """把前端给的文件名或相对路径解析成下载目录内的真实文件。
+
+    队列任务只记文件名（不带目录），而文件实际落在 videos/images/animated/music
+    等分类子目录里，所以先按给定路径做标准安全解析（拦截遍历与越界），
+    404 时再拿文件名在下载目录内递归查找。
+    """
+    download_dir = get_download_dir()
+
+    path = (path or "").strip()
+    if not path:
+        raise HTTPException(400, "缺少文件路径")
+
+    try:
+        direct = safe_download_path(path, download_dir, check_exists=True)
+    except HTTPException as e:
+        # 只有「文件不存在」才允许走文件名递归查找；
+        # 遍历（PathTraversalError）与越界（FileOutsideBaseError）必须原样抛出
+        if e.status_code != 404:
+            raise
+    else:
+        if direct.is_file():
+            return direct
+        raise HTTPException(400, "目标不是文件")
+
+    # 404：可能只给了裸文件名 —— 在下载目录内按名字找（同名取排序第一个）
+    name = Path(path).name
+    if not name or name in ('.', '..'):
+        raise HTTPException(404, "文件不存在或已被移动")
+    matches = sorted(p for p in download_dir.rglob(name) if p.is_file())
+    if not matches:
+        raise HTTPException(404, "文件不存在或已被移动")
+    return matches[0]
+
+
+@app.post("/api/open-file")
+async def api_open_file(req: OpenFileRequest):
+    """打开下载目录内的文件（桌面调系统默认程序，容器内返回路径信息）"""
+    import platform
+
+    filepath = _resolve_open_file(req.path)
+
+    # ── 容器 / headless 模式：返回路径信息，由前端弹窗展示 ──
+    if _is_container():
+        return _build_headless_info(filepath, title="文件位置",
+                                    hint="该文件在 NAS 上的位置：")
+
+    # ── 桌面环境：用系统默认程序打开文件 ──
+    try:
+        if platform.system() == 'Windows':
+            os.startfile(str(filepath))  # noqa: S606
+        elif platform.system() == 'Darwin':
+            subprocess.Popen(['open', str(filepath)])
+        else:
+            subprocess.Popen(['xdg-open', str(filepath)])
+        return {"status": "opened", "path": str(filepath)}
+    except Exception as e:
+        raise HTTPException(500, f"打开文件失败: {str(e)}")
 
 @app.post("/api/utils/list-directories")
 async def api_list_directories(req: ListDirectoriesRequest):
@@ -1388,6 +1461,28 @@ async def api_retry_failed():
         and task_id not in download_queue.active_tasks
     )
     return {"status": "ok", "retried": retried, "orphaned": orphaned}
+
+
+@app.post("/api/queue/{task_id}/dismiss")
+async def api_dismiss_task(task_id: str):
+    """把已结束的任务从「进行中」列表移除（点已完成项打开文件后调用）。
+
+    必须同时清 download_queue.active_tasks 和 _downloads：queue/status 会把
+    _downloads 里队列中没有的任务再拼回列表，只删一边等于没删，刷新就复活。
+    进行中（pending/downloading/paused）的任务拒绝移除 —— 任务实体还在跑，
+    删了列表状态会和真实进度脱钩。
+    """
+    task = download_queue.active_tasks.get(task_id)
+    if task is None and task_id not in _downloads:
+        raise HTTPException(404, "任务不存在")
+    if task is not None and task.status in (
+        TaskStatus.PENDING, TaskStatus.DOWNLOADING, TaskStatus.PAUSED
+    ):
+        raise HTTPException(409, "任务还在进行中，不能移除")
+
+    download_queue.dismiss_task(task_id)
+    _downloads.pop(task_id, None)
+    return {"status": "dismissed"}
 
 
 # ========== 设置接口 ==========

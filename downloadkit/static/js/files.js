@@ -19,10 +19,22 @@
     api('/api/files').then(function(data) {
       state.files = data.files || [];
       
+      // 裁剪选中：刷新后已删除/不再存在的文件不许继续留在选中集里，
+      // 否则「删除选中 (N)」会一直挂着旧计数（Bug⑤）
+      var pruned = {};
+      state.files.forEach(function(f) {
+        if (selectedFiles[f.path]) pruned[f.path] = true;
+      });
+      selectedFiles = pruned;
+      
       if (state.files.length === 0) {
         listEl.innerHTML = '';
         emptyEl.style.display = 'block';
         st.style.display = 'none';
+        // 空列表也要复位全选框和工具栏计数，不能停在上一次的「删除选中 (N)」
+        $('#select-all').checked = false;
+        $('#select-all').indeterminate = false;
+        updateFilesToolbar();
         return;
       }
       
@@ -116,6 +128,19 @@
         });
       });
       
+      // 恢复仍有效的勾选（重绘出来的框默认全不勾，勾选状态存在 selectedFiles 里）
+      var visibleSelected = 0;
+      $$('.file-select', listEl).forEach(function(checkbox) {
+        if (selectedFiles[checkbox.dataset.path]) {
+          checkbox.checked = true;
+          visibleSelected++;
+        }
+      });
+      var allBox = $('#select-all');
+      allBox.checked = visibleSelected > 0 && visibleSelected === state.files.length;
+      allBox.indeterminate = visibleSelected > 0 && visibleSelected < state.files.length;
+      updateFilesToolbar();
+      
       // 绑定单文件删除按钮事件
       $$('.file-delete-btn', listEl).forEach(function(btn) {
         btn.addEventListener('click', function(e) {
@@ -126,6 +151,9 @@
               .then(function(result) {
                 if (result.deleted && result.deleted.length > 0) {
                   toast('已删除', 'success');
+                  // 单删也要同步移出选中集，否则计数残留
+                  delete selectedFiles[filepath];
+                  updateFilesToolbar();
                   refreshFiles();
                 } else {
                   toast('删除失败', 'error');
@@ -194,11 +222,11 @@
     
     modal.innerHTML =
       '<div class="remote-path-header">' +
-        '<h4 class="remote-path-title"><i data-lucide="folder-open"></i> 目录位置</h4>' +
+        '<h4 class="remote-path-title"><i data-lucide="folder-open"></i> ' + escHtml(info.title || '目录位置') + '</h4>' +
         '<button class="icon-btn remote-path-close" id="rp-close" title="关闭"><i data-lucide="x"></i></button>' +
       '</div>' +
       '<div class="remote-path-body">' +
-        '<p class="remote-path-hint">该目录在 NAS 上的位置：</p>' +
+        '<p class="remote-path-hint">' + escHtml(info.hint || '该目录在 NAS 上的位置：') + '</p>' +
         pathRows +
       '</div>' +
       '<div class="remote-path-footer">' +

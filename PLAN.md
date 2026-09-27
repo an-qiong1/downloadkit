@@ -23,6 +23,7 @@
 | 2026-09-27 | P2 验收 | 重打包 105.87MB → `test-exe.ps1` 6 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9；新增 `build/test-exe-backfill.py` 真实补下实测：backfill_n=2 入队 2 → 落盘 `videos` 1→3（+2 共 162MB，验收预期）→ 复查 `backfilled=0` 零重复 → 复原 only_new；两处落盘红线 0/0 不变，无残留进程 |
 | 2026-09-27 | P3 验收 | pytest 全量 430 passed / 6 skipped → 重打包 105.88MB → `test-exe.ps1` 6 API 全 200、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（含新托盘菜单「图标已启动」）；红线三处 0/0/3 不变，无残留进程 |
 | 2026-09-27 | 用户实测修复 | 订阅「预览成功、订阅必失败」三层连环修复：① `fetch_creator(max_scrolls=0)` 空保护无条件触发挡死所有新订阅 → 保护加滚动条件，`max_scrolls=0` 只取资料不抓列表；② 短链落裸首页被当成功且缓存坏结果 → 不缓存、不重试（省限流额度）、直接转浏览器回退；③ 回退遇「验证码中间页」→ RateLimited 穿透 → server 429 明确文案（原笼统 400）；④ 预览消息 `<b>` 字面显示 → 纯文本化；`test_subscribe_profile_only.py` 5 例（真 fetch_creator 链路，替身浏览器绕过实现的教训）+ `test_resolve_sec_uid.py` +7 例，pytest 442 passed；真实验证：主页直订 200、短链 429 验证码文案、复原删除 |
+| 2026-09-27 | P4-1 两个体验 Bug | Bug⑤ 选中残留：`refreshFiles` 裁剪 `selectedFiles`、空列表回位全选框+工具栏计数、单删同步移出选中集、重绘后恢复有效勾选；Bug⑥ 完成行点击无反应：完成行可点（`queue-item-done`）→ 新端点 `POST /api/open-file`（裸文件名在下载目录递归找分类子目录，遍历/越界 403 拦死、目录 400、缺失 404）打开文件 → `POST /api/queue/{id}/dismiss` 双侧清除（队列 + `_downloads`，只删一边刷新复活）、进行中任务 409 拒绝；headless 回文件路径弹窗（标题「文件位置」）；`tests/test_open_file.py` 17 例，pytest 458 passed |
 
 ---
 
@@ -157,6 +158,40 @@
   - **托盘快捷项**：菜单加「打开下载目录」「检查订阅更新」+ 分隔；两个动作抽 run.py 顶层函数（open_download_dir / check_subscription_update）便于单测 mock，检查动作起 daemon 线程不卡托盘 UI，气泡通知转后端 message；`test_tray_menu.py` 7 例（含 pystray 实际构造菜单）；点击无法自动化，构造与接线靠单测 + exe 日志断言覆盖
 
 **P3 验收**（2026-09-27 全部通过）：`pytest` 全量 **430 passed / 6 skipped** ✓ → `build\build-release.ps1` 重打包 105.88MB ✓ → 三项 exe 实测（`test-exe.ps1` 6 个 API 全 200、`test-exe-tray.py` **33/33**、`test-exe-douyin.py` **9/9**）✓ → 红线三处 0/0/3 与打包前一致、无残留进程 ✓ → 提交 ✓
+
+---
+
+## P4 体验优化（2026-09-27 用户实测提出，按四批走）
+
+用户拍板结论：命名日期用**视频发布日期**（要多抓一个字段）；格式 **`标题 2026-09-27.mp4`**（日期在后）；
+完成行**点行直接打开文件并自动移出「进行中」**；订阅备注**删到只剩一句**；真开关改 toggle、
+代理三态改分段按钮（全选/文件行复选框保留）；按下面四批顺序执行。
+
+- [x] **P4-1 两个交互 Bug**（2026-09-27 完成）
+  - Bug⑤「删除选中 (N)」计数残留：`files.js` 的 `refreshFiles` 刷新后裁剪 `selectedFiles`（只留仍存在的）、
+    空列表分支回位全选框与工具栏、单删成功同步 `delete selectedFiles[path]`、重绘后恢复仍有效勾选并同步全选框半选态
+  - Bug⑥ 已完成项点击无反应：完成行加 `queue-item-done`（cursor:pointer + 悬停提示），点击 →
+    `POST /api/open-file`（`_resolve_open_file`：先走 `safe_download_path` 安全校验，404 再按裸文件名在下载目录
+    递归找分类子目录里的文件；遍历/越界 403、目录 400、缺失 404）→ 成功后 `POST /api/queue/{id}/dismiss`
+    把任务从 `download_queue.active_tasks` 与 `_downloads` **双侧**移除（只删一边 queue/status 会拼回来）；
+    进行中（pending/downloading/paused）409 拒绝；headless 返回文件 NAS 路径弹窗
+  - 文件：`server.py`、`downloadkit/download_queue.py`（`dismiss_task`）、`js/files.js`、`js/queue.js`、`css/main.css`
+  - 测试：`tests/test_open_file.py` 17 例（安全解析 7 + 端点 2 + dismiss 5 + 前端接线 3），pytest 458 passed
+
+- [ ] **P4-2 文件命名：抖音按「标题 发布日期」**（格式 `标题 2026-09-27.mp4`）
+  - 发布日期取详情接口的 `create_time`（已确认多抓一个字段）；取不到时回落现有 `douyin_<作品ID>` 命名，不硬造
+  - 改造点：`douyin.py` 视频/动图图片命名与已存在检测、`server.py` 历史 title 提取同步；旧文件不批量重命名；
+    订阅增量判定走 aweme_id 水位线，与文件名无关
+  - 文件：`downloadkit/douyin.py`、`server.py`
+
+- [ ] **P4-3 UI 统一：组件样式 → toggle 开关 → 备注收敛**
+  - 统一按钮/输入框/开关设计 token，现代化、少备注
+  - 真开关（代理启用、关闭到托盘等）勾选框改**左右平移 toggle**；代理三态 radio 改**分段按钮**；
+    全选与文件行复选框保留 checkbox 语义不动
+  - 订阅块两条备注**删到只剩一句**（保留刷新间隔说明那句）
+  - 文件：`downloadkit/static/index.html`、`css/main.css`、`js/settings.js` 等
+
+- [ ] **P4-4 可选打磨**：自定义 confirm modal（替原生 `confirm`）、行内 style 收编进 class
 
 ---
 

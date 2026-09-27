@@ -93,8 +93,10 @@
         var icon = platformIcons[task.platform] || 'film';
         var statusIcon = statusIcons[task.status] || 'clock';
         var progress = Math.round(task.progress * 100);
+        var isDone = task.status === 'completed';
         
-        html += '<div class="queue-item" data-task-id="' + task.task_id + '">';
+        html += '<div class="queue-item' + (isDone ? ' queue-item-done' : '') + '" data-task-id="' + task.task_id + '"' +
+                (isDone ? ' title="点击打开文件"' : '') + '>';
         html += '<div class="queue-item-icon ' + task.status + '"><i data-lucide="' + statusIcon + '"></i></div>';
         html += '<div class="queue-item-info">';
         html += '<div class="queue-item-title">' + escHtml(task.title || '未知任务') + '</div>';
@@ -174,9 +176,45 @@
           }
         });
       });
+      
+      // 绑定完成项行点击：打开文件，成功后把它移出「进行中」列表（Bug⑥）
+      var taskById = {};
+      tasks.forEach(function(t) { taskById[t.task_id] = t; });
+      $$('.queue-item', listEl).forEach(function(row) {
+        row.addEventListener('click', function(e) {
+          if (e.target.closest('.queue-item-actions')) return;
+          var task = taskById[row.dataset.taskId];
+          if (!task || task.status !== 'completed') return;
+          openCompletedTask(task);
+        });
+      });
     }).catch(function(err) {
       console.error('获取队列状态失败:', err);
     });
+  }
+  
+  // 打开已完成任务的文件，成功后把它移出「进行中」列表
+  function openCompletedTask(task) {
+    if (!task.filename) {
+      toast('该任务没有记录文件名，无法打开', 'error');
+      return;
+    }
+    api('/api/open-file', { method: 'POST', body: { path: task.filename } })
+      .then(function(data) {
+        if (data.status === 'headless') {
+          // 容器环境：给出 NAS 路径，由弹窗展示
+          showRemotePathDialog(data);
+        } else {
+          toast('已打开文件', 'success');
+        }
+        return api('/api/queue/' + task.task_id + '/dismiss', { method: 'POST' });
+      })
+      .then(function() {
+        refreshQueue();
+      })
+      .catch(function(err) {
+        toast('打开文件失败：' + err.message, 'error');
+      });
   }
   
   // 刷新队列按钮
