@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "downloadkit"
-version = "0.4.0"
+version = "0.4.1"
 description = "Multi-platform resource downloader for music, Douyin, Bilibili, YouTube, Xiaohongshu and more"
 requires-python = ">=3.10"
 dependencies = [

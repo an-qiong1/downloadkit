@@ -1226,8 +1226,22 @@ async def resolve_short_url(
     """
     import httpx
 
-    if "v.douyin.com" not in url:
+    # 入口规整：调用方可能传进整段分享文案，或没带 scheme 的裸链接。
+    # httpx 对无 scheme 的输入不会在 build_request 时报错，而是拼出一个
+    # 相对路径，直到 send 时才抛 UnsupportedProtocol —— 于是白跑满 retries
+    # 次指数退避（2s+4s），再走一次注定失败的浏览器回退，最后返回原文，
+    # 调用方只能拿到一句「没找到创作者 ID」的误导性报错。
+    raw = (url or "").strip()
+    if raw and not raw.startswith(("http://", "https://")):
+        m = re.search(
+            r"[a-z0-9.-]*douyin\.com/[^\s一-鿿，。！？、）)]+",
+            raw,
+            re.IGNORECASE,
+        )
+        raw = "https://" + m.group(0) if m else ""
+    if not raw or "v.douyin.com" not in raw:
         return url
+    url = raw
 
     # 1) 缓存命中
     cached = _SHORT_URL_CACHE.get(url)

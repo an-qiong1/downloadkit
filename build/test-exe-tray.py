@@ -30,6 +30,17 @@ import urllib.request
 import winreg
 from ctypes import wintypes
 
+# 中文 Windows 控制台默认 GBK，打印 `«»`/emoji 这类字符会抛
+# UnicodeEncodeError，把整个测试脚本直接打断（2026-09-27 实测崩在 step [7]，
+# 差几步就跑完了）。保留原编码保证中文显示正常，只把打不出来的字符替换成 `?`
+# —— 宁可日志里多个问号，也不能中断测试。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        if _s is not None:
+            _s.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = os.path.join(ROOT, "dist", "downloadkit.exe")
 LOG = os.path.join(ROOT, "dist", "downloadkit.log")
@@ -293,8 +304,9 @@ def snapshot_files():
     for name, d in [
         ("项目 downloads/", os.path.join(ROOT, "downloads")),
         ("dist/downloads", os.path.join(ROOT, "dist", "downloads")),
-        ("用户 Downloads\\videos",
-         os.path.join(os.path.expanduser("~"), "Downloads", "videos")),
+        # 2026-09-27 起默认根目录是 DownloadKit 总文件夹（分类目录收在里面）
+        ("用户 Downloads\\DownloadKit\\videos",
+         os.path.join(os.path.expanduser("~"), "Downloads", "DownloadKit", "videos")),
     ]:
         cnt = 0
         if os.path.isdir(d):
@@ -459,13 +471,13 @@ def main():
             hwnds += top_windows(pid)
         w("  顶层窗口:")
         for h in hwnds:
-            w(f"      0x{h:X}  visible={is_visible(h)}  «{window_title(h)}»")
+            w(f"      0x{h:X}  visible={is_visible(h)}  [{window_title(h)}]")
         target, ttitle = pick_main_window(hwnds)
         if target is None:
             check("找到主窗口", False, "枚举不到可用的顶层窗口")
         else:
             check("找到主窗口", True,
-                  f"0x{target:X} «{ttitle}» visible={is_visible(target)}")
+                  f"0x{target:X} [{ttitle}] visible={is_visible(target)}")
             vis_before = is_visible(target)
             post_close(target)
             w("  已投递 WM_CLOSE")
@@ -525,13 +537,13 @@ def main():
             hwnds2 += top_windows(pid)
         w("  第二轮顶层窗口:")
         for h in hwnds2:
-            w(f"      0x{h:X}  visible={is_visible(h)}  «{window_title(h)}»")
+            w(f"      0x{h:X}  visible={is_visible(h)}  [{window_title(h)}]")
         target2, ttitle2 = pick_main_window(hwnds2)
         if target2 is None:
             check("找到第二轮主窗口", False, "枚举不到可用的顶层窗口")
         else:
             check("找到第二轮主窗口", True,
-                  f"0x{target2:X} «{ttitle2}» visible={is_visible(target2)}")
+                  f"0x{target2:X} [{ttitle2}] visible={is_visible(target2)}")
             post_close(target2)
             w("  已投递 WM_CLOSE")
             exited2 = False

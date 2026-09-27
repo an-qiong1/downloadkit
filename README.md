@@ -146,10 +146,17 @@ docs/                 # 文档、设计资料
 
 ### 下载目录
 
-默认下载目录为 `./downloads`，可通过以下方式修改：
+默认下载根目录为 `~/Downloads/DownloadKit`，分类文件夹（`music` /
+`videos` / `images` / `animated`）全部收在这个总文件夹里，不会直接散落在
+系统下载目录下。旧版默认值（`./downloads`、`~/Downloads`）会在启动时自动
+迁移：配置值一次跳到最新默认，磁盘上已有的旧分类目录一次性搬进总文件夹
+（同名不覆盖，搬不动的留在原地）。
 
-1. **环境变量**：`MUSIC_DL_DIR=/path/to/downloads`
+可通过以下方式修改：
+
+1. **环境变量**：`MUSIC_DL_DIR=/path/to/downloads`（Docker 场景，且此时不做迁移）
 2. **配置文件**：`~/.downloadkit/config.toml`
+3. **界面**：设置 → 下载目录（改总目录时，没单独自定义过的分类目录会跟着改）
 
 ### 代理设置
 
@@ -243,11 +250,11 @@ A: 目前支持：
 
 ### Q: 下载的文件保存在哪里？
 
-A: 默认在 `./downloads` 目录，按类型分类：
-- `./downloads/music/` - 音乐
-- `./downloads/videos/` - 视频
-- `./downloads/images/` - 图片
-- `./downloads/animated/` - 实况照片
+A: 默认在 `~/Downloads/DownloadKit` 目录，按类型分类：
+- `~/Downloads/DownloadKit/music/` - 音乐
+- `~/Downloads/DownloadKit/videos/` - 视频
+- `~/Downloads/DownloadKit/images/` - 图片
+- `~/Downloads/DownloadKit/animated/` - 实况照片
 
 ### Q: 如何批量下载？
 
@@ -326,6 +333,15 @@ MIT License
 欢迎提交 Issue 和 Pull Request！
 
 ## 更新日志
+
+### v0.4.1 (2026-09-27)
+
+- 🐛 修复创作者订阅「订阅」「预览」报 `DouyinBrowser is not iterable`（实参顺序 + 整段文案当 URL 两层根因）
+- 🐛 修复测试脚本 `test-exe-tray.py` 在中文控制台下 UnicodeEncodeError 崩溃
+- ✨ 窗口改为 1120×700 并在工作区居中（原来 1280×800 落在左上角）
+- ✨ 下载目录归到 `~/Downloads/DownloadKit` 总文件夹，四个分类目录收在里面；
+  旧目录启动时自动搬迁（同名不覆盖、搬不动的留原地）
+- ✅ 新增 32 个回归用例，全量 249 passed / 6 skipped
 
 ### v0.4.0 (2026-09-26)
 

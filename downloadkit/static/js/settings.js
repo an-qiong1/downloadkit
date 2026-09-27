@@ -8,15 +8,15 @@
       
       // General
       var gen = s.general || {};
-      $('#setting-download-dir').value = gen.download_dir || '~/Downloads';
+      $('#setting-download-dir').value = gen.download_dir || '~/Downloads/DownloadKit';
       $('#setting-max-concurrent').value = gen.max_concurrent || 3;
       $('#setting-log-level').value = gen.log_level || 'INFO';
 
       // Type-specific download dirs
-      $('#setting-download-dir-music').value = gen.download_dir_music || '~/Downloads/music';
-      $('#setting-download-dir-video').value = gen.download_dir_video || '~/Downloads/videos';
-      $('#setting-download-dir-animated').value = gen.download_dir_animated || '~/Downloads/animated';
-      $('#setting-download-dir-images').value = gen.download_dir_images || '~/Downloads/images';
+      $('#setting-download-dir-music').value = gen.download_dir_music || '~/Downloads/DownloadKit/music';
+      $('#setting-download-dir-video').value = gen.download_dir_video || '~/Downloads/DownloadKit/videos';
+      $('#setting-download-dir-animated').value = gen.download_dir_animated || '~/Downloads/DownloadKit/animated';
+      $('#setting-download-dir-images').value = gen.download_dir_images || '~/Downloads/DownloadKit/images';
       
       // Rename strategy
       if ($('#setting-rename-strategy')) {
@@ -123,6 +123,9 @@
       input.value = res.path;
       // 触发 input 事件让"实际路径"和"状态"实时刷新
       input.dispatchEvent(new Event('input', { bubbles: true }));
+      // 程序赋值不会自己发 change，手动补一个 —— 根目录的 change 监听靠它
+      // 把分类目录一起带过去（见 syncCategoryDirs）
+      input.dispatchEvent(new Event('change', { bubbles: true }));
       toast('已选择：' + res.path, 'success');
     })
     .catch(function(err) {
@@ -243,7 +246,7 @@
     if (!confirm('确定恢复默认设置？')) return;
     
     var defaults = {
-      general: { download_dir: '~/Downloads', download_dir_music: '~/Downloads/music', download_dir_video: '~/Downloads/videos', download_dir_animated: '~/Downloads/animated', download_dir_images: '~/Downloads/images', max_concurrent: 3, log_level: 'INFO', rename_strategy: 'skip', motion_photo_default: true, history_max_records: 1000, close_to_tray: false },
+      general: { download_dir: '~/Downloads/DownloadKit', download_dir_music: '~/Downloads/DownloadKit/music', download_dir_video: '~/Downloads/DownloadKit/videos', download_dir_animated: '~/Downloads/DownloadKit/animated', download_dir_images: '~/Downloads/DownloadKit/images', max_concurrent: 3, log_level: 'INFO', rename_strategy: 'skip', motion_photo_default: true, history_max_records: 1000, close_to_tray: false },
       proxy: { enabled: true, global: '', youtube: '', douyin: '', bilibili: '', xiaohongshu: '' },
       cookie: { douyin_path: '', bilibili_path: '' }
     };
@@ -296,8 +299,40 @@
     });
 
     // ===== 新增：下载目录相关事件 =====
+    // 根目录换了，分类目录跟着走 —— 只改「由根目录派生出来的」，
+    // 用户单独自定义过某个分类路径的不动（否则会把人家的手动设置冲掉）。
+    function joinDir(root, cat) {
+      return String(root || '').replace(/[\\/]+$/, '') + '/' + cat;
+    }
+    function syncCategoryDirs(oldRoot, newRoot) {
+      if (!oldRoot || !newRoot || oldRoot === newRoot) return;
+      // input 后缀 → 实际文件夹名（video 那一栏的文件夹叫 videos）
+      var cats = { music: 'music', video: 'videos', animated: 'animated', images: 'images' };
+      var changed = [];
+      Object.keys(cats).forEach(function(key) {
+        var el = $('#setting-download-dir-' + key);
+        if (!el) return;
+        var v = (el.value || '').trim();
+        // 空值 / 正好等于「旧根目录/分类名」= 派生值 → 跟着改
+        if (!v || v === joinDir(oldRoot, cats[key])) {
+          el.value = joinDir(newRoot, cats[key]);
+          changed.push(el.value);
+        }
+      });
+      if (changed.length) {
+        toast('分类目录已跟随更新：' + changed.length + ' 项', 'success');
+      }
+    }
+
     var dirInput = $('#setting-download-dir');
     if (dirInput) {
+      // 根目录失焦 / 被目录对话框改掉时，把分类目录一起带过去
+      var lastRoot = dirInput.value;
+      dirInput.addEventListener('change', function() {
+        syncCategoryDirs(lastRoot, dirInput.value);
+        lastRoot = dirInput.value;
+      });
+
       // 输入时实时更新"实际路径"显示
       var debounceTimer = null;
       dirInput.addEventListener('input', function() {

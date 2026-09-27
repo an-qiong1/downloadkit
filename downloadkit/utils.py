@@ -1,5 +1,6 @@
 import re
 import os
+import shutil
 import sys
 import tomllib
 try:
@@ -7,6 +8,10 @@ try:
 except ImportError:
     tomli_w = None
 from pathlib import Path
+
+from .logger import get_logger
+
+_log = get_logger("utils")
 
 
 def sanitize_filename(filename: str) -> str:
@@ -66,6 +71,118 @@ def get_download_subdir(category: str) -> Path:
     return subdir
 
 
+# 会从系统下载目录搬进总文件夹的分类目录名
+_LEGACY_CATEGORIES = {
+    "music": "download_dir_music",
+    "videos": "download_dir_video",
+    "animated": "download_dir_animated",
+    "images": "download_dir_images",
+}
+
+
+def _move_tree_contents(src, dst) -> dict:
+    """把 src 下的所有条目搬到 dst（同名不覆盖，源目录搬空才删）
+
+    Returns:
+        {"moved": [名字...], "errors": ["名字: 原因"...], "removed": bool}
+    """
+    moved, errors = [], []
+    dst.mkdir(parents=True, exist_ok=True)
+
+    for item in sorted(src.iterdir(), key=lambda p: p.name):
+        target = dst / item.name
+        if target.exists():
+            # 绝不覆盖：目标已存在就把源改名后搬，宁可多个 (1) 也不能吞文件
+            n = 1
+            while target.exists():
+                target = dst / f"{item.stem} ({n}){item.suffix}"
+                n += 1
+        try:
+            shutil.move(str(item), str(target))
+            moved.append(item.name)
+        except Exception as e:  # 文件被占用 / 权限不足 —— 留在原地，别中断
+            errors.append(f"{item.name}: {e}")
+
+    removed = False
+    try:
+        if not any(src.iterdir()):
+            src.rmdir()
+            removed = True
+    except Exception as e:
+        errors.append(f"删除旧目录 {src}: {e}")
+
+    return {"moved": moved, "errors": errors, "removed": removed}
+
+
+def migrate_legacy_download_dirs(config: dict | None = None) -> dict:
+    """把散落在系统下载目录下的旧分类文件夹搬进 DownloadKit 总文件夹
+
+    2026-09-27 用户反馈：装完直接在 `C:\\Users\\x\\Downloads` 下生成
+    music/、videos/、animated/ 三个软件自建目录，很脏。现在默认根目录改成了
+    `~/Downloads/DownloadKit`，但老用户目录里已经躺着文件，所以启动时一次性搬。
+
+    一次性、幂等，三条安全红线：
+      1. 只动「新路径 == 最新默认值」的分类目录 —— 用户自定义过路径的一律不碰
+      2. 同名冲突绝不覆盖：源条目改名 `<name> (1)` 再搬
+      3. 单个条目搬失败（被占用/没权限）就留在原地并记录，不中断启动、
+         源目录非空就绝不删除
+
+    Docker（设了 MUSIC_DL_DIR）直接跳过：那边的目录由 compose 挂载决定。
+
+    Returns:
+        {"skipped": 原因} 或
+        {"moved": 总数, "categories": {分类: {...}}, "errors": [...]}
+    """
+    if os.environ.get("MUSIC_DL_DIR"):
+        return {"skipped": "MUSIC_DL_DIR 已设置（Docker 场景不迁移）"}
+
+    cfg = config if config is not None else load_config()
+    gen = cfg.get("general", {}) or {}
+    root = Path(str(gen.get("download_dir", "") or "")).expanduser()
+    if not root.is_absolute():
+        return {"skipped": "download_dir 不是绝对路径"}
+
+    default_root = Path.home() / "Downloads" / "DownloadKit"
+    categories = dict(_LEGACY_CATEGORIES)
+    if root != default_root:
+        # 用户自定义了总目录：只有根目录也是默认值时，才认为分类目录是"老默认值"
+        return {"skipped": f"download_dir 已自定义为 {root}，跳过迁移"}
+
+    # others 没有独立配置项，永远是 root/others，一并处理
+    categories["others"] = ""
+
+    report = {"moved": 0, "categories": {}, "errors": []}
+
+    for cat, cfg_key in categories.items():
+        new_dir = root / cat
+        # 分类目录被单独自定义过 → 不碰
+        if cfg_key and str(gen.get(cfg_key, "") or "").strip():
+            cur = Path(str(gen[cfg_key])).expanduser()
+            if cur != new_dir:
+                report["categories"][cat] = {"skipped": f"已自定义为 {cur}"}
+                continue
+
+        legacy = Path.home() / "Downloads" / cat
+        try:
+            if not legacy.is_dir() or legacy == new_dir:
+                continue
+            res = _move_tree_contents(legacy, new_dir)
+        except Exception as e:
+            report["errors"].append(f"{cat}: {e}")
+            continue
+
+        report["categories"][cat] = res
+        report["moved"] += len(res["moved"])
+        report["errors"].extend(f"{cat}/{x}" for x in res["errors"])
+        if res["moved"] or res["removed"]:
+            _log.info(
+                f"下载目录迁移 [{cat}]: 搬了 {len(res['moved'])} 项到 {new_dir}"
+                + ("，旧目录已删除" if res["removed"] else "，旧目录保留")
+            )
+
+    return report
+
+
 def get_category_by_extension(filename: str) -> str:
     """根据文件扩展名判断分类"""
     ext = Path(filename).suffix.lower()
@@ -89,13 +206,15 @@ def get_category_by_extension(filename: str) -> str:
 
 DEFAULT_CONFIG: dict = {
     "general": {
-        # 默认下载根目录：Windows 通用位置（每台 Win10/11 都有）
+        # 默认下载根目录：系统下载目录下的 DownloadKit 总文件夹。
+        # 分类目录一律收在总文件夹里 —— 不能直接在 ~/Downloads 下散落
+        # music/、videos/ 这些软件自建目录（2026-09-27 用户反馈）。
         # 子目录会在 get_download_subdir() 中按需自动创建
-        "download_dir": "~/Downloads",
-        "download_dir_music": "~/Downloads/music",
-        "download_dir_video": "~/Downloads/videos",
-        "download_dir_animated": "~/Downloads/animated",
-        "download_dir_images": "~/Downloads/images",
+        "download_dir": "~/Downloads/DownloadKit",
+        "download_dir_music": "~/Downloads/DownloadKit/music",
+        "download_dir_video": "~/Downloads/DownloadKit/videos",
+        "download_dir_animated": "~/Downloads/DownloadKit/animated",
+        "download_dir_images": "~/Downloads/DownloadKit/images",
         "max_concurrent": 3,
         "log_level": "INFO",
         "language": "zh-CN",
@@ -180,41 +299,56 @@ def _normalize_config(raw: dict) -> dict:
 def _migrate_config(config: dict) -> dict:
     """自动迁移旧版默认值 → 新版默认值
 
-    背景：DEFAULT_CONFIG 历史上是 "./downloads"，2026-07 改成了 "~/Downloads"。
+    背景：DEFAULT_CONFIG 历史上改过两次默认下载目录：
+      ./downloads            （2026-05 初版）
+      ~/Downloads            （2026-07 改）
+      ~/Downloads/DownloadKit（2026-09-27 改，分类目录收进总文件夹）
     但用户的 config.toml 里已经存了旧值，load_config() 优先读文件值，
     导致新默认值永远不生效。
 
     迁移规则（只针对"显然是旧默认值"的值，用户手动改过的值不碰）：
-    - download_dir        == "./downloads"  或  ""  → "~/Downloads"
-    - download_dir_music  == "./downloads/music" 或 "" → "~/Downloads/music"
-    - download_dir_video  == "./downloads/videos" 或 "" → "~/Downloads/videos"
-    - download_dir_animated == "./downloads/animated" 或 "" → "~/Downloads/animated"
-    - download_dir_images == "./downloads/images" 或 "" → "~/Downloads/images"
+    每个 key 一条历史链，命中链上任意一档都直接跳到**最新**默认值
+    （一次到位，不用等两次启动才生效）。
 
     返回 (config, did_migrate)；调用方如需落盘可自行 save_config。
     """
-    # 旧值 → 新值的映射
+    # 历史链：旧默认值们 → 最新默认值（最后一项）
     _MIGRATIONS = {
-        "download_dir":         {"./downloads":        "~/Downloads"},
-        "download_dir_music":   {"./downloads/music":  "~/Downloads/music"},
-        "download_dir_video":   {"./downloads/videos": "~/Downloads/videos"},
-        "download_dir_animated": {"./downloads/animated": "~/Downloads/animated"},
-        "download_dir_images":  {"./downloads/images": "~/Downloads/images"},
+        "download_dir": [
+            "./downloads", "~/Downloads", "~/Downloads/DownloadKit",
+        ],
+        "download_dir_music": [
+            "./downloads/music", "~/Downloads/music",
+            "~/Downloads/DownloadKit/music",
+        ],
+        "download_dir_video": [
+            "./downloads/videos", "~/Downloads/videos",
+            "~/Downloads/DownloadKit/videos",
+        ],
+        "download_dir_animated": [
+            "./downloads/animated", "~/Downloads/animated",
+            "~/Downloads/DownloadKit/animated",
+        ],
+        "download_dir_images": [
+            "./downloads/images", "~/Downloads/images",
+            "~/Downloads/DownloadKit/images",
+        ],
     }
 
     gen = config.get("general", {}) or {}
     did_migrate = False
 
-    for key, mapping in _MIGRATIONS.items():
-        cur = gen.get(key, "") or ""
-        # 空值：填新默认值
-        if not cur.strip():
-            gen[key] = next(iter(mapping.values()))
+    for key, chain in _MIGRATIONS.items():
+        cur = (gen.get(key, "") or "").strip()
+        latest = chain[-1]
+        # 空值：填最新默认值
+        if not cur:
+            gen[key] = latest
             did_migrate = True
             continue
-        # 旧默认值：替换
-        if cur.strip() in mapping:
-            gen[key] = mapping[cur.strip()]
+        # 链上的历史默认值：一次跳到最新
+        if cur in chain and cur != latest:
+            gen[key] = latest
             did_migrate = True
 
     if did_migrate:

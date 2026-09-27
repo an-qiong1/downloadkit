@@ -45,7 +45,7 @@ def run_async(coro):
 
 
 @click.group()
-@click.version_option(version="0.4.0", prog_name="downloadkit")
+@click.version_option(version="0.4.1", prog_name="downloadkit")
 def main():
     """downloadkit -- Multi-platform resource downloader.
 

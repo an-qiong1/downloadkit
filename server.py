@@ -576,8 +576,11 @@ async def api_pick_directory(req: PickDirectoryRequest):
     import subprocess
     from pathlib import Path
 
-    # 处理 initial：相对路径展开 + 验证存在（不存在则回退到 ~/Downloads）
+    # 处理 initial：相对路径展开 + 验证存在（不存在则回退到当前下载根目录）
     initial = (req.initial or "").strip()
+    _fallback_dir = get_download_dir()
+    if not _fallback_dir.is_dir():
+        _fallback_dir = Path.home() / "Downloads"
     if initial:
         p = Path(initial).expanduser()
         if not p.is_absolute():
@@ -589,9 +592,9 @@ async def api_pick_directory(req: PickDirectoryRequest):
         if p.is_dir():
             initial = str(p)
         else:
-            initial = str(Path.home() / "Downloads")
+            initial = str(_fallback_dir)
     else:
-        initial = str(Path.home() / "Downloads")
+        initial = str(_fallback_dir)
 
     # PowerShell 单引号转义（避免注入：' → ''）
     initial_escaped = initial.replace("'", "''")
@@ -1869,6 +1872,19 @@ async def startup_event():
     cfg = load_config()
     history_max = cfg.get("general", {}).get("history_max_records", 1000)
     download_history.update_max_records(history_max)
+
+    # 下载目录归位：老版本把 music/、videos/ 直接生成在系统下载目录下，
+    # 现在默认根目录是 ~/Downloads/DownloadKit，启动时把旧分类目录搬进来。
+    # 一次性、幂等、只动默认路径（自定义过的一律不碰）；失败只记日志，不阻塞启动。
+    try:
+        from downloadkit.utils import migrate_legacy_download_dirs
+        mig = migrate_legacy_download_dirs(cfg)
+        if mig.get("moved"):
+            logger.info(f"下载目录迁移：共搬 {mig['moved']} 项进 DownloadKit 总文件夹")
+        if mig.get("errors"):
+            logger.warning(f"下载目录迁移有 {len(mig['errors'])} 项留在原地: {mig['errors']}")
+    except Exception as e:
+        logger.warning(f"下载目录迁移失败（不影响启动）: {e}")
 
     # 注册清理回调，清理 _downloads 字典
     def cleanup_downloads():

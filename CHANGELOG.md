@@ -5,6 +5,44 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.1] - 2026-09-27
+
+### 修复
+- **创作者订阅「订阅」「预览」一按就报
+  `argument of type 'DouyinBrowser' is not iterable`**：`subscription_service`
+  调 `resolve_short_url(browser, text)` 时实参顺序写反了，而签名是
+  `resolve_short_url(url, retries=3, browser=None)`，于是 url 收到的是浏览器
+  对象，函数里 `if "v.douyin.com" not in url` 直接 TypeError。两个按钮都先走
+  `_resolve_sec_uid()`，所以一起炸
+- 同一处还把**整段分享文案**当 URL 传了进去：httpx 对没 scheme 的输入不报错，
+  而是拼出相对路径、send 时才失败 → 白跑满 3 次指数退避（约 6 秒）→ 浏览器
+  兜底也失败 → 最后报一句误导性的「短链跳转后没找到创作者 ID」。现在先抽出
+  纯短链再传，`resolve_short_url` 入口也加了规整兜底
+- `build/test-exe-tray.py` 在中文（GBK）控制台打印 `«»` 抛
+  `UnicodeEncodeError`，脚本崩在第 7 步：保留原编码、打不出的字符替换成 `?`，
+  4 处 `«»` 换成 ASCII `[]`
+- 窗口 1280×800 且默认落在屏幕左上角（pywebview 不传 x/y 的默认行为）：
+  改为 1120×700，并按工作区（扣掉任务栏）居中，另加 `min_size=(1000, 640)`
+  防止拖太小把布局挤烂
+
+### 优化
+- **下载目录归到总文件夹**：默认根目录 `~/Downloads` → `~/Downloads/DownloadKit`，
+  `music` / `videos` / `images` / `animated` 四个分类目录收进总文件夹，
+  不再直接散落在系统下载目录下
+  - 旧配置值（`./downloads/*`、`~/Downloads/*`）启动时**一次**跳到最新默认
+  - 旧分类目录里的已有文件一次性搬进总文件夹：同名改名 `(1)` 绝不覆盖，
+    单个搬不动的留在原地、源目录非空绝不删除，Docker（`MUSIC_DL_DIR`）跳过
+  - 设置页改总目录时，没单独自定义过的分类目录跟着一起改
+- `test-exe-tray.py` 的下载红线基线跟随新路径 `Downloads\DownloadKit\videos`
+
+### 测试
+- 新增 `tests/test_resolve_sec_uid.py`（12 例）：钉死上面两层根因。
+  此前 11 处 `resolve_short_url` 用例全是直接调函数，没有一条走
+  `_resolve_sec_uid` 这个唯一调用方，所以这个 bug 一路溜到了线上
+- 新增 `tests/test_download_dirs.py`（20 例）：默认值、配置多跳迁移、
+  文件搬迁三条安全红线、幂等
+- 全量 `pytest`：**249 passed, 6 skipped**
+
 ## [0.4.0] - 2026-09-26
 
 ### 新增

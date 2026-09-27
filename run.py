@@ -23,8 +23,13 @@ from pathlib import Path
 HOST = "127.0.0.1"
 PORT = 8765
 WINDOW_TITLE = "DownloadKit"
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 800
+# 2026-09-27 用户反馈：1280×800 在 1080p（系统缩放 125%）下几乎占满屏，
+# 而且 pywebview 不给 x/y 时窗口默认落在屏幕左上角。改小一号并居中。
+WINDOW_WIDTH = 1120
+WINDOW_HEIGHT = 700
+# 拖到比这个更小，240px 侧边栏 + 内容区就排不开了
+WINDOW_MIN_WIDTH = 1000
+WINDOW_MIN_HEIGHT = 640
 WEBVIEW2_DOWNLOAD_URL = (
     "https://developer.microsoft.com/en-us/microsoft-edge/webview2/"
 )
@@ -297,6 +302,46 @@ def focus_existing_window() -> bool:
         return False
 
 
+def center_xy(width: int, height: int) -> tuple:
+    """算出主工作区正中的 (x, y)；任何一步失败都返回 (None, None)
+
+    返回 None 时不给 create_window 传 x/y，让系统用默认位置 ——
+    居中是锦上添花，绝不能因为算不出来就把窗口开失败。
+
+    用 SPI_GETWORKAREA 而不是屏幕分辨率：工作区已经扣掉任务栏，
+    居中才不会被任务栏压掉一条边。多显示器按主屏算
+    （不传 x/y 时 pywebview 本来也是落在主屏）。
+    """
+    try:
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+
+        SPI_GETWORKAREA = 0x0030
+        rect = RECT()
+        ok = ctypes.windll.user32.SystemParametersInfoW(
+            SPI_GETWORKAREA, 0, ctypes.byref(rect), 0
+        )
+        if not ok:
+            return None, None
+        wa_w = rect.right - rect.left
+        wa_h = rect.bottom - rect.top
+        if wa_w <= width or wa_h <= height:
+            # 窗口不比工作区小，居中没有意义，交给系统默认位置
+            return None, None
+        x = rect.left + (wa_w - width) // 2
+        y = rect.top + (wa_h - height) // 2
+        log(f"窗口居中: 工作区 {wa_w}x{wa_h} → x={x}, y={y}")
+        return x, y
+    except Exception as e:
+        log(f"计算窗口位置失败，用系统默认位置: {e}")
+        return None, None
+
+
 def make_uvicorn_log_config():
     """Build a uvicorn log_config that won't touch sys.stdout/sys.stderr.isatty().
 
@@ -567,11 +612,15 @@ def main():
     log("Creating pywebview window...")
     try:
         import webview
+        win_x, win_y = center_xy(WINDOW_WIDTH, WINDOW_HEIGHT)
         window = webview.create_window(
             title=WINDOW_TITLE,
             url=URL,
             width=WINDOW_WIDTH,
             height=WINDOW_HEIGHT,
+            x=win_x,
+            y=win_y,
+            min_size=(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT),
             resizable=True,
             confirm_close=False,
         )

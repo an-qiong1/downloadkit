@@ -15,6 +15,7 @@
 """
 
 import asyncio
+import re
 from typing import Optional
 
 from .logger import get_logger
@@ -22,6 +23,32 @@ from . import subscription as store
 from .douyin_browser import RateLimited  # noqa: F401  （对外也用它做 isinstance）
 
 logger = get_logger("subscription")
+
+
+# 从整段分享文案里捞 douyin 链接。
+# 不带 http scheme 也要能捞到（「打开抖音搜索」那类文案里的 v.douyin.com/xxx
+# 常常就是裸的），调用方补 scheme；前缀用 [a-z0-9.-]* 是为了保住
+# www. / v. / www.ies 这些子域——否则「iesdouyin.com」会被截成「douyin.com」。
+_SHARE_URL_RE = re.compile(
+    r"(?:[a-z]+://)?[a-z0-9.-]*douyin\.com/[^\s一-鿿，。！？、）)]+",
+    re.IGNORECASE,
+)
+
+
+def _with_scheme(url: str) -> str:
+    """给没带 scheme 的链接补 https://"""
+    return url if url.startswith(("http://", "https://")) else "https://" + url
+
+
+def _extract_share_url(text: str) -> str:
+    """从分享文案里抽出纯 douyin 链接（带 scheme），抽不到返回空串
+
+    ⚠️ 这里必须返回**纯 URL**。历史 bug：把整段文案直接丢给
+    resolve_short_url，httpx 会拼出一个没有 scheme 的相对路径，
+    必然失败，还白等 3 次指数退避重试。
+    """
+    m = _SHARE_URL_RE.search(text or "")
+    return _with_scheme(m.group(0)) if m else ""
 
 
 def _to_int(value) -> int:
@@ -66,21 +93,29 @@ async def _resolve_sec_uid(url: str) -> str:
         return sec_uid
 
     # 分享文案里捞第一个 douyin 链接
-    import re
-    m = re.search(r"https?://[^\s一-鿿，。！？、）)]+douyin\.com/[^\s一-鿿，。！？、）)]+", text)
-    if m:
-        sec_uid = extract_sec_uid(m.group(0))
+    share_url = _extract_share_url(text)
+    if share_url:
+        sec_uid = extract_sec_uid(share_url)
         if sec_uid:
             return sec_uid
 
     # 短链：必须用浏览器跳转解析。注意 v.douyin.com 限流很严
     # （实测约 1 分钟只放行 1~2 次），所以先查进程内缓存。
     if "v.douyin.com" in text or "iesdouyin.com/share" in text:
+        if not share_url:
+            raise ValueError(
+                "没从这段文字里找到 douyin.com 链接，请直接复制主页链接"
+            )
         browser = _browser()
         if browser is None:
             raise LoginRequired("解析短链需要浏览器，请先启动程序并登录抖音")
         from .douyin_browser import resolve_short_url
-        final_url = await resolve_short_url(browser, text)
+        # 实参顺序曾经写反过：resolve_short_url(url, retries=3, browser=None)，
+        # 早年写成 resolve_short_url(browser, text) → url 收到浏览器对象 →
+        # 函数里 `if "v.douyin.com" not in url` 直接抛
+        # TypeError: argument of type 'DouyinBrowser' is not iterable。
+        # 所以这里：URL 走位置参数，浏览器**必须**走关键字参数。
+        final_url = await resolve_short_url(share_url, browser=browser)
         sec_uid = extract_sec_uid(final_url)
         if sec_uid:
             return sec_uid

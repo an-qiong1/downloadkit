@@ -290,7 +290,7 @@
               <div style="margin-bottom:10px">
                 <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-secondary)">基础下载目录 <span style="font-size:11px;color:var(--success);margin-left:8px">立即生效</span></label>
                 <div style="display:flex;gap:6px">
-                  <input class="search-input" id="setting-download-dir" type="text" placeholder="~/Downloads 或 D:\Downloads" style="flex:1">
+                  <input class="search-input" id="setting-download-dir" type="text" placeholder="~/Downloads/DownloadKit 或 D:\Downloads\DownloadKit" style="flex:1">
                   <button class="btn btn-secondary" id="setting-browse-dir" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
                 </div>
                 <div style="margin-top:6px;font-size:12px;line-height:1.5;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -298,6 +298,12 @@
                   <code id="setting-download-dir-actual" style="color:var(--text-primary);background:var(--bg-secondary);padding:2px 6px;border-radius:3px;font-size:11px;word-break:break-all"></code>
                   <span id="setting-download-dir-status" style="font-size:11px"></span>
                   <button class="btn btn-secondary" id="setting-open-dir" style="padding:2px 8px;font-size:11px" title="在文件管理器中打开此目录">📂 打开</button>
+                </div>
+                <div style="margin-top:6px;font-size:11px;line-height:1.6;color:var(--text-secondary)">
+                  音乐、视频、图片、实况照片默认都存放在这个总目录下的
+                  <code>music</code> / <code>videos</code> / <code>images</code> / <code>animated</code>
+                  子文件夹里，不会直接散落在系统下载目录中。
+                  改这里时，下面没单独自定义过的分类目录会一起更新。
                 </div>
               </div>
               
