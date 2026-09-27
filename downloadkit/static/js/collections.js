@@ -26,7 +26,7 @@
         '<div class="modal-box" style="background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:520px;width:90%;margin:10vh auto;box-shadow:0 8px 32px rgba(0,0,0,0.3)">' +
           '<h3 style="margin:0 0 16px;font-size:16px;font-weight:600">添加收藏歌单</h3>' +
           '<p style="margin:0 0 12px;font-size:13px;color:var(--text-secondary)">粘贴歌单链接，系统将自动解析并获取名称</p>' +
-          '<input id="coll-add-url" class="search-input" type="text" placeholder="例如: https://music.163.com/playlist?id=..." style="width:100%;margin-bottom:12px;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg);color:var(--text);font-size:14px">' +
+          '<input id="coll-add-url" class="search-input" type="text" placeholder="例如: https://music.163.com/playlist?id=..." style="width:100%;margin-bottom:12px">' +
           '<div style="display:flex;gap:8px;justify-content:flex-end">' +
             '<button class="btn btn-secondary" id="coll-add-cancel">取消</button>' +
             '<button class="btn btn-primary" id="coll-add-confirm">添加</button>' +

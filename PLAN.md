@@ -25,6 +25,7 @@
 | 2026-09-27 | 用户实测修复 | 订阅「预览成功、订阅必失败」三层连环修复：① `fetch_creator(max_scrolls=0)` 空保护无条件触发挡死所有新订阅 → 保护加滚动条件，`max_scrolls=0` 只取资料不抓列表；② 短链落裸首页被当成功且缓存坏结果 → 不缓存、不重试（省限流额度）、直接转浏览器回退；③ 回退遇「验证码中间页」→ RateLimited 穿透 → server 429 明确文案（原笼统 400）；④ 预览消息 `<b>` 字面显示 → 纯文本化；`test_subscribe_profile_only.py` 5 例（真 fetch_creator 链路，替身浏览器绕过实现的教训）+ `test_resolve_sec_uid.py` +7 例，pytest 442 passed；真实验证：主页直订 200、短链 429 验证码文案、复原删除 |
 | 2026-09-27 | P4-1 两个体验 Bug | Bug⑤ 选中残留：`refreshFiles` 裁剪 `selectedFiles`、空列表回位全选框+工具栏计数、单删同步移出选中集、重绘后恢复有效勾选；Bug⑥ 完成行点击无反应：完成行可点（`queue-item-done`）→ 新端点 `POST /api/open-file`（裸文件名在下载目录递归找分类子目录，遍历/越界 403 拦死、目录 400、缺失 404）打开文件 → `POST /api/queue/{id}/dismiss` 双侧清除（队列 + `_downloads`，只删一边刷新复活）、进行中任务 409 拒绝；headless 回文件路径弹窗（标题「文件位置」）；`tests/test_open_file.py` 17 例，pytest 458 passed |
 | 2026-09-27 | P4-2 文件命名 | 抖音改 `标题 发布日期.ext`（日期在后）：浏览器后端从页面「发布时间：…」抓日期（body 正则 + `[data-e2e*=time]` 兜底，**零额外请求**，探针实测命中），旧接口路径从 `create_time` 按 UTC+8 换算（秒/毫秒/坏值都容错）；缺日期或缺标题回落 `douyin_<作品ID>` 不硬造；四命名点（浏览器视频/旧接口视频/实况/图文）统一走 `build_download_base`（非法字符清洗 + 120 字封顶），各点加 `_existing_target` 旧命名兜底去重，切换命名后重下不出第二份；`download_content` 先定死 `rename_strategy` 再做已存在预检；真实解析实测 `publish_date='2026-09-24'`、文件名 `…2026-09-24.mp4`；`tests/test_douyin_naming.py` 18 例，pytest 477 passed |
+| 2026-09-27 | P4-3 UI 统一 | 5 个真开关改 `.switch` 平移 toggle（appearance:none + `::after` 滑块，原生 checkbox/`label[for]` 保留，JS 零改动）；代理三态 radio 改 `.segmented` 分段按钮（radio 视觉隐藏留 DOM，`test_proxy`/`test_control_modes` 结构断言零改动全兼容）；`.search-input` 统一带边框盒（`.search-box` 内清透明防双边框）+ `.compact` 紧凑档收编订阅面板内联；`.btn-xs`/`.btn [data-lucide] 15px` 收编 16 处内联，📂🌐🔍→lucide；订阅「自动检查」两句并一句；走查 7 面板 console 零错误 + 截图核对（误点启用跑了 1 轮空轮询，0 下载已恢复关闭）；pytest 477 passed / 6 skipped |
 
 ---
 
@@ -191,12 +192,24 @@
     文件名 `手搓游戏本…长长见识， 2026-09-24.mp4`
   - 文件：`downloadkit/douyin.py`、`downloadkit/douyin_browser.py`
 
-- [ ] **P4-3 UI 统一：组件样式 → toggle 开关 → 备注收敛**
-  - 统一按钮/输入框/开关设计 token，现代化、少备注
-  - 真开关（代理启用、关闭到托盘等）勾选框改**左右平移 toggle**；代理三态 radio 改**分段按钮**；
-    全选与文件行复选框保留 checkbox 语义不动
-  - 订阅块两条备注**删到只剩一句**（保留刷新间隔说明那句）
-  - 文件：`downloadkit/static/index.html`、`css/main.css`、`js/settings.js` 等
+- [x] **P4-3 UI 统一：组件样式 → toggle 开关 → 备注收敛**（2026-09-27 完成）
+  - **toggle 开关**：5 个真开关（订阅启用、检查策略下载、实况照片、开机自启、关闭到托盘）改左右平移
+    `input[type=checkbox].switch`（appearance:none + `::after` 滑块，原生 checkbox 与 `label[for]` 保留，
+    JS 与 `.f-switch` 结构零改动）；全选与文件行复选框保留 checkbox 语义不动
+  - **代理三态 → 分段按钮**：`.segmented` + `.seg-item`，radio 视觉隐藏留在 DOM（id/name/checked 断言、
+    `settings.js` 的 `:checked` 读写全兼容），选中态黑底白药丸
+  - **输入框统一**：`.search-input` 默认自带边框盒（原来只有大搜索盒有框，设置/订阅页全是裸文字），
+    `.search-box` 内部清回透明防双边框；新增 `.search-input.compact` 紧凑档收编订阅面板下拉/时间/N 输入
+    与 Cookie 浏览器选择的内联样式
+  - **按钮 token**：`.btn-xs` 收编 12 处内联 padding；`.btn [data-lucide]` 统一 15px 替掉 4 处内联图标尺寸；
+    emoji 按钮换 lucide（📂→folder-open、🌐→globe、🔍→search、←→arrow-left），FAQ 同步改词
+  - 订阅「自动检查」两条备注**合并成一句**（间隔与验证码说明都保留在句内）
+  - 文件：`index.html`、`css/main.css`、`js/collections.js`（coll-add-url 内联盒样式收编），版本 `20260927k`；
+    `settings.js` 零改动
+  - 测试：既有结构断言（`test_proxy` 三态、`test_control_modes` 三模式）因保留原生 input **零测试改动**，
+    pytest 477 passed / 6 skipped；浏览器走查 7 面板 console 零错误 + 截图核对
+  - 备注：走查时误点订阅「启用」触发 1 轮空轮询（访问 1 个创作者页），队列 0 任务、下载目录 0 文件，
+    已立即关闭并恢复 `enabled=false`
 
 - [ ] **P4-4 可选打磨**：自定义 confirm modal（替原生 `confirm`）、行内 style 收编进 class
 

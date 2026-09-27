@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20260927f">
+<link rel="stylesheet" href="css/main.css?v=20260927k">
 </head>
 <body>
 
@@ -138,7 +138,7 @@
           <div class="batch-input-section">
             <textarea class="batch-textarea" id="batch-input" placeholder="粘贴多个链接，每行一个&#10;支持抖音、B站、YouTube、小红书...&#10;&#10;示例:&#10;https://www.bilibili.com/video/BV1xx...&#10;https://www.youtube.com/watch?v=xxx&#10;https://v.douyin.com/xxx"></textarea>
             <div class="batch-actions">
-              <button class="btn btn-primary" id="batch-parse-btn"><i data-lucide="search" style="width:14px;height:14px;margin-right:6px"></i>解析全部</button>
+              <button class="btn btn-primary" id="batch-parse-btn"><i data-lucide="search"></i>解析全部</button>
               <button class="btn btn-secondary" id="batch-clear-btn">清空</button>
             </div>
           </div>
@@ -178,25 +178,24 @@
               <div style="flex:1;min-width:240px">
                 <div style="font-size:14px;font-weight:500;margin-bottom:4px">自动检查新作品</div>
                 <div style="font-size:12px;color:var(--text-secondary);line-height:1.6">
-                  打开后在后台按固定间隔检查所有订阅，发现新作品自动下载。
-                  默认 60 分钟一次并带随机浮动——请求太频繁会触发抖音验证码。
+                  打开后按固定间隔在后台检查所有订阅并自动下载新作品（默认 60 分钟一次、带随机浮动，太频繁会触发验证码）。
                 </div>
               </div>
               <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;white-space:nowrap">
-                <input type="checkbox" id="sub-poller-toggle" style="width:18px;height:18px;cursor:pointer"> 启用
+                <input type="checkbox" class="switch" id="sub-poller-toggle"> 启用
               </label>
             </div>
 
             <div id="sub-poller-options" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
               <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--text-secondary)">
                 <label>检查方式
-                  <select class="search-input" id="sub-poller-mode" style="width:auto;margin-left:6px;padding:4px 6px;font-size:12px">
+                  <select class="search-input compact" id="sub-poller-mode" style="margin-left:6px">
                     <option value="interval">按间隔</option>
                     <option value="daily_at">每天定时</option>
                   </select>
                 </label>
                 <label id="sub-poller-interval-label">检查间隔
-                  <select class="search-input" id="sub-poller-interval" style="width:auto;margin-left:6px;padding:4px 6px;font-size:12px">
+                  <select class="search-input compact" id="sub-poller-interval" style="margin-left:6px">
                     <option value="15">15 分钟</option>
                     <option value="30">30 分钟</option>
                     <option value="60">60 分钟</option>
@@ -208,11 +207,10 @@
                 </label>
                 <label id="sub-poller-daily-label" style="display:none">每天时刻
                   <input type="time" id="sub-poller-daily" value="09:00" step="60"
-                         style="margin-left:6px;padding:3px 6px;font-size:12px;color:var(--text-primary);
-                                background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px">
+                         class="search-input compact" style="margin-left:6px">
                 </label>
                 <label>单轮最多下载
-                  <select class="search-input" id="sub-poller-maxnew" style="width:auto;margin-left:6px;padding:4px 6px;font-size:12px">
+                  <select class="search-input compact" id="sub-poller-maxnew" style="margin-left:6px">
                     <option value="1">1 个</option>
                     <option value="3">3 个</option>
                     <option value="5">5 个</option>
@@ -233,10 +231,10 @@
             <summary style="cursor:pointer;font-size:12px;color:var(--text-tertiary);user-select:none">本次检查策略</summary>
             <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text-secondary)">
               <label style="display:flex;gap:6px;align-items:center;cursor:pointer;white-space:nowrap">
-                <input type="checkbox" id="strat-download" checked style="width:15px;height:15px;cursor:pointer"> 发现新作品就下载
+                <input type="checkbox" class="switch" id="strat-download" checked> 发现新作品就下载
               </label>
               <label style="white-space:nowrap">单轮最多
-                <select class="search-input" id="strat-maxnew" style="width:auto;margin-left:6px;padding:3px 6px;font-size:12px">
+                <select class="search-input compact" id="strat-maxnew" style="margin-left:6px">
                   <option value="1">1 个</option>
                   <option value="3">3 个</option>
                   <option value="5">5 个</option>
@@ -244,7 +242,7 @@
                 </select>
               </label>
               <label style="white-space:nowrap">下载范围
-                <select class="search-input" id="strat-scope" style="width:auto;margin-left:6px;padding:3px 6px;font-size:12px">
+                <select class="search-input compact" id="strat-scope" style="margin-left:6px">
                   <option value="">跟随各创作者设置</option>
                   <option value="only_new">仅新作品</option>
                   <option value="backfill_n">往回补 N 个</option>
@@ -253,7 +251,7 @@
               </label>
               <label id="strat-n-label" style="display:none;white-space:nowrap">N
                 <input type="number" id="strat-n" min="1" max="9999" value="3"
-                       style="width:66px;margin-left:6px;padding:3px 6px;font-size:12px;color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px">
+                       class="search-input compact" style="width:66px;margin-left:6px">
               </label>
               <span style="color:var(--text-tertiary);font-size:11px">仅对本次手动检查生效，不修改各创作者的订阅设置</span>
             </div>
@@ -308,10 +306,10 @@
           </div>
           <div style="display:flex;gap:8px;align-items:center">
             <button class="btn btn-secondary" id="queue-retry-failed" style="display:none">
-              <i data-lucide="refresh-cw" style="width:14px;height:14px;margin-right:6px"></i>重试全部失败
+              <i data-lucide="refresh-cw"></i>重试全部失败
             </button>
             <button class="btn btn-secondary" id="queue-refresh">
-              <i data-lucide="refresh-cw" style="width:14px;height:14px;margin-right:6px"></i>刷新
+              <i data-lucide="refresh-cw"></i>刷新
             </button>
           </div>
         </div>
@@ -346,13 +344,13 @@
                   <label class="f-label">基础下载目录 <span class="eff eff-live">立即生效</span></label>
                   <div style="display:flex;gap:6px">
                     <input class="search-input" id="setting-download-dir" type="text" placeholder="~/Downloads/DownloadKit 或 D:\Downloads\DownloadKit" style="flex:1">
-                    <button class="btn btn-secondary" id="setting-browse-dir" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                    <button class="btn btn-secondary" id="setting-browse-dir">选择目录</button>
                   </div>
                   <div style="margin-top:6px;font-size:12px;line-height:1.5;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                     <span style="color:var(--text-secondary)">实际路径：</span>
                     <code id="setting-download-dir-actual" style="color:var(--text-primary);background:var(--bg-secondary);padding:2px 6px;border-radius:3px;font-size:11px;word-break:break-all"></code>
                     <span id="setting-download-dir-status" style="font-size:11px"></span>
-                    <button class="btn btn-secondary" id="setting-open-dir" style="padding:2px 8px;font-size:11px" title="在文件管理器中打开此目录">📂 打开</button>
+                    <button class="btn btn-secondary btn-xs" id="setting-open-dir" title="在文件管理器中打开此目录"><i data-lucide="folder-open"></i>打开</button>
                   </div>
                   <div class="dir-preview" style="margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:11px;line-height:1.9;color:var(--text-secondary)">
                     <div style="margin-bottom:2px">各类文件实际存放在：</div>
@@ -373,7 +371,7 @@
                       <label class="f-label">音乐下载目录</label>
                       <div style="display:flex;gap:6px">
                         <input class="search-input" id="setting-download-dir-music" type="text" placeholder="跟随总目录" style="flex:1">
-                        <button class="btn btn-secondary" id="setting-browse-dir-music" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                        <button class="btn btn-secondary" id="setting-browse-dir-music">选择目录</button>
                       </div>
                     </div>
 
@@ -381,7 +379,7 @@
                       <label class="f-label">视频下载目录</label>
                       <div style="display:flex;gap:6px">
                         <input class="search-input" id="setting-download-dir-video" type="text" placeholder="跟随总目录" style="flex:1">
-                        <button class="btn btn-secondary" id="setting-browse-dir-video" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                        <button class="btn btn-secondary" id="setting-browse-dir-video">选择目录</button>
                       </div>
                     </div>
 
@@ -389,7 +387,7 @@
                       <label class="f-label">实况照片目录</label>
                       <div style="display:flex;gap:6px">
                         <input class="search-input" id="setting-download-dir-animated" type="text" placeholder="跟随总目录" style="flex:1">
-                        <button class="btn btn-secondary" id="setting-browse-dir-animated" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                        <button class="btn btn-secondary" id="setting-browse-dir-animated">选择目录</button>
                       </div>
                     </div>
 
@@ -397,7 +395,7 @@
                       <label class="f-label">图片下载目录</label>
                       <div style="display:flex;gap:6px">
                         <input class="search-input" id="setting-download-dir-images" type="text" placeholder="跟随总目录" style="flex:1">
-                        <button class="btn btn-secondary" id="setting-browse-dir-images" style="padding:4px 10px;font-size:12px;white-space:nowrap">选择目录</button>
+                        <button class="btn btn-secondary" id="setting-browse-dir-images">选择目录</button>
                       </div>
                     </div>
                   </div>
@@ -415,7 +413,7 @@
 
                 <div class="f-switch">
                   <label for="setting-motion-photo-default">默认生成实况照片</label>
-                  <input type="checkbox" id="setting-motion-photo-default" checked>
+                  <input type="checkbox" class="switch" id="setting-motion-photo-default" checked>
                 </div>
             </section>
 
@@ -449,20 +447,16 @@
               <div class="setting-subtitle">代理</div>
               <div style="margin-bottom:16px">
 
-                <!-- 代理三态（P3-1）：关闭 / 跟随系统 / 手动。
-                     system 默认 checked = 服务端 resolve_mode 的无配置默认，
-                     JS 回读时按 config 真实值校正 -->
+                <!-- 代理三态（P3-1，P4-3 起改用分段按钮呈现）：关闭 / 跟随系统 / 手动。
+                     radio 留在 DOM 里视觉隐藏，system 默认 checked = 服务端 resolve_mode
+                     的无配置默认，JS 回读时按 config 真实值校正 -->
                 <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:var(--text-secondary)">
-                  <label style="display:flex;gap:5px;align-items:center;cursor:pointer;white-space:nowrap">
-                    <input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-off" value="off" style="cursor:pointer"> 关闭
-                  </label>
-                  <label style="display:flex;gap:5px;align-items:center;cursor:pointer;white-space:nowrap">
-                    <input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-system" value="system" checked style="cursor:pointer"> 跟随系统
-                  </label>
-                  <label style="display:flex;gap:5px;align-items:center;cursor:pointer;white-space:nowrap">
-                    <input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-manual" value="manual" style="cursor:pointer"> 手动
-                  </label>
-                  <button type="button" class="btn btn-secondary" id="proxy-test-btn" style="padding:4px 10px;font-size:12px">测试连接</button>
+                  <div class="segmented" role="radiogroup" aria-label="代理模式">
+                    <label class="seg-item"><input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-off" value="off"><span>关闭</span></label>
+                    <label class="seg-item"><input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-system" value="system" checked><span>跟随系统</span></label>
+                    <label class="seg-item"><input type="radio" name="setting-proxy-mode" id="setting-proxy-mode-manual" value="manual"><span>手动</span></label>
+                  </div>
+                  <button type="button" class="btn btn-secondary btn-xs" id="proxy-test-btn">测试连接</button>
                   <span id="proxy-test-result" style="font-size:11px;color:var(--text-tertiary)"></span>
                 </div>
                 <div id="proxy-system-hint" style="display:none;font-size:11px;color:var(--text-tertiary);margin-bottom:8px"></div>
@@ -486,9 +480,9 @@
                   <a class="help-link" data-help="help-douyin" href="#">详细说明 →</a>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                  <button class="btn btn-primary" id="dy-login-btn" style="padding:6px 14px;font-size:13px">扫码登录抖音</button>
-                  <button class="btn btn-secondary" id="dy-logout-btn" style="padding:6px 12px;font-size:13px;display:none">退出登录</button>
-                  <button class="btn btn-secondary" id="dy-login-refresh" style="padding:6px 10px;font-size:12px" title="重新检查登录状态">刷新状态</button>
+                  <button class="btn btn-primary" id="dy-login-btn">扫码登录抖音</button>
+                  <button class="btn btn-secondary" id="dy-logout-btn" style="display:none">退出登录</button>
+                  <button class="btn btn-secondary btn-xs" id="dy-login-refresh" title="重新检查登录状态">刷新状态</button>
                   <span id="dy-login-status" style="font-size:12px;flex:1;min-width:160px">正在检查登录状态…</span>
                 </div>
                 <div id="dy-login-box" style="display:none;margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:6px;font-size:12px;line-height:1.6"></div>
@@ -507,9 +501,9 @@
 
                 <!-- 抖音 Cookie 助手（新增：登录并获取） -->
                 <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                  <button class="btn btn-primary" id="cookie-login-douyin" style="padding:4px 10px;font-size:12px" data-platform="douyin">🌐 登录并获取</button>
-                  <button class="btn btn-secondary" id="cookie-load-douyin" style="padding:4px 10px;font-size:12px" data-platform="douyin">🔍 立即读取</button>
-                  <select class="search-input" id="cookie-browser-douyin" style="padding:4px 6px;font-size:12px;width:auto">
+                  <button class="btn btn-primary btn-xs" id="cookie-login-douyin" data-platform="douyin"><i data-lucide="globe"></i>登录并获取</button>
+                  <button class="btn btn-secondary btn-xs" id="cookie-load-douyin" data-platform="douyin"><i data-lucide="search"></i>立即读取</button>
+                  <select class="search-input compact" id="cookie-browser-douyin">
                     <option value="edge">Edge</option>
                     <option value="chrome">Chrome</option>
                   </select>
@@ -523,9 +517,9 @@
 
                 <!-- B站 Cookie 助手（新增：登录并获取） -->
                 <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                  <button class="btn btn-primary" id="cookie-login-bilibili" style="padding:4px 10px;font-size:12px" data-platform="bilibili">🌐 登录并获取</button>
-                  <button class="btn btn-secondary" id="cookie-load-bilibili" style="padding:4px 10px;font-size:12px" data-platform="bilibili">🔍 立即读取</button>
-                  <select class="search-input" id="cookie-browser-bilibili" style="padding:4px 6px;font-size:12px;width:auto">
+                  <button class="btn btn-primary btn-xs" id="cookie-login-bilibili" data-platform="bilibili"><i data-lucide="globe"></i>登录并获取</button>
+                  <button class="btn btn-secondary btn-xs" id="cookie-load-bilibili" data-platform="bilibili"><i data-lucide="search"></i>立即读取</button>
+                  <select class="search-input compact" id="cookie-browser-bilibili">
                     <option value="edge">Edge</option>
                     <option value="chrome">Chrome</option>
                   </select>
@@ -541,13 +535,13 @@
 
                 <div class="f-switch">
                   <label for="setting-autostart">开机自动启动</label>
-                  <input type="checkbox" id="setting-autostart">
+                  <input type="checkbox" class="switch" id="setting-autostart">
                   <span id="setting-autostart-hint" class="f-hint"></span>
                 </div>
 
                 <div class="f-switch">
                   <label for="setting-close-to-tray">关闭窗口时最小化到托盘</label>
-                  <input type="checkbox" id="setting-close-to-tray">
+                  <input type="checkbox" class="switch" id="setting-close-to-tray">
                   <span class="f-hint">常驻后台，订阅检查不中断 <span class="eff eff-next">下次启动生效</span></span>
                 </div>
               </div>
@@ -560,14 +554,14 @@
                 <div>DownloadKit <b id="setting-version" style="color:var(--text-primary)">v0.4.1</b></div>
                 <div>程序在本机运行，下载内容只保存在你设置的目录里。</div>
               </div>
-              <button class="btn btn-secondary" id="open-help" style="margin-top:10px;padding:7px 14px;font-size:13px">
+              <button class="btn btn-secondary" id="open-help" style="margin-top:10px">
                 常见问题与解答
               </button>
               <div style="margin-top:6px;font-size:11px;color:var(--text-tertiary)">配置说明、FAQ 与报错对照都在里面</div>
             </section>
 
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:24px;padding-top:16px;border-top:1px solid var(--border)">
-              <button class="btn btn-primary" id="settings-save"><i data-lucide="save" style="width:14px;height:14px;margin-right:6px"></i>保存</button>
+              <button class="btn btn-primary" id="settings-save"><i data-lucide="save"></i>保存</button>
               <button class="btn btn-secondary" id="settings-reset">恢复默认</button>
               <div style="flex:1;min-width:8px"></div>
               <button class="btn btn-secondary" id="settings-export">导出设置</button>
@@ -582,7 +576,7 @@
       <div class="tab-panel" id="panel-help">
         <div class="search-section">
           <div class="help-head">
-            <button class="btn btn-secondary" id="help-back" style="padding:6px 12px;font-size:13px;white-space:nowrap">← 返回</button>
+            <button class="btn btn-secondary" id="help-back"><i data-lucide="arrow-left"></i>返回</button>
             <div>
               <h3 style="margin-bottom:2px;font-weight:600">解答</h3>
               <div style="font-size:12px;color:var(--text-secondary)">配置说明 · 常见问题 · 报错对照</div>
@@ -668,7 +662,7 @@
                 <h4>常见问题</h4>
                 <dl class="help-faq">
                   <dt>下载的文件找不到了？</dt>
-                  <dd>设置 →「下载」组第一行就是总目录，旁边「📂 打开」可以直接打开；下面的只读预览列出每个分类的实际路径。</dd>
+                  <dd>设置 →「下载」组第一行就是总目录，旁边「打开」可以直接打开；下面的只读预览列出每个分类的实际路径。</dd>
 
                   <dt>抖音视频解析失败？</dt>
                   <dd>多半是没登录，按上面「抖音扫码登录」扫一次。如果链接本身失效了，重新复制一条分享链接再试。</dd>
@@ -762,7 +756,7 @@
 <script src="js/settings.js?v=20260927h"></script>
 <script src="js/douyin-login.js?v=20260926a"></script>
 <script src="js/subscriptions.js?v=20260927j"></script>
-<script src="js/collections.js?v=20260724b"></script>
+<script src="js/collections.js?v=20260927k"></script>
 <script src="js/help.js?v=20260927g"></script>
 <script src="js/app.js?v=20260927c"></script>
 </body>

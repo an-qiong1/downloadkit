@@ -413,6 +413,104 @@ body {
   color: var(--text-secondary);
 }
 
+/* P4-3 开关：原生 checkbox → 左右平移 toggle。
+   保留原生 input（appearance:none），JS / label[for] / 测试零改动；
+   放在 .f-switch 规则之后，同优先级靠源顺序覆盖它的 18px。 */
+input[type="checkbox"].switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 18px;
+  margin: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+input[type="checkbox"].switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s ease;
+}
+
+input[type="checkbox"].switch:checked {
+  background: var(--primary);
+}
+
+input[type="checkbox"].switch:checked::after {
+  transform: translateX(16px);
+}
+
+input[type="checkbox"].switch:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* P4-3 三态代理：radio → 分段按钮。
+   radio 留在 DOM 里（视觉隐藏），点 label 照常改值，
+   settings.js 的 :checked 读写与测试断言都不用动。 */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+}
+
+.seg-item {
+  position: relative;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seg-item input[type="radio"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+  pointer-events: none;
+}
+
+.seg-item span {
+  display: block;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  border-radius: var(--radius-pill);
+  transition: all 0.15s ease;
+}
+
+.seg-item:hover span {
+  color: var(--text-primary);
+  background: var(--border-light);
+}
+
+.seg-item input[type="radio"]:checked + span {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 500;
+}
+
+.seg-item input[type="radio"]:focus-visible + span {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 .f-row {
   display: flex;
   align-items: center;
@@ -685,18 +783,51 @@ details[open] #dir-advanced-arrow {
   flex-shrink: 0;
 }
 
+/* P4-3 文本输入框统一：默认自带边框盒（原来只有大搜索盒有框，
+   设置页/订阅页的输入框全是「裸文字」，看着像坏掉） */
 .search-input {
   flex: 1;
-  border: none;
+  min-width: 0;
+  border: 1px solid var(--border);
   outline: none;
-  font-size: 14px;
+  padding: 8px 12px;
+  font-size: 13.5px;
   font-family: var(--font);
   color: var(--text-primary);
-  background: transparent;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.search-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(23, 23, 23, 0.06);
 }
 
 .search-input::placeholder {
   color: var(--text-tertiary);
+}
+
+/* 大搜索盒自己有盒子，内部输入框清回透明，避免双边框 */
+.search-box .search-input {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 14px;
+  box-shadow: none;
+}
+
+.search-box .search-input:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* 紧凑档：订阅面板行内控件（下拉、时间、小数字输入） */
+.search-input.compact {
+  flex: none;
+  width: auto;
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 .search-clear {
@@ -821,6 +952,18 @@ details[open] #dir-advanced-arrow {
   padding: 6px 12px;
   font-size: 12px;
   border-radius: var(--radius-pill);
+}
+
+/* P4-3 按钮尺寸 token：小按钮统一一档，不再各自内联 padding */
+.btn-xs {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+/* 按钮里的 lucide 图标统一 15px，替掉各处内联 width/height */
+.btn [data-lucide] {
+  width: 15px;
+  height: 15px;
 }
 
 
