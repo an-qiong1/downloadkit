@@ -82,6 +82,12 @@
     $('#sidebar-overlay').classList.remove('show');
   }
   
+  // ========== 透给 help.js 的内部入口 ==========
+  // 解答页不占侧边栏导航，但它要能回到「进来时的那个页面」，
+  // 而且进来时得把移动端侧边栏收起 —— 这两个能力只在本 IIFE 里。
+  window.__switchTab = switchTab;
+  window.__closeSidebar = closeSidebar;
+  
   $('#menu-btn').addEventListener('click', openSidebar);
   $('#sidebar-overlay').addEventListener('click', closeSidebar);
   

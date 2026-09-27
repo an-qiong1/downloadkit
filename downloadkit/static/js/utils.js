@@ -81,5 +81,6 @@ var tabTitles = {
   'downloads': '下载',
   'collections': '我的歌单',
   'settings': '设置',
+  'help': '解答',
 
 };

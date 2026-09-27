@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20260927b">
+<link rel="stylesheet" href="css/main.css?v=20260927c">
 </head>
 <body>
 
@@ -519,11 +519,170 @@
                 <div>DownloadKit <b id="setting-version" style="color:var(--text-primary)">v0.4.1</b></div>
                 <div>程序在本机运行，下载内容只保存在你设置的目录里。</div>
               </div>
+              <button class="btn btn-secondary" id="open-help" style="margin-top:10px;padding:7px 14px;font-size:13px">
+                常见问题与解答
+              </button>
+              <div style="margin-top:6px;font-size:11px;color:var(--text-tertiary)">配置说明、FAQ 与报错对照都在里面</div>
             </section>
 
             <div style="display:flex;gap:8px;margin-top:24px;padding-top:16px;border-top:1px solid var(--border)">
               <button class="btn btn-primary" id="settings-save"><i data-lucide="save" style="width:14px;height:14px;margin-right:6px"></i>保存</button>
               <button class="btn btn-secondary" id="settings-reset">恢复默认</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== 解答面板（P1-5）：不占侧边栏，从设置页内链进入 ========== -->
+      <div class="tab-panel" id="panel-help">
+        <div class="search-section">
+          <div class="help-head">
+            <button class="btn btn-secondary" id="help-back" style="padding:6px 12px;font-size:13px;white-space:nowrap">← 返回</button>
+            <div>
+              <h3 style="margin-bottom:2px;font-weight:600">解答</h3>
+              <div style="font-size:12px;color:var(--text-secondary)">配置说明 · 常见问题 · 报错对照</div>
+            </div>
+          </div>
+
+          <div class="help-body">
+            <nav class="help-toc" id="help-toc" aria-label="解答目录">
+              <div class="help-toc-title">本页目录</div>
+              <a class="help-toc-link" data-anchor="help-dir">下载的文件存在哪</a>
+              <a class="help-toc-link" data-anchor="help-cookie">Cookie 怎么配</a>
+              <a class="help-toc-link" data-anchor="help-douyin">抖音扫码登录</a>
+              <a class="help-toc-link" data-anchor="help-proxy">代理设置</a>
+              <a class="help-toc-link" data-anchor="help-faq">常见问题</a>
+              <a class="help-toc-link" data-anchor="help-errors">报错对照</a>
+            </nav>
+
+            <div class="help-main">
+              <!-- 1 下载目录 -->
+              <section class="help-block" id="help-dir">
+                <h4>下载的文件存在哪</h4>
+                <p>所有内容统一放在<b>总下载目录</b>下（默认 <code>~/Downloads/DownloadKit</code>），按类型分进子目录：</p>
+                <ul>
+                  <li><code>music</code> — 音乐（网易云、QQ音乐、咪咕等）</li>
+                  <li><code>videos</code> — 视频（抖音、B站、YouTube、小红书）</li>
+                  <li><code>images</code> — 图片</li>
+                  <li><code>animated</code> — 实况照片</li>
+                </ul>
+                <p>设置页「下载」组里有<b>只读路径预览</b>，直接列出每个分类实际会落到哪个目录。只有确实要把某一类文件放到别处时，才展开「高级」折叠单独指定 —— 留空即跟随总目录。</p>
+                <p class="help-note">v0.4.1 起会把老版本散落在系统下载目录里的 music / videos / animated 文件自动搬进总目录；搬不动的留在原地，原目录非空不会删。</p>
+              </section>
+
+              <!-- 2 Cookie -->
+              <section class="help-block" id="help-cookie">
+                <h4>Cookie 怎么配</h4>
+                <p><b>哪些平台需要：</b></p>
+                <ul>
+                  <li><b>抖音</b>：需要（否则视频解析失败）—— 不过现在更推荐下面的扫码登录</li>
+                  <li><b>B站</b>：建议配（1080P 高清需要登录）</li>
+                  <li><b>YouTube / 小红书 / 网易云 / QQ音乐 / 咪咕</b>：公开内容不需要</li>
+                </ul>
+                <p><b>文件格式（任选一种）：</b></p>
+                <ul>
+                  <li>纯文本：<code>name1=value1; name2=value2</code></li>
+                  <li>JSON：<code>{"name1": "value1", "name2": "value2"}</code></li>
+                  <li>Netscape：<code># Netscape HTTP Cookie File</code> 开头的 tab 分隔格式（yt-dlp 风格）</li>
+                </ul>
+                <p><b>怎么获取：</b></p>
+                <ol>
+                  <li>在浏览器（Edge / Chrome）里登录目标网站</li>
+                  <li>按 F12 → <b>Application</b> → <b>Cookies</b> → 复制需要的键值对</li>
+                  <li>粘到设置页的文本框，或存成文件后选文件</li>
+                </ol>
+                <p class="help-note">设置页的「立即读取」能一键从 Edge / Chrome 读取已登录的 Cookie；「登录并获取」会开浏览器窗口帮你完成登录。</p>
+              </section>
+
+              <!-- 3 抖音扫码登录 -->
+              <section class="help-block" id="help-douyin">
+                <h4>抖音扫码登录</h4>
+                <p><b>创作者订阅</b>功能需要登录抖音。点设置页的「扫码登录抖音」会弹出一个浏览器窗口，用抖音 App 扫码即可，<b>登录一次长期有效</b>，之后不用再管 Cookie。</p>
+                <p class="help-warn">登录窗口和下载不能同时进行，有下载任务时会暂时无法登录 —— 先把队列清空再扫码。</p>
+                <p>登录状态随时可以用「刷新状态」复查，「退出登录」也在这里。</p>
+              </section>
+
+              <!-- 4 代理 -->
+              <section class="help-block" id="help-proxy">
+                <h4>代理设置</h4>
+                <p>位置：设置 →「网络」→「代理」</p>
+                <ul>
+                  <li><b>启用代理</b>：总开关，取消勾选就完全走直连</li>
+                  <li><b>全局代理</b>：对所有平台生效，格式 <code>http://127.0.0.1:7890</code>（Clash / v2rayN 默认端口 7890，以你的代理软件为准）</li>
+                  <li><b>按平台覆盖</b>：YouTube / 抖音 / B站 / 小红书 各自留空即跟随全局</li>
+                </ul>
+                <p>改完记得保存。访问不了的平台（比如 YouTube）没配代理时，表现就是一直连不上。</p>
+              </section>
+
+              <!-- 5 FAQ -->
+              <section class="help-block" id="help-faq">
+                <h4>常见问题</h4>
+                <dl class="help-faq">
+                  <dt>下载的文件找不到了？</dt>
+                  <dd>设置 →「下载」组第一行就是总目录，旁边「📂 打开」可以直接打开；下面的只读预览列出每个分类的实际路径。</dd>
+
+                  <dt>抖音视频解析失败？</dt>
+                  <dd>多半是没登录，按上面「抖音扫码登录」扫一次。如果链接本身失效了，重新复制一条分享链接再试。</dd>
+
+                  <dt>提示「短链解析失败(1/3) … 后重试」？</dt>
+                  <dd>程序会自动隔一段时间重试。抖音的分享短链有频率限制，短时间内连续解析容易被挡，稍等几分钟再贴新链接。</dd>
+
+                  <dt>歌单解析失败？</dt>
+                  <dd>原始提示一般就三种原因：歌单不存在、需要登录、或网络问题 —— 先核对链接是否完整，再看网络 / 代理。</dd>
+
+                  <dt>文件重名怎么处理？</dt>
+                  <dd>设置 →「下载」→「文件重名策略」三选一：跳过（默认）/ 自动重命名 / 覆盖。改动需重启生效。</dd>
+
+                  <dt>关掉窗口程序还在跑吗？</dt>
+                  <dd>开「关闭窗口时最小化到托盘」就常驻后台、订阅检查不中断；要开机自启再开「开机自动启动」。这两项都是下次启动生效。</dd>
+
+                  <dt>B站想下 1080P？</dt>
+                  <dd>1080P 需要登录态，给 B站 配上 Cookie 即可，见上面「Cookie 怎么配」。</dd>
+                </dl>
+              </section>
+
+              <!-- 6 报错对照 -->
+              <section class="help-block" id="help-errors">
+                <h4>报错对照</h4>
+                <table class="help-table">
+                  <thead>
+                    <tr><th>看到的提示</th><th>多半是</th><th>怎么办</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>未捕获到视频流，作品可能不存在或需要登录</td>
+                      <td>抖音未登录，或作品已删除 / 私密</td>
+                      <td>先扫码登录；仍失败就换一条链接</td>
+                    </tr>
+                    <tr>
+                      <td>Cookie 文件不存在: 路径</td>
+                      <td>路径填错，或文件被删了</td>
+                      <td>重新选文件，或用「立即读取」</td>
+                    </tr>
+                    <tr>
+                      <td>歌单解析失败，可能原因：歌单不存在、需要登录、或网络问题</td>
+                      <td>三种原因之一</td>
+                      <td>核对链接 → 登录 → 检查网络 / 代理</td>
+                    </tr>
+                    <tr>
+                      <td>短链解析失败(n/N) … 后重试</td>
+                      <td>抖音短链限流，或网络抖动</td>
+                      <td>等它自己重试；连续失败就隔几分钟再试</td>
+                    </tr>
+                    <tr>
+                      <td>返回的不是视频数据（错误页）</td>
+                      <td>视频流签名过期，或被代理拦截</td>
+                      <td>在队列里点重试；再检查代理设置</td>
+                    </tr>
+                    <tr>
+                      <td>加载设置失败 / 设置保存失败</td>
+                      <td>后端没起来，或端口被占用</td>
+                      <td>重启程序后重试</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p class="help-note">拿不准就把设置 →「应用」→「日志级别」调成 DEBUG（需重启），重现一次问题，报错会带出更多信息。</p>
+              </section>
             </div>
           </div>
         </div>
@@ -538,7 +697,7 @@
 <!-- Toast容器 -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="js/utils.js?v=20260927a"></script>
+<script src="js/utils.js?v=20260927c"></script>
 <script src="js/music.js?v=20260927a"></script>
 <script src="js/resource.js?v=20260927a"></script>
 <script src="js/files.js?v=20260927a"></script>
@@ -547,6 +706,7 @@
 <script src="js/douyin-login.js?v=20260926a"></script>
 <script src="js/subscriptions.js?v=20260926a"></script>
 <script src="js/collections.js?v=20260724b"></script>
-<script src="js/app.js?v=20260927a"></script>
+<script src="js/help.js?v=20260927c"></script>
+<script src="js/app.js?v=20260927c"></script>
 </body>
 </html>

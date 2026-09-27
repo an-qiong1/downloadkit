@@ -12,6 +12,7 @@
 | 2026-09-27 | P1-1 | 导航 7→6，「已下载+下载队列」合并为「下载」页（进行中/已完成 子 tab）；pytest 249 passed，浏览器走查 console 零错误 |
 | 2026-09-27 | P1-3 | 设置页只留总目录，4 分类收进高级折叠 + 只读路径预览；顺手修了根目录 change 不同步分类的既有 bug；pytest 263 passed |
 | 2026-09-27 | P1-2 | 设置页重排为 5 组卡片（下载/应用/网络/启动与后台/关于），网络组用子标题分三段；补 `.content` 缺失闭合，整份 HTML 标签首次严格配平；pytest 270 passed |
+| 2026-09-27 | P1-5 | 新增解答页 `panel-help`（不占侧边栏、设置页内链进出）：目录 6 锚点 + 下载目录/Cookie/扫码登录/代理说明 + FAQ 7 条 + 报错对照 6 行；锚点改瞬时滚 `.content`；pytest 279 passed |
 
 ---
 
@@ -41,10 +42,12 @@
   - 长文（Cookie 格式、扫码登录说明、报错解释）整体迁出设置页
   - 文件：`downloadkit/static/index.html`
 
-- [ ] **P1-5 新增「解答」页**
-  - 新建 `panel-help`：**不占侧边栏导航**，从设置页内链进入，带返回
-  - 收纳长说明 + FAQ + 错误原因对照
-  - 文件：新增 `downloadkit/static/js/help.js`、`index.html`
+- [x] **P1-5 新增「解答」页**（2026-09-27 完成；先建页，P1-4 才往里迁长文）
+  - 新建 `panel-help`：**不占侧边栏导航**，从设置页内链进入，带返回（回进来的那个页面）
+  - 收纳长说明 + FAQ 7 条 + 报错对照 6 行；左侧目录 6 锚点
+  - 两个坑已在测试里锁死：`app.js` 必须透出 `__switchTab`/`__closeSidebar`（否则进得来回不去）；
+    锚点必须 `behavior:'auto'` 且滚 `.content`（`.main` 是 overflow:hidden，smooth 动画不跑等于没反应）
+  - 文件：新增 `downloadkit/static/js/help.js`、`index.html`、`css/main.css`、`js/app.js`、`js/utils.js`
 
 - [ ] **P1-6 控件样式统一**
   - 只留三种模式：标签在上 / 开关带一句说明 / 下拉右对齐；统一间距与宽度
