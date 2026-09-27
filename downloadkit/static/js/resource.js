@@ -167,10 +167,10 @@
     preview.innerHTML = html;
     lucide.createIcons();
 
-    // 绑定单个下载按钮
+    // 绑定单个下载按钮（状态落在自己身上，见 downloadResource 的 btn 参数）
     preview.querySelectorAll('.inline-dl-btn').forEach(function(btn) {
       btn.addEventListener('click', function() {
-        downloadResource(this.dataset.url, this.dataset.platform);
+        downloadResource(this.dataset.url, this.dataset.platform, this);
       });
     });
 
@@ -483,25 +483,27 @@
   }
   
   // 下载资源
-  function downloadResource(url, platform) {
-    var btn = $('#resource-download-btn');
+  // btn = 状态落点：内联列表按钮传自己，详情主按钮不传走默认。
+  // 之前内联按钮点完全程写在主按钮上 —— 批量列表视图里主按钮压根
+  // 不在 DOM，btn.disabled 直接 null 崩，状态还跑到看不见的地方去。
+  // 三态与音乐页对齐：下载中（禁用）/ 已下载 / 下载失败，后两者
+  // 都留在按钮上当反馈，不再 2 秒后抹回「下载」。
+  function downloadResource(url, platform, btn) {
+    btn = btn || $('#resource-download-btn');
+    if (!btn) return;
     var iconHtml = '<i data-lucide="download" style="width:14px;height:14px;margin-right:6px"></i>';
     btn.disabled = true;
-    btn.innerHTML = iconHtml + '下载中...';
+    btn.innerHTML = iconHtml + '下载中…';
     lucide.createIcons();
     
     // 使用统一下载接口
     api('/api/video/download', { method: 'POST', body: { url: url, platform: platform } }).then(function(result) {
       pollResourceDownload(result.task_id, btn, iconHtml);
     }).catch(function(err) {
+      btn.disabled = false;
       btn.innerHTML = iconHtml + '下载失败';
       lucide.createIcons();
       toast('下载失败：' + err.message, 'error');
-      setTimeout(function() { 
-        btn.disabled = false; 
-        btn.innerHTML = iconHtml + '下载';
-        lucide.createIcons();
-      }, 2000);
     });
   }
   
@@ -509,23 +511,22 @@
   function pollResourceDownload(taskId, btn, iconHtml) {
     api('/api/video/' + taskId).then(function(info) {
       if (info.status === 'done') {
-        btn.innerHTML = iconHtml + '下载完成';
+        // 完成态保持（对齐音乐页 dl-ok）。抹回「下载」等于把
+        // 「下过了」的反馈擦掉，用户还得自己去下载目录确认一遍
+        btn.disabled = false;
+        btn.innerHTML = iconHtml + '已下载';
         lucide.createIcons();
         toast('下载完成' + (info.files ? '：' + info.files.join(', ') : ''), 'success');
         if (state.activeTab === 'downloads' && state.downloadView === 'files') refreshFiles();
       } else if (info.status === 'failed') {
+        // 失败态同样保持，按钮留着当反馈、可点重试
+        btn.disabled = false;
         btn.innerHTML = iconHtml + '下载失败';
         lucide.createIcons();
         toast('下载失败：' + (info.error || '未知错误'), 'error');
       } else {
         setTimeout(function() { pollResourceDownload(taskId, btn, iconHtml); }, 1500);
-        return;
       }
-      setTimeout(function() { 
-        btn.disabled = false; 
-        btn.innerHTML = iconHtml + '下载';
-        lucide.createIcons();
-      }, 2000);
     }).catch(function() {
       setTimeout(function() { pollResourceDownload(taskId, btn, iconHtml); }, 1500);
     });

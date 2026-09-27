@@ -256,6 +256,7 @@
     
     btn.disabled = true;
     btn.classList.add('dl-spin');
+    btn.title = '下载中';   // 图标按钮没有可见文案，title 是它唯一的「状态词」
     var card = btn.closest('.song-card');
     if (card) card.classList.add('downloading');
     
@@ -321,6 +322,7 @@
     } else { 
       btn.classList.add('dl-spin'); 
       btn.disabled = true; 
+      btn.title = '下载中';
     }
   }
   
