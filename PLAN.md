@@ -148,7 +148,11 @@
   - 队列头部加「N 失败」统计与「重试全部失败」按钮（无失败即隐藏）；toast 把 retried/orphaned 转述清楚
   - `tests/test_queue_polish.py` 8 例；走查注入 FAILED 实体 + 孤儿卡全链路验证（组合/孤儿 toast、62% 进度跨重试保留、单任务 400 回归、空队列隐藏），console 零错误
 
-- [ ] **P3-3 其他候选**：设置导出导入、托盘菜单快捷项、解答页搜索、音乐/资源页下载按钮状态统一
+- [x] **P3-3 其他候选**（2026-09-27，分四次提交）：设置导出导入、托盘菜单快捷项、解答页搜索、音乐/资源页下载按钮状态统一
+  - **解答页搜索**：页头 type=search 输入框，两级过滤（块级标题命中整块恢复 + 行级 li/表格行/dt+dd 成对/独立段落），目录与空状态联动，进入重置；`test_help_panel.py` +3 例
+  - **设置导出导入**：footer 加导出/导入按钮；导出现拉配置落带日期 JSON（general/proxy/cookie/subscription 四段，cookie 是路径不带登录态）；导入段级白名单 + confirm + 写完刷新，坏 JSON/无识别段中文报错；`test_settings_io.py` 4 例
+  - **按钮状态统一**：`downloadResource` 收 btn 参数（内联按钮状态落自己，修掉主按钮不在 DOM 时的 null 崩），完成/失败态保留不 2 秒抹回，两页三态文案一致（下载中…/已下载/下载失败），音乐页补「下载中」title；`test_button_states.py` 8 例
+  - **托盘快捷项**：菜单加「打开下载目录」「检查订阅更新」+ 分隔；两个动作抽 run.py 顶层函数（open_download_dir / check_subscription_update）便于单测 mock，检查动作起 daemon 线程不卡托盘 UI，气泡通知转后端 message；`test_tray_menu.py` 7 例（含 pystray 实际构造菜单）；点击无法自动化，构造与接线靠单测 + exe 日志断言覆盖
 
 **P3 验收**：`pytest` 全量 → 重打包 → 三项 exe 实测 → 红线核对（三处落盘目录文件数不变）
 

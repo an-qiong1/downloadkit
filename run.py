@@ -9,6 +9,7 @@ sys.stdout / sys.stderr issues handled.
 
 import copy
 import ctypes
+import json
 import os
 import socket
 import subprocess
@@ -16,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.request
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -412,6 +414,56 @@ def _tray_image():
     return img
 
 
+def open_download_dir():
+    """托盘「打开下载目录」的实现。
+
+    独立成顶层函数是为了让单测能够着：闭包里的动作 mock 不到，
+    抽出来后 monkeypatch os.startfile 就能断言打开的路径。
+    """
+    path = "~/Downloads/DownloadKit"
+    try:
+        from downloadkit.utils import load_config
+        path = load_config().get("general", {}).get("download_dir", path)
+    except Exception:
+        pass  # 配置读不出来就开默认目录，别把整个动作带失败
+    full = os.path.expanduser(path)
+    try:
+        os.makedirs(full, exist_ok=True)   # 目录还没建过也得能开
+    except OSError:
+        pass
+    log(f"托盘：打开下载目录 {full}")
+    os.startfile(full)
+
+
+def check_subscription_update(icon, port):
+    """托盘「检查订阅更新」的后台线程体。
+
+    托盘菜单回调不能阻塞 —— 等网络的那几秒卡的是整个右键菜单，
+    所以请求放这里、由调用方开线程跑。结果用气泡通知回给用户：
+    托盘场景下没有别的反馈渠道，没通知 = 点了没反应。
+
+    port 走参数而不是读全局 PORT：main() 里端口是动态选的，测试
+    时也不能拿真实端口去发请求。
+    """
+    try:
+        req = urllib.request.Request(
+            f"http://{HOST}:{port}/api/subscriptions/check-all",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=180) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        # 后端把结果组织好了中文 message（「发现 N 个新作品，入队 M 个」/
+        # skipped 各分支也自带），直接转给气泡，别在托盘层拼第二套文案
+        msg = data.get("message") if isinstance(data, dict) else None
+        icon.notify(msg or "检查完成", "DownloadKit")
+        log(f"托盘：订阅检查完成 {msg or ''}")
+    except Exception as e:
+        icon.notify(f"检查失败：{e}", "DownloadKit")
+        log(f"托盘：订阅检查失败 {e}")
+
+
 def _start_tray(window) -> bool:
     """后台线程跑托盘图标；失败返回 False，调用方降级为「关闭即退出」。"""
     try:
@@ -425,6 +477,22 @@ def _start_tray(window) -> bool:
             window.show()
         except Exception:
             log(f"托盘「显示窗口」失败:\n{traceback.format_exc()}")
+
+    def _open_dir(icon=None, item=None):
+        try:
+            open_download_dir()
+        except Exception:
+            log(f"托盘「打开下载目录」失败:\n{traceback.format_exc()}")
+
+    def _check_subs(icon=None, item=None):
+        # 回调跑在托盘 UI 线程，绝不能在里面等网络 —— 起线程，
+        # 气泡通知由线程里发
+        threading.Thread(
+            target=check_subscription_update,
+            args=(icon, PORT),
+            daemon=True,
+            name="tray-check",
+        ).start()
 
     def _quit(icon, item=None):
         _tray_state["really_quit"] = True
@@ -446,6 +514,9 @@ def _start_tray(window) -> bool:
             "DownloadKit",
             pystray.Menu(
                 pystray.MenuItem("显示主窗口", _show, default=True),
+                pystray.MenuItem("打开下载目录", _open_dir),
+                pystray.MenuItem("检查订阅更新", _check_subs),
+                pystray.Menu.SEPARATOR,
                 pystray.MenuItem("退出", _quit),
             ),
         )
