@@ -5,6 +5,8 @@
     if (url.includes('bilibili.com') || url.includes('b23.tv')) return 'bilibili';
     if (url.includes('youtube.com') || url.includes('youtu.be')) return 'youtube';
     if (url.includes('xiaohongshu.com') || url.includes('xhslink.com')) return 'xiaohongshu';
+    // 兜底：任何 http(s) 链接走 generic（直链 m3u8/mp4 或普通网页）
+    if (/^https?:\/\//i.test(url)) return 'generic';
     return null;
   }
   
@@ -51,7 +53,7 @@
     var platform = detectPlatform(url);
     
     if (!platform) {
-      toast('暂不支持该平台', 'error');
+      toast('不是有效的 http(s) 链接', 'error');
       return;
     }
     
@@ -114,9 +116,9 @@
     });
   }
 
-  // 显示内联批量解析结果（在单输入框预览区）
-  function showInlineBatchResults(results) {
-    var preview = $('#resource-preview');
+  // 显示批量解析结果（默认单输入框预览区；书签模式传 #bookmark-results）
+  function showInlineBatchResults(results, targetSel) {
+    var preview = $(targetSel || '#resource-preview');
     preview.style.display = 'block';
     preview.className = 'resource-preview-container';
 
@@ -124,7 +126,8 @@
       'douyin': { bg: '#FF6B6B20', color: '#FF6B6B', label: '抖音' },
       'bilibili': { bg: '#00A1D620', color: '#00A1D6', label: 'B站' },
       'youtube': { bg: '#FF000020', color: '#FF0000', label: 'YouTube' },
-      'xiaohongshu': { bg: '#FF244220', color: '#FF2442', label: '小红书' }
+      'xiaohongshu': { bg: '#FF244220', color: '#FF2442', label: '小红书' },
+      'generic': { bg: '#BF5AF220', color: '#BF5AF2', label: '网页' }
     };
 
     var successCount = results.filter(function(r) { return r.status === 'success'; }).length;
@@ -137,7 +140,7 @@
       '<span>解析完成：<strong class="text-success">' + successCount + ' 成功</strong>' +
       (failCount > 0 ? '，<strong class="text-error">' + failCount + ' 失败</strong>' : '') + '</span>';
     if (successCount > 0) {
-      html += '<button class="btn btn-primary" id="inline-batch-dl-all" style="padding:6px 14px;font-size:12px"><i data-lucide="download" style="width:12px;height:12px;margin-right:4px"></i>下载全部</button>';
+      html += '<button class="btn btn-primary inline-batch-dl-all" style="padding:6px 14px;font-size:12px"><i data-lucide="download" style="width:12px;height:12px;margin-right:4px"></i>下载全部</button>';
     }
     html += '</div>';
 
@@ -152,7 +155,8 @@
       html += '<div class="batch-item-cover" style="background:linear-gradient(135deg,' + p.bg + ',' + p.bg.replace('20', '10') + ')"><i data-lucide="' + itemIcon + '"></i></div>';
       html += '<div class="batch-item-info">';
       html += '<div class="batch-item-title">' + escHtml(item.title || '未知标题') + '</div>';
-      html += '<div class="batch-item-meta">' + escHtml(item.author || '未知作者') + ' · <span class="platform-tag" style="background:' + p.bg + ';color:' + p.color + ';margin-top:0">' + p.label + '</span></div>';
+      html += '<div class="batch-item-meta">' + escHtml(item.author || '未知作者') + ' · <span class="platform-tag" style="background:' + p.bg + ';color:' + p.color + ';margin-top:0">' + p.label + '</span>' +
+        (item.suggested_name ? ' · <span style="color:var(--text-tertiary)">保存为 ' + escHtml(item.suggested_name) + '.mp4</span>' : '') + '</div>';
       html += '</div>';
 
       if (item.status === 'success') {
@@ -174,8 +178,8 @@
       });
     });
 
-    // 绑定全部下载按钮
-    var dlAll = $('#inline-batch-dl-all');
+    // 绑定全部下载按钮（class 选择器按容器取，支持预览区/书签结果区两处）
+    var dlAll = preview.querySelector('.inline-batch-dl-all');
     if (dlAll) {
       dlAll.addEventListener('click', function() {
         var urls = results.filter(function(r) { return r.status === 'success'; }).map(function(r) { return r.url; });
@@ -264,7 +268,8 @@
       'douyin': { bg: '#FF6B6B20', color: '#FF6B6B', label: '抖音' },
       'bilibili': { bg: '#00A1D620', color: '#00A1D6', label: 'B站' },
       'youtube': { bg: '#FF000020', color: '#FF0000', label: 'YouTube' },
-      'xiaohongshu': { bg: '#FF244220', color: '#FF2442', label: '小红书' }
+      'xiaohongshu': { bg: '#FF244220', color: '#FF2442', label: '小红书' },
+      'generic': { bg: '#BF5AF220', color: '#BF5AF2', label: '网页' }
     };
     var p = platformColors[platform] || platformColors.douyin;
 
@@ -298,6 +303,9 @@
       var unavailableMsg = '该平台暂不支持在线预览';
       if (platform === 'bilibili' && data.duration) {
         unavailableMsg = '时长 ' + data.duration + (data.quality ? ' · ' + data.quality : '');
+      } else if (platform === 'generic') {
+        unavailableMsg = '网页视频 · 已解析，点击下载';
+        if (data.duration) unavailableMsg += ' · 时长 ' + data.duration + ' 秒';
       }
       html += '<div class="preview-unavailable">' +
         '<i data-lucide="film"></i>' +
@@ -359,9 +367,16 @@
       html += '</div>';
     } else {
       // 兜底：无可用预览
+      // generic（网页视频）常常拿不到封面且 m3u8 无法内联播放，
+      // 但解析已成功、下载按钮可用 —— 不能显示成"不可用"
+      var unavailableText = '暂无可用预览';
+      if (platform === 'generic') {
+        unavailableText = '网页视频 · 已解析，点击下载';
+        if (data.duration) unavailableText += ' · 时长 ' + data.duration + ' 秒';
+      }
       html += '<div class="preview-unavailable">' +
         '<i data-lucide="eye-off"></i>' +
-        '<span class="preview-unavailable-text">暂无可用预览</span>' +
+        '<span class="preview-unavailable-text">' + unavailableText + '</span>' +
       '</div>';
     }
 
@@ -496,8 +511,9 @@
     btn.innerHTML = iconHtml + '下载中…';
     lucide.createIcons();
     
-    // 使用统一下载接口
-    api('/api/video/download', { method: 'POST', body: { url: url, platform: platform } }).then(function(result) {
+    // 使用统一下载接口（书签场景带命名提示）
+    var hint = (downloadHints[url] && downloadHints[url].title) || '';
+    api('/api/video/download', { method: 'POST', body: { url: url, platform: platform, filename_hint: hint } }).then(function(result) {
       pollResourceDownload(result.task_id, btn, iconHtml);
     }).catch(function(err) {
       btn.disabled = false;
@@ -536,6 +552,8 @@
   // 批量解析结果
   var batchResults = [];
   var batchSelected = {};
+  // 命名提示：url → {title, folder}（书签模式填充；下载时作为文件名依据）
+  var downloadHints = {};
   
   // 模式切换
   $$('.mode-btn').forEach(function(btn) {
@@ -544,6 +562,7 @@
       $$('.mode-btn').forEach(function(b) { b.classList.toggle('active', b === btn); });
       $('#single-mode').style.display = mode === 'single' ? 'block' : 'none';
       $('#batch-mode').style.display = mode === 'batch' ? 'block' : 'none';
+      $('#bookmark-mode').style.display = mode === 'bookmark' ? 'block' : 'none';
     });
   });
   
@@ -606,7 +625,8 @@
       'douyin': { bg: '#FF6B6B20', color: '#FF6B6B', label: '抖音' },
       'bilibili': { bg: '#00A1D620', color: '#00A1D6', label: 'B站' },
       'youtube': { bg: '#FF000020', color: '#FF0000', label: 'YouTube' },
-      'xiaohongshu': { bg: '#FF244220', color: '#FF2442', label: '小红书' }
+      'xiaohongshu': { bg: '#FF244220', color: '#FF2442', label: '小红书' },
+      'generic': { bg: '#BF5AF220', color: '#BF5AF2', label: '网页' }
     };
     
     var successCount = batchResults.filter(function(r) { return r.status === 'success'; }).length;
@@ -744,11 +764,19 @@
     }
   }
   
-  // 开始批量下载
+  // 开始批量下载（存在书签命名提示时随 items 下发）
   function startBatchDownload(urls) {
     toast('开始批量下载 ' + urls.length + ' 个视频...', 'info');
-    
-    api('/api/video/batch-download', { method: 'POST', body: { urls: urls } }).then(function(result) {
+
+    var body = { urls: urls };
+    if (urls.some(function(u) { return downloadHints[u]; })) {
+      // items 必须全量覆盖 urls（后端以 items 为权威工作列表）
+      body.items = urls.map(function(u) {
+        var h = downloadHints[u] || {};
+        return { url: u, title: h.title || '', folder: h.folder || '' };
+      });
+    }
+    api('/api/video/batch-download', { method: 'POST', body: body }).then(function(result) {
       pollBatchDownload(result.task_id);
     }).catch(function(err) {
       toast('批量下载失败：' + err.message, 'error');
@@ -774,3 +802,175 @@
       setTimeout(function() { pollBatchDownload(taskId); }, 2000);
     });
   }
+
+  // ========== 书签导入模式（P1） ==========
+  var bookmarkTree = [];
+
+  // 选文件（点击输入框区域或上传按钮都触发）
+  $('#bookmark-pick').addEventListener('click', function(e) {
+    if (e.target.closest('#bookmark-import-btn')) return; // 按钮自行触发，避免双弹
+    $('#bookmark-file').click();
+  });
+  $('#bookmark-import-btn').addEventListener('click', function(e) {
+    e.stopPropagation();
+    $('#bookmark-file').click();
+  });
+  $('#bookmark-file').addEventListener('change', function() {
+    var f = this.files && this.files[0];
+    if (f) importBookmarks(f);
+    this.value = '';  // 允许重复选择同一文件
+  });
+
+  function setBookmarkStatus(msg, kind) {
+    var st = $('#bookmark-status');
+    if (!msg) { st.style.display = 'none'; return; }
+    st.style.display = 'block';
+    st.className = 'status-msg' + (kind ? ' ' + kind : '');
+    st.innerHTML = msg;
+  }
+
+  function importBookmarks(file) {
+    $('#bookmark-file-label').value = file.name;
+    setBookmarkStatus('<span class="spinner"></span> 正在读取 ' + escHtml(file.name) + ' ...');
+    $('#bookmark-tree-wrap').style.display = 'none';
+    $('#bookmark-results').style.display = 'none';
+
+    var reader = new FileReader();
+    reader.onerror = function() { setBookmarkStatus('读取文件失败', 'error'); };
+    reader.onload = function() {
+      api('/api/bookmarks/import', { method: 'POST', body: { html: String(reader.result || '') } })
+        .then(function(data) {
+          setBookmarkStatus('');
+          bookmarkTree = data.tree || [];
+          downloadHints = {};  // 新导入覆盖旧提示
+          renderBookmarkTree();
+          $('#bookmark-tree-wrap').style.display = 'block';
+          toast('书签导入成功：' + data.links + ' 条链接 / ' + data.folders + ' 个文件夹', 'success');
+        })
+        .catch(function(err) {
+          setBookmarkStatus('导入失败：' + escHtml(err.message), 'error');
+        });
+    };
+    reader.readAsText(file);  // UTF-8（规范默认），BOM 自动剥离
+  }
+
+  function renderBookmarkNodes(nodes) {
+    var html = '';
+    (nodes || []).forEach(function(n) {
+      if (n.type === 'folder') {
+        html += '<div class="bookmark-folder">' +
+          '<label class="bookmark-folder-label"><input type="checkbox" class="bm-folder-cb" checked>' +
+          '<i data-lucide="folder" style="width:14px;height:14px"></i><span>' + escHtml(n.name || '未命名文件夹') + '</span></label>' +
+          '<div class="bookmark-children">' + renderBookmarkNodes(n.children) + '</div></div>';
+      } else if (n.type === 'link' && n.url) {
+        var host = '';
+        try { host = new URL(n.url).hostname; } catch (_) {}
+        html += '<label class="bookmark-link">' +
+          '<input type="checkbox" class="bm-link-cb" checked data-url="' + escAttr(n.url) + '" data-title="' + escAttr(n.title || '') + '">' +
+          '<span class="bm-title">' + escHtml(n.title || n.url) + '</span>' +
+          '<span class="bm-host">' + escHtml(host) + '</span></label>';
+      }
+    });
+    return html;
+  }
+
+  function renderBookmarkTree() {
+    var el = $('#bookmark-tree');
+    el.innerHTML = renderBookmarkNodes(bookmarkTree);
+    lucide.createIcons();
+
+    // 文件夹勾选 → 级联全部子链接
+    el.querySelectorAll('.bm-folder-cb').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        var folder = cb.closest('.bookmark-folder');
+        folder.querySelectorAll('.bm-link-cb').forEach(function(l) { l.checked = cb.checked; });
+        cb.indeterminate = false;
+        updateBookmarkCount();
+      });
+    });
+    // 链接勾选 → 反向刷新祖先文件夹的选中/半选状态
+    el.querySelectorAll('.bm-link-cb').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        refreshFolderState(cb.closest('.bookmark-folder'));
+        updateBookmarkCount();
+      });
+    });
+    updateBookmarkCount();
+  }
+
+  function refreshFolderState(folder) {
+    while (folder) {
+      var links = folder.querySelectorAll('.bm-link-cb');
+      var checked = folder.querySelectorAll('.bm-link-cb:checked').length;
+      var cb = folder.querySelector(':scope > .bookmark-folder-label .bm-folder-cb');
+      if (cb) {
+        cb.checked = links.length > 0 && checked === links.length;
+        cb.indeterminate = checked > 0 && checked < links.length;
+      }
+      folder = folder.parentElement && folder.parentElement.closest('.bookmark-folder');
+    }
+  }
+
+  function updateBookmarkCount() {
+    var all = $$('#bookmark-tree .bm-link-cb');
+    var sel = $$('#bookmark-tree .bm-link-cb:checked');
+    $('#bookmark-total').textContent = all.length;
+    $('#bookmark-selected').textContent = sel.length;
+  }
+
+  function collectSelectedBookmarks() {
+    var seen = {}, items = [];
+    $$('#bookmark-tree .bm-link-cb:checked').forEach(function(cb) {
+      var url = cb.dataset.url;
+      if (!url || seen[url]) return;
+      seen[url] = true;
+      // 文件夹路径：向上收集层级名（追剧/国漫）
+      var path = [], p = cb.closest('.bookmark-folder');
+      while (p) {
+        var lb = p.querySelector(':scope > .bookmark-folder-label span');
+        if (lb) path.unshift(lb.textContent);
+        p = p.parentElement && p.parentElement.closest('.bookmark-folder');
+      }
+      items.push({ url: url, title: cb.dataset.title || '', folder: path.join('/') });
+    });
+    return items;
+  }
+
+  $('#bookmark-select-all').addEventListener('click', function() {
+    $$('#bookmark-tree .bm-link-cb').forEach(function(cb) { cb.checked = true; });
+    $$('#bookmark-tree .bm-folder-cb').forEach(function(cb) { cb.checked = true; cb.indeterminate = false; });
+    updateBookmarkCount();
+  });
+  $('#bookmark-clear').addEventListener('click', function() {
+    $$('#bookmark-tree .bm-link-cb').forEach(function(cb) { cb.checked = false; });
+    $$('#bookmark-tree .bm-folder-cb').forEach(function(cb) { cb.checked = false; cb.indeterminate = false; });
+    updateBookmarkCount();
+  });
+
+  // 解析选中书签（带书签标题作命名提示）
+  $('#bookmark-parse-btn').addEventListener('click', function() {
+    var items = collectSelectedBookmarks();
+    if (items.length === 0) {
+      toast('请先勾选要解析的书签', 'error');
+      return;
+    }
+
+    var btn = this;
+    btn.disabled = true;
+    setBookmarkStatus('<span class="spinner"></span> 正在解析 ' + items.length + ' 条书签...');
+
+    api('/api/video/batch-parse', {
+      method: 'POST',
+      body: { urls: items.map(function(i) { return i.url; }), items: items }
+    }).then(function(data) {
+      setBookmarkStatus('');
+      var results = data.results || [];
+      // 登记命名提示：书签标题用于下载时的文件命名
+      items.forEach(function(i) { downloadHints[i.url] = { title: i.title, folder: i.folder }; });
+      showInlineBatchResults(results, '#bookmark-results');
+    }).catch(function(err) {
+      setBookmarkStatus('解析失败：' + escHtml(err.message), 'error');
+    }).finally(function() {
+      btn.disabled = false;
+    });
+  });

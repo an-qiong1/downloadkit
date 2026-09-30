@@ -45,6 +45,11 @@ from downloadkit.douyin import (
 from downloadkit.bilibili import parse_bilibili, download_bilibili_video, BilibiliVideo
 from downloadkit.youtube import parse_youtube, download_youtube_video, YouTubeVideo, is_youtube_url
 from downloadkit.xiaohongshu import parse_xiaohongshu, download_xhs_content, XhsContent, is_xiaohongshu_url
+from downloadkit.generic_video import (
+    GenericVideo, parse_generic, download_generic_video,
+    is_http_url, is_direct_media_url, build_file_stem,
+)
+from downloadkit.bookmarks import parse_bookmarks_html
 from downloadkit.download_queue import download_queue, TaskStatus, DownloadTask
 from downloadkit.history import download_history
 from downloadkit.exceptions import CancelException, PauseException
@@ -99,6 +104,7 @@ class BatchDeleteRequest(BaseModel):
 
 class VideoParseRequest(BaseModel):
     url: str
+    title_hint: str = ""  # 命名提示（书签标题等），用于返回 suggested_name
 
 class VideoDownloadRequest(BaseModel):
     url: str
@@ -107,12 +113,24 @@ class VideoDownloadRequest(BaseModel):
     merge_motion_photo: bool = True  # 是否合并实况照片为Motion Photo格式（抖音）
     apple_live_photo: bool = False  # 是否同时生成Apple Live Photo格式（适用于iPhone）
     rename_strategy: str | None = None  # 文件重名策略 (skip/overwrite/rename)，None则从配置读取
+    filename_hint: str = ""  # 命名提示（书签标题/选集条目标题），决定产物文件名
+
+class BatchItem(BaseModel):
+    """批量任务的单条：书签导入场景携带书签标题作命名提示"""
+    url: str
+    title: str = ""   # 书签标题/命名提示
+    folder: str = ""  # 书签所在文件夹（保留展示用）
+
+class BookmarkImportRequest(BaseModel):
+    html: str  # 浏览器导出的书签 HTML 文件全文
 
 class BatchParseRequest(BaseModel):
-    urls: list[str]  # 视频链接列表
+    urls: list[str] = []  # 视频链接列表（与 items 二选一，items 优先）
+    items: list[BatchItem] | None = None  # 带命名提示的条目列表
 
 class BatchDownloadRequest(BaseModel):
-    urls: list[str]  # 视频链接列表
+    urls: list[str] = []  # 视频链接列表（与 items 二选一，items 优先）
+    items: list[BatchItem] | None = None  # items 存在时为权威工作列表
     quality: str = "best"  # best, 1080, 720, 480
     rename_strategy: str | None = None  # 文件重名策略 (skip/overwrite/rename)，None则从配置读取
     merge_motion_photo: bool | None = None  # 是否合并实况照片（None时从配置读取）
@@ -830,6 +848,9 @@ def detect_platform(url: str) -> str:
         return 'youtube'
     elif 'xiaohongshu.com' in url or 'xhslink.com' in url:
         return 'xiaohongshu'
+    elif is_http_url(url):
+        # 兜底：任何 http(s) 链接交给 generic（L0 直链 / L1 网页）
+        return 'generic'
     else:
         return None
 
@@ -906,6 +927,37 @@ async def api_video_parse(req: VideoParseRequest):
                 "video_url": content.video_url,
                 "images": [{"url": url} for url in content.images],
             }
+        
+        elif platform == 'generic':
+            # L0 直链 / L1 网页：yt-dlp generic extractor
+            video = await parse_generic(url)
+            ret = {
+                "platform": "generic",
+                "title": video.title,
+                "author": video.author,
+                "cover": video.cover,
+                "content_type": "video",
+                "duration": video.duration,
+                "is_playlist": video.is_playlist,
+                "entry_count": video.entry_count,
+                "webpage_url": video.webpage_url,
+                "formats": video.formats,
+                # 预览将保存的文件名（剧名-第01集 / 网页标题 / web_URL末段）
+                "suggested_name": build_file_stem(
+                    hint=req.title_hint, title=video.title,
+                    page_title=video.page_title, url=url,
+                ),
+            }
+            # 只有 mp4 直链能被 <video> 直接播放；
+            # m3u8 需要 hls.js，给出去只会黑屏，交给下载流程处理
+            if is_direct_media_url(url) and video.ext == "mp4":
+                ret["video_url"] = url
+            logger.info(
+                f"[Parse] generic, title={video.title[:60]}, "
+                f"playlist={video.is_playlist}({video.entry_count}), "
+                f"referer={video.referer[:70]}"
+            )
+            return ret
     
     except Exception as e:
         raise HTTPException(400, f"解析失败: {str(e)}")
@@ -957,6 +1009,22 @@ async def api_video_download(req: VideoDownloadRequest):
                 content = await parse_xiaohongshu(url)
                 filepaths = await download_xhs_content(content, get_download_dir(), task_id=task_id, rename_strategy=rename_strategy)
                 filenames = [fp.name for fp in filepaths]
+            
+            elif platform == 'generic':
+                video = await parse_generic(url)
+                # 队列里显示真实标题（书签场景优先显示书签标题）
+                display_title = req.filename_hint or video.title
+                if display_title:
+                    task.title = display_title
+                filepath = await download_generic_video(
+                    video,
+                    get_download_subdir('videos'),
+                    req.quality,
+                    task_id=task_id,
+                    rename_strategy=rename_strategy,
+                    name_hint=req.filename_hint,
+                )
+                filenames = [filepath.name]
             
             else:
                 raise ValueError("不支持的平台")
@@ -1012,9 +1080,20 @@ async def api_video_download(req: VideoDownloadRequest):
                 logger.warning(f"[History] 记录下载历史失败: {e}")
         
         except Exception as e:
-            task.status = TaskStatus.FAILED
-            task.error = str(e)
-            _downloads[task_id] = {"status": "failed", "error": str(e)}
+            # 用户主动取消/暂停不是失败（对齐音乐下载接口 :290-295 的处理），
+            # 否则前端会把"已取消"显示成"失败"。
+            # 判定用队列集合而非异常类型：中止信号由各平台下载器抛出
+            # （generic 抛 AbortDownload），类型不统一。
+            if download_queue.is_cancelled(task_id):
+                task.status = TaskStatus.CANCELLED
+                _downloads[task_id] = {"status": "cancelled", "error": str(e)}
+            elif download_queue.is_paused(task_id):
+                task.status = TaskStatus.PAUSED
+                _downloads[task_id] = {"status": "paused", "error": str(e)}
+            else:
+                task.status = TaskStatus.FAILED
+                task.error = str(e)
+                _downloads[task_id] = {"status": "failed", "error": str(e)}
             raise
     
     # 通过队列管理任务
@@ -1142,9 +1221,12 @@ async def api_batch_parse(req: BatchParseRequest):
     }
     """
     results = []
-    
-    for url in req.urls:
-        url = url.strip()
+
+    # items（书签导入场景，带命名提示）优先；否则由 urls 构造
+    work_items = req.items if req.items else [BatchItem(url=u) for u in req.urls]
+
+    for item in work_items:
+        url = item.url.strip()
         if not url:
             continue
         
@@ -1210,6 +1292,25 @@ async def api_batch_parse(req: BatchParseRequest):
                     "status": "success"
                 })
             
+            elif platform == 'generic':
+                video = await parse_generic(url)
+                results.append({
+                    "url": url,
+                    "platform": platform,
+                    "title": video.title,
+                    "author": video.author,
+                    "cover": video.cover,
+                    "content_type": "video",
+                    "duration": video.duration,
+                    "is_playlist": video.is_playlist,
+                    "entry_count": video.entry_count,
+                    "suggested_name": build_file_stem(
+                        hint=item.title, title=video.title,
+                        page_title=video.page_title, url=url,
+                    ),
+                    "status": "success"
+                })
+            
             else:
                 results.append({
                     "url": url,
@@ -1239,10 +1340,12 @@ async def api_batch_download(req: BatchDownloadRequest):
     }
     """
     task_id = f"batch_{int(time.time())}"
+    # items（书签导入场景，带命名提示）优先；否则由 urls 构造
+    work_items = req.items if req.items else [BatchItem(url=u) for u in req.urls]
     _downloads[task_id] = {
         "status": "downloading",
         "type": "batch",
-        "total": len(req.urls),
+        "total": len(work_items),
         "completed": 0,
         "failed": 0,
         "files": []
@@ -1257,8 +1360,8 @@ async def api_batch_download(req: BatchDownloadRequest):
                 cfg = load_config()
                 rename_strategy = cfg.get('general', {}).get('rename_strategy', 'skip')
 
-            for url in req.urls:
-                url = url.strip()
+            for item in work_items:
+                url = item.url.strip()
                 if not url:
                     continue
                 
@@ -1285,12 +1388,28 @@ async def api_batch_download(req: BatchDownloadRequest):
                         filepaths = await download_xhs_content(content, get_download_dir(), task_id=task_id, rename_strategy=rename_strategy)
                         _downloads[task_id]["files"].extend([fp.name for fp in filepaths])
                     
+                    elif platform == 'generic':
+                        video = await parse_generic(url)
+                        filepath = await download_generic_video(
+                            video,
+                            get_download_subdir('videos'),
+                            req.quality,
+                            task_id=task_id,
+                            rename_strategy=rename_strategy,
+                            name_hint=item.title,
+                        )
+                        _downloads[task_id]["files"].append(filepath.name)
+                    
                     else:
                         raise ValueError(f"不支持的平台: {platform}")
                     
                     _downloads[task_id]["completed"] += 1
                 
                 except Exception as e:
+                    # 取消/暂停必须中断整个批量：这个内层 except 会吞掉中止
+                    # 信号并继续下一个 URL，导致批量任务取消无效。
+                    if download_queue.is_cancelled(task_id) or download_queue.is_paused(task_id):
+                        raise
                     _downloads[task_id]["failed"] += 1
                     logger.error(f"[Batch] 下载失败 {url}: {e}")
             
@@ -1300,22 +1419,51 @@ async def api_batch_download(req: BatchDownloadRequest):
             _downloads[task_id]["status"] = "done"
         
         except Exception as e:
-            task.status = TaskStatus.FAILED
-            task.error = str(e)
-            _downloads[task_id]["status"] = "failed"
+            # 同单个下载：取消/暂停不能记成失败
+            if download_queue.is_cancelled(task_id):
+                task.status = TaskStatus.CANCELLED
+                _downloads[task_id]["status"] = "cancelled"
+            elif download_queue.is_paused(task_id):
+                task.status = TaskStatus.PAUSED
+                _downloads[task_id]["status"] = "paused"
+            else:
+                task.status = TaskStatus.FAILED
+                task.error = str(e)
+                _downloads[task_id]["status"] = "failed"
             raise
     
     # 通过队列管理任务
-    task_title = f"批量下载 {len(req.urls)} 个视频"
+    task_title = f"批量下载 {len(work_items)} 个视频"
     await download_queue.add_task(
         task_id=task_id,
-        url=req.urls[0] if req.urls else "",
+        url=work_items[0].url if work_items else "",
         platform="batch",
         title=task_title,
         download_func=_download_func
     )
     
     return {"task_id": task_id}
+
+
+@app.post("/api/bookmarks/import")
+async def api_bookmarks_import(req: BookmarkImportRequest):
+    """导入浏览器导出的书签 HTML（Netscape 格式），返回树结构与统计。
+
+    前端用 FileReader 读文件文本后 JSON 提交（不走 multipart，零新依赖；
+    结构标签为 ASCII，标题编码由浏览器 TextDecoder 处理）。
+    返回: {"tree": [...], "links": N, "folders": M}
+    """
+    text = (req.html or "").lstrip("\ufeff")
+    if not text.strip():
+        raise HTTPException(400, "文件为空")
+    try:
+        tree, stats = parse_bookmarks_html(text)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if stats["links"] == 0:
+        raise HTTPException(400, "未解析到任何书签链接，请确认这是浏览器导出的书签 HTML 文件")
+    logger.info(f"[Bookmarks] 导入书签: {stats['links']} 链接 / {stats['folders']} 文件夹")
+    return {"tree": tree, **stats}
 
 
 @app.get("/api/video/batch/{task_id}")

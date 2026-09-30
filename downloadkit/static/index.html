@@ -115,6 +115,7 @@
         <div class="resource-mode-toggle">
           <button class="mode-btn active" data-mode="single">单个链接</button>
           <button class="mode-btn" data-mode="batch">批量下载</button>
+          <button class="mode-btn" data-mode="bookmark">书签导入</button>
         </div>
         
         <!-- 单个链接模式 -->
@@ -145,6 +146,34 @@
           
           <div id="batch-status" class="status-msg" style="display:none"></div>
           <div id="batch-results" style="display:none"></div>
+        </div>
+        
+        <!-- 书签导入模式 -->
+        <div class="bookmark-mode" id="bookmark-mode" style="display:none">
+          <div class="search-section">
+            <div class="search-box bookmark-pick" id="bookmark-pick" title="点击选择书签 HTML 文件">
+              <i data-lucide="bookmark" class="search-icon"></i>
+              <input class="search-input" id="bookmark-file-label" type="text" readonly
+                     placeholder="点击选择浏览器导出的书签 HTML 文件...">
+              <button class="search-btn" id="bookmark-import-btn" title="导入"><i data-lucide="upload"></i></button>
+            </div>
+            <input type="file" id="bookmark-file" accept=".html,.htm,text/html" style="display:none">
+            <div class="resource-hint">导出方法：浏览器书签管理器 → 右上角 ⋮ → 导出书签；导入后可按文件夹勾选，一键解析并下载全部</div>
+          </div>
+
+          <div id="bookmark-status" class="status-msg" style="display:none"></div>
+
+          <div id="bookmark-tree-wrap" style="display:none">
+            <div class="inline-batch-summary">
+              <span>共 <strong id="bookmark-total">0</strong> 条书签，已选 <strong id="bookmark-selected">0</strong> 条</span>
+              <button class="btn btn-secondary" id="bookmark-select-all" style="padding:6px 14px;font-size:12px">全选</button>
+              <button class="btn btn-secondary" id="bookmark-clear" style="padding:6px 14px;font-size:12px">清空</button>
+              <button class="btn btn-primary" id="bookmark-parse-btn" style="padding:6px 14px;font-size:12px"><i data-lucide="search" style="width:12px;height:12px;margin-right:4px"></i>解析选中</button>
+            </div>
+            <div id="bookmark-tree" class="bookmark-tree"></div>
+          </div>
+
+          <div id="bookmark-results" style="display:none"></div>
         </div>
       </div>
 
