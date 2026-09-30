@@ -612,9 +612,10 @@
     btn.innerHTML = iconHtml + '下载中…';
     lucide.createIcons();
     
-    // 使用统一下载接口（书签场景带命名提示）
-    var hint = (downloadHints[url] && downloadHints[url].title) || '';
-    api('/api/video/download', { method: 'POST', body: { url: url, platform: platform, filename_hint: hint } }).then(function(result) {
+    // 使用统一下载接口（书签场景带命名提示；探测命中项带 Referer 防盗链）
+    var h = downloadHints[url] || {};
+    var hint = h.title || '';
+    api('/api/video/download', { method: 'POST', body: { url: url, platform: platform, filename_hint: hint, referer: h.referer || '' } }).then(function(result) {
       pollResourceDownload(result.task_id, btn, iconHtml);
     }).catch(function(err) {
       btn.disabled = false;
@@ -935,6 +936,16 @@
     setBookmarkStatus('<span class="spinner"></span> 正在读取 ' + escHtml(file.name) + ' ...');
     $('#bookmark-tree-wrap').style.display = 'none';
     $('#bookmark-results').style.display = 'none';
+    // 新导入作废进行中的探测
+    if (probeState.running) {
+      clearInterval(probeState.timer);
+      probeState.running = false;
+      setProbeButtons(false);
+      if (probeState.id) {
+        api('/api/bookmarks/probe/' + probeState.id + '/stop', { method: 'POST' }).catch(function() {});
+      }
+    }
+    showProbeBar(false);
 
     var reader = new FileReader();
     reader.onerror = function() { setBookmarkStatus('读取文件失败', 'error'); };
@@ -1075,3 +1086,151 @@
       btn.disabled = false;
     });
   });
+
+  // ================= 批量探测（P3：三层降级 L0 直链 → L1 静态 → L2 浏览器嗅探） =================
+  // 轮询式进度：POST 启动拿 probe_id → 每秒 GET 全量结果 → 前端整列重渲染。
+  // 结果按完成顺序追加（并发完成先后不定），data-idx 用当前数组下标，每轮重绑。
+
+  var probeState = { id: '', timer: 0, running: false };
+
+  function showProbeBar(visible, total, done, hit) {
+    var bar = $('#bookmark-probe-bar');
+    if (!bar) return;
+    bar.style.display = visible ? 'flex' : 'none';
+    if (!visible) return;
+    $('#probe-progress-text').textContent = '已探测 ' + done + '/' + total + ' · 命中 ' + hit;
+    $('#probe-fill').style.width = (total ? Math.round(done / total * 100) : 0) + '%';
+    $('#bookmark-probe-stop-btn').disabled = false;
+  }
+
+  function setProbeButtons(disabled) {
+    $('#bookmark-probe-btn').disabled = disabled;
+    $('#bookmark-parse-btn').disabled = disabled;
+  }
+
+  function probeSelectedBookmarks() {
+    var items = collectSelectedBookmarks();
+    if (items.length === 0) {
+      toast('请先勾选要探测的书签', 'error');
+      return;
+    }
+    if (probeState.running) return;
+    setProbeButtons(true);
+    $('#bookmark-results').style.display = 'none';
+
+    api('/api/bookmarks/probe', {
+      method: 'POST',
+      body: { items: items, urls: items.map(function(i) { return i.url; }), l2: true }
+    }).then(function(data) {
+      probeState.id = data.probe_id;
+      probeState.running = true;
+      showProbeBar(true, data.total, 0, 0);
+      probeState.timer = setInterval(pollProbe, 1000);
+    }).catch(function(err) {
+      setProbeButtons(false);
+      toast('探测启动失败：' + err.message, 'error');
+    });
+  }
+
+  function pollProbe() {
+    if (!probeState.id) return;
+    api('/api/bookmarks/probe/' + probeState.id).then(function(st) {
+      showProbeBar(st.status === 'running', st.total, st.done, st.hit);
+      renderProbeResults(st.results || [], st.status);
+      if (st.status !== 'running') {
+        clearInterval(probeState.timer);
+        probeState.running = false;
+        setProbeButtons(false);
+        if (st.status === 'done') {
+          toast('探测完成：命中 ' + st.hit + '/' + st.total, st.hit > 0 ? 'success' : 'warning');
+        } else if (st.status === 'stopped') {
+          toast('探测已停止（已完成 ' + st.done + ' 条，命中 ' + st.hit + '）', 'info');
+        } else if (st.status === 'failed') {
+          toast('探测失败：' + escHtml(st.error || '未知错误'), 'error');
+        }
+      }
+    }).catch(function() { /* 单次轮询失败容忍，下一轮重试 */ });
+  }
+
+  function stopProbe() {
+    if (!probeState.id) return;
+    var btn = $('#bookmark-probe-stop-btn');
+    btn.disabled = true;
+    api('/api/bookmarks/probe/' + probeState.id + '/stop', { method: 'POST' }).catch(function() {});
+  }
+
+  // 探测结果列表：层徽章 + 标题 + 耗时 +（命中）下载入口
+  function renderProbeResults(results, status) {
+    var box = $('#bookmark-results');
+    box.style.display = 'block';
+    box.className = 'resource-preview-container';
+
+    var hits = results.filter(function(r) { return r.status === 'hit' && r.streams && r.streams.length; });
+    var missCount = results.length - hits.length;
+    var label = status === 'running' ? '探测中…'
+      : status === 'stopped' ? '已停止'
+      : status === 'failed' ? '探测失败' : '探测完成';
+
+    var html = '<div class="inline-batch-summary">' +
+      '<span>' + label + '：<strong class="text-success">' + hits.length + ' 命中</strong>' +
+      '，' + missCount + ' 未命中 / 共 ' + results.length + ' 条</span>';
+    if (hits.length > 0 && status !== 'running') {
+      html += '<button class="btn btn-primary inline-probe-dl-all" style="padding:6px 14px;font-size:12px">' +
+        '<i data-lucide="download" style="width:12px;height:12px;margin-right:4px"></i>下载全部命中（' + hits.length + '）</button>';
+    }
+    html += '</div><div class="probe-list">';
+
+    results.forEach(function(r, idx) {
+      var layer = r.layer && r.layer !== '-' ? r.layer : '';
+      html += '<div class="probe-row' + (r.status === 'hit' ? ' probe-hit' : '') + '">' +
+        (layer
+          ? '<span class="probe-layer probe-layer-' + layer.toLowerCase() + '">' + layer + '</span>'
+          : '<span class="probe-layer probe-layer-miss">—</span>') +
+        '<span class="probe-title" title="' + escHtml(r.url) + '">' + escHtml(r.title || shortenUrl(r.url)) + '</span>';
+      if (r.status === 'hit') {
+        html += '<span class="probe-count">' + (r.streams || []).length + ' 流</span>' +
+          '<span class="probe-meta">' + escHtml(String(r.elapsed != null ? r.elapsed + 's' : '')) + '</span>' +
+          '<button class="btn btn-secondary probe-dl-btn" data-idx="' + idx + '" style="padding:3px 10px;font-size:11px">下载</button>';
+      } else {
+        html += '<span class="probe-miss-txt">' + escHtml(r.error || '无视频') + '</span>' +
+          '<span class="probe-meta">' + escHtml(String(r.elapsed != null ? r.elapsed + 's' : '')) + '</span>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    box.innerHTML = html;
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    var dlAll = box.querySelector('.inline-probe-dl-all');
+    if (dlAll) dlAll.addEventListener('click', function() { downloadProbeHits(results); });
+    box.querySelectorAll('.probe-dl-btn').forEach(function(b) {
+      b.addEventListener('click', function() {
+        var r = results[+b.dataset.idx];
+        if (!r || !r.streams || !r.streams.length) return;
+        downloadHints[r.streams[0]] = { title: r.title || '', folder: r.folder || '', referer: r.referer || '' };
+        downloadResource(r.streams[0], 'generic', b);
+      });
+    });
+  }
+
+  // 一键入队全部命中项（url=首条流地址，title/folder/referer 随 items 下发）
+  function downloadProbeHits(results) {
+    var work = results
+      .filter(function(r) { return r.status === 'hit' && r.streams && r.streams.length; })
+      .map(function(r) {
+        return { url: r.streams[0], title: r.title || '', folder: r.folder || '', referer: r.referer || '' };
+      });
+    if (!work.length) { toast('没有可下载的命中项', 'warning'); return; }
+    toast('开始批量下载 ' + work.length + ' 个命中资源...', 'info');
+    api('/api/video/batch-download', {
+      method: 'POST',
+      body: { urls: work.map(function(w) { return w.url; }), items: work }
+    }).then(function(result) {
+      pollBatchDownload(result.task_id);
+    }).catch(function(err) {
+      toast('批量下载失败：' + err.message, 'error');
+    });
+  }
+
+  $('#bookmark-probe-btn').addEventListener('click', probeSelectedBookmarks);
+  $('#bookmark-probe-stop-btn').addEventListener('click', stopProbe);

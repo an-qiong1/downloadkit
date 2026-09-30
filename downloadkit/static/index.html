@@ -163,11 +163,19 @@
 
           <div id="bookmark-status" class="status-msg" style="display:none"></div>
 
+          <!-- 批量探测进度（P3：三层降级 L0/L1/L2，边探测边出结果） -->
+          <div id="bookmark-probe-bar" class="probe-bar" style="display:none">
+            <span class="probe-text" id="probe-progress-text">已探测 0/0 · 命中 0</span>
+            <div class="probe-track"><div class="probe-fill" id="probe-fill"></div></div>
+            <button class="btn btn-secondary" id="bookmark-probe-stop-btn" style="padding:4px 12px;font-size:12px">停止</button>
+          </div>
+
           <div id="bookmark-tree-wrap" style="display:none">
             <div class="inline-batch-summary">
               <span>共 <strong id="bookmark-total">0</strong> 条书签，已选 <strong id="bookmark-selected">0</strong> 条</span>
               <button class="btn btn-secondary" id="bookmark-select-all" style="padding:6px 14px;font-size:12px">全选</button>
               <button class="btn btn-secondary" id="bookmark-clear" style="padding:6px 14px;font-size:12px">清空</button>
+              <button class="btn btn-secondary" id="bookmark-probe-btn" style="padding:6px 14px;font-size:12px"><i data-lucide="layers" style="width:12px;height:12px;margin-right:4px"></i>探测选中</button>
               <button class="btn btn-primary" id="bookmark-parse-btn" style="padding:6px 14px;font-size:12px"><i data-lucide="search" style="width:12px;height:12px;margin-right:4px"></i>解析选中</button>
             </div>
             <div id="bookmark-tree" class="bookmark-tree"></div>

@@ -2852,5 +2852,106 @@ details[open] #dir-advanced-arrow {
   margin-top: 2px;
 }
 
+/* ---- 批量探测进度与结果（P3） ---- */
+
+.probe-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+  padding: 8px 12px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+}
+
+.probe-text {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.probe-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.probe-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #4f8cff, #bf5af2);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.probe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.probe-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+}
+
+.probe-row.probe-hit {
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.probe-layer {
+  flex: none;
+  min-width: 26px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.probe-layer-l0 { background: rgba(34, 197, 94, 0.18); color: #22c55e; }
+.probe-layer-l1 { background: rgba(79, 140, 255, 0.18); color: #4f8cff; }
+.probe-layer-l2 { background: rgba(191, 90, 242, 0.18); color: #bf5af2; }
+.probe-layer-miss { background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); }
+
+.probe-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.probe-meta,
+.probe-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.probe-miss-txt {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-secondary);
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 

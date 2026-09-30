@@ -418,6 +418,23 @@ def build_file_stem(
     return f"web_{fb}" if prefix_weak else fb
 
 
+def _extract_page_title(html_text: str) -> str:
+    """从 HTML 文本提取 og:title / <title>（抓取与提取分离，供 L1 探测复用）。"""
+    m = re.search(
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        html_text, re.I,
+    ) or re.search(
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
+        html_text, re.I,
+    )
+    if m:
+        return html_module.unescape(m.group(1)).strip()
+    m = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.I | re.S)
+    if m:
+        return re.sub(r"\s+", " ", html_module.unescape(m.group(1))).strip()
+    return ""
+
+
 async def _fetch_page_title(page_url: str, *, referer: str = "") -> str:
     """抓网页 og:title / <title>（弱标题时的命名兜底）。失败返回 ""。"""
     if not is_http_url(page_url) or is_direct_media_url(page_url):
@@ -438,19 +455,93 @@ async def _fetch_page_title(page_url: str, *, referer: str = "") -> str:
         logger.debug(f"[Generic] 抓页面标题失败 {page_url[:80]}: {e}")
         return ""
 
-    m = re.search(
-        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
-        html_text, re.I,
-    ) or re.search(
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
-        html_text, re.I,
-    )
-    if m:
-        return html_module.unescape(m.group(1)).strip()
-    m = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.I | re.S)
-    if m:
-        return re.sub(r"\s+", " ", html_module.unescape(m.group(1))).strip()
-    return ""
+    return _extract_page_title(html_text)
+
+
+# ---------------- L1 静态深挖（P3 批量探测的快速通道） ----------------
+
+_JS_SRC_RE = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.I)
+# 第三方库 JS 永远不含本站视频流，抓了纯浪费 3s 预算
+_THIRD_PARTY_JS_RE = re.compile(
+    r"jquery|googleapis|gstatic|googletag|analytics|cloudflare|unpkg|jsdelivr"
+    r"|bootcss|polyfill|schema\.org", re.I,
+)
+
+
+def page_js_urls(html_text: str, base_url: str) -> list[str]:
+    """提取页面引用的 script src（urljoin 转绝对地址，保序去重）。"""
+    from urllib.parse import urljoin
+    out: list[str] = []
+    for m in _JS_SRC_RE.finditer(html_text or ""):
+        u = urljoin(base_url, m.group(1))
+        if u.startswith(("http://", "https://")) and u not in out:
+            out.append(u)
+    return out
+
+
+async def probe_static(url: str, timeout: float = 3.0) -> dict[str, Any]:
+    """L1 静态深挖（计划书 §4.1）：抓 HTML 正则挖流地址；未命中则抓页面
+    引用的 JS 文件再挖（最多 2 个，跳过第三方库）。
+
+    探测语义：任何网络/解析失败都返回 streams=[]（= 未命中），不抛异常，
+    由调用方决定是否降级到 L2 浏览器嗅探。
+
+    Returns:
+        {"streams": [...提流+去重+主子区分后最多 8 条...], "title": 页面标题}
+    """
+    from downloadkit.sniffer import dedupe_streams, extract_stream_urls, prefer_main_streams
+
+    empty: dict[str, Any] = {"streams": [], "title": ""}
+    if not is_http_url(url):
+        return empty
+    headers = {
+        "User-Agent": DEFAULT_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+    }
+    html_text = ""
+    try:
+        import httpx
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=True, headers=headers
+        ) as c:
+            r = await c.get(url)
+            if r.status_code < 400 and "mpegurl" not in r.headers.get("content-type", "").lower() \
+                    and not r.text.lstrip().startswith("#EXTM3U"):
+                html_text = r.text[:300_000]
+            elif r.text.lstrip().startswith("#EXTM3U"):
+                # 服务端把 m3u8 当文本返回：URL 本身即流
+                return {"streams": [url], "title": ""}
+    except Exception as e:  # noqa: BLE001 — 探测失败 = 未命中，不打断批次
+        logger.debug(f"[Probe] L1 抓取失败 {url[:80]}: {e}")
+        return empty
+    if not html_text:
+        return empty
+
+    title = _extract_page_title(html_text)
+    streams: list[str] = extract_stream_urls(html_text)
+
+    # 未命中 → 抓页面引用的 JS 再挖（最多 2 个）
+    if not streams:
+        js_urls = [j for j in page_js_urls(html_text, url)
+                   if not _THIRD_PARTY_JS_RE.search(j)][:2]
+        for ju in js_urls:
+            try:
+                import httpx
+                async with httpx.AsyncClient(
+                    timeout=timeout, follow_redirects=True, headers=headers
+                ) as c:
+                    r = await c.get(ju)
+                    if r.status_code < 400:
+                        streams.extend(extract_stream_urls(r.text[:200_000]))
+            except Exception:  # noqa: BLE001
+                continue
+            if streams:
+                break
+
+    return {
+        "streams": prefer_main_streams(dedupe_streams(streams))[:8],
+        "title": title,
+    }
 
 
 def _format_selector(quality: str) -> str:

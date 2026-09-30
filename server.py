@@ -47,7 +47,7 @@ from downloadkit.youtube import parse_youtube, download_youtube_video, YouTubeVi
 from downloadkit.xiaohongshu import parse_xiaohongshu, download_xhs_content, XhsContent, is_xiaohongshu_url
 from downloadkit.generic_video import (
     GenericVideo, parse_generic, download_generic_video,
-    is_http_url, is_direct_media_url, build_file_stem,
+    is_http_url, is_direct_media_url, build_file_stem, probe_static,
 )
 from downloadkit.bookmarks import parse_bookmarks_html
 from downloadkit.sniffer import sniff as sniff_l2
@@ -130,6 +130,12 @@ class BookmarkImportRequest(BaseModel):
 class SniffRequest(BaseModel):
     url: str  # 播放页/普通网页地址
     timeout: float = 30.0  # L2 总预算（秒），WAF+主页面+播放器提升
+
+class ProbeRequest(BaseModel):
+    """批量探测（P3）：三层降级流水线 L0 直链 → L1 静态 → L2 浏览器嗅探"""
+    items: list[BatchItem] | None = None  # 书签条目（含命名提示），优先
+    urls: list[str] = []
+    l2: bool = True  # 是否启用 L2 浏览器嗅探（false 则只跑 L0/L1 快速通道）
 
 class BatchParseRequest(BaseModel):
     urls: list[str] = []  # 视频链接列表（与 items 二选一，items 优先）
@@ -1489,6 +1495,139 @@ async def api_sniff(req: SniffRequest):
     timeout = max(10.0, min(float(req.timeout or 30.0), 60.0))
     result = await sniff_l2(url, timeout=timeout)
     return result.to_dict()
+
+
+# --- 批量探测（P3）：三层降级流水线 + 分层限流 + 可停止 ---
+# L0/L1 是网络 IO 走 Semaphore(4)；L2 浏览器嗅探走 Semaphore(1)（单例锁，
+# 信号量先把并发挡在 to_thread 之外，避免线程池被排队任务占满）。
+_probes: dict[str, dict] = {}
+
+
+async def _run_probe(pid: str, work: list, use_l2: bool) -> None:
+    """后台探测任务：逐条三层降级，每完成一条即写入结果（前端轮询增量可见）。"""
+    p = _probes[pid]
+    sem_io = asyncio.Semaphore(4)
+    sem_l2 = asyncio.Semaphore(1)
+
+    async def record(res: dict) -> None:
+        p["results"].append(res)
+        p["done"] += 1
+        if res.get("status") == "hit":
+            p["hit"] += 1
+
+    async def one(item) -> None:
+        url = item.url.strip()
+        t0 = time.monotonic()
+        base = {"url": url, "title": item.title, "folder": item.folder}
+
+        def miss(layer: str, why: str, title: str = "") -> dict:
+            return {
+                **base, "status": "miss", "layer": layer, "streams": [],
+                "referer": "", "title": item.title or title,
+                "elapsed": round(time.monotonic() - t0, 2), "error": why,
+            }
+
+        if p["cancelled"].is_set():
+            return  # 已停止：静默跳过，进度按已完成条目计
+
+        # L0：直链判定（~0s）
+        if is_direct_media_url(url):
+            await record({
+                **base, "status": "hit", "layer": "L0", "streams": [url],
+                "referer": "", "elapsed": round(time.monotonic() - t0, 2), "error": "",
+            })
+            return
+
+        # L1：静态深挖（并发 4，单条 3s 预算）
+        async with sem_io:
+            if p["cancelled"].is_set():
+                return
+            st = await probe_static(url, timeout=3.0)
+        if st["streams"]:
+            await record({
+                **base, "status": "hit", "layer": "L1",
+                "streams": st["streams"], "referer": url,
+                "title": item.title or st["title"],
+                "elapsed": round(time.monotonic() - t0, 2), "error": "",
+            })
+            return
+
+        # L2：浏览器嗅探（串行，单条 30s 预算）
+        if use_l2 and not p["cancelled"].is_set():
+            async with sem_l2:
+                if p["cancelled"].is_set():
+                    return
+                r = await sniff_l2(url, timeout=30.0)
+            if r.ok:
+                await record({
+                    **base, "status": "hit", "layer": "L2",
+                    "streams": [s.url for s in r.streams[:8]],
+                    "referer": r.referer,
+                    "title": item.title or r.title,
+                    "elapsed": round(time.monotonic() - t0, 2), "error": "",
+                })
+                return
+            await record(miss("L2", r.error or "未嗅探到流", r.title))
+            return
+
+        await record(miss("L1", "静态无流" + ("" if use_l2 else "（未启用L2）")))
+
+    try:
+        await asyncio.gather(*(one(i) for i in work))
+        p["status"] = "stopped" if p["cancelled"].is_set() else "done"
+    except Exception as e:  # noqa: BLE001 — 单批失败不让任务消失
+        logger.warning(f"[Probe] {pid} 异常终止: {type(e).__name__}: {e}")
+        p["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        p["status"] = "failed"
+
+
+@app.post("/api/bookmarks/probe")
+async def api_bookmarks_probe(req: ProbeRequest):
+    """启动批量探测（后台异步执行，立即返回 probe_id）。
+
+    轮询 GET /api/bookmarks/probe/{id} 取进度与全量结果；
+    POST /api/bookmarks/probe/{id}/stop 随时停止（进行中的 L2 单条会收尾，
+    最多再等 30s；未开始的条目直接跳过）。
+    """
+    items = req.items or [BatchItem(url=u) for u in req.urls]
+    work = [i for i in items if is_http_url((i.url or "").strip())]
+    if not work:
+        raise HTTPException(400, "没有可探测的链接")
+    # 防 _probes 无界增长：清理已结束的历史记录
+    for k in [k for k, v in _probes.items() if v["status"] != "running"]:
+        _probes.pop(k, None)
+    pid = f"probe_{int(time.time() * 1000)}"
+    _probes[pid] = {
+        "status": "running", "total": len(work), "done": 0, "hit": 0,
+        "results": [], "cancelled": asyncio.Event(), "error": "",
+    }
+    asyncio.create_task(_run_probe(pid, work, bool(req.l2)))
+    logger.info(f"[Probe] 启动 {pid}: {len(work)} 条, l2={req.l2}")
+    return {"probe_id": pid, "total": len(work)}
+
+
+@app.get("/api/bookmarks/probe/{probe_id}")
+async def api_bookmarks_probe_status(probe_id: str):
+    """探测进度与结果（running/done/stopped/failed）。"""
+    p = _probes.get(probe_id)
+    if not p:
+        raise HTTPException(404, "探测任务不存在或已被清理")
+    return {
+        "status": p["status"], "total": p["total"], "done": p["done"],
+        "hit": p["hit"], "results": p["results"], "error": p["error"],
+    }
+
+
+@app.post("/api/bookmarks/probe/{probe_id}/stop")
+async def api_bookmarks_probe_stop(probe_id: str):
+    """停止探测（置取消标志，立即返回）。"""
+    p = _probes.get(probe_id)
+    if not p:
+        raise HTTPException(404, "探测任务不存在或已被清理")
+    p["cancelled"].set()
+    if p["status"] == "running":
+        p["status"] = "stopped"
+    return {"status": p["status"], "done": p["done"], "hit": p["hit"]}
 
 
 @app.get("/api/video/batch/{task_id}")
