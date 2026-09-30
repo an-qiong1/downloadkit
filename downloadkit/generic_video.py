@@ -110,12 +110,16 @@ def _yt_dlp_cmd() -> list[str]:
 
 
 async def _ytdlp_dump_json(
-    url: str, *, flat: bool = False, timeout: int = PARSE_TIMEOUT
+    url: str, *, flat: bool = False, timeout: int = PARSE_TIMEOUT,
+    referer: str = "",
 ) -> list[dict[str, Any]]:
     """子进程方式取 yt-dlp 元数据（--dump-json --no-download）。
 
     用子进程而非 Python API 的原因：批量场景必须能硬超时 kill，
     阻塞的 extract_info 无法中断。
+
+    referer: 解析期就带上的 Referer——防盗链站 parse 阶段同样 403（A8），
+        只在下载期带 header 于事无补。
     """
     cmd = _yt_dlp_cmd() + [
         "--dump-json", "--no-download", "--no-warnings", "--quiet",
@@ -123,6 +127,8 @@ async def _ytdlp_dump_json(
         "--socket-timeout", "30",
         "--retries", "3",
     ]
+    if referer:
+        cmd += ["--add-header", f"Referer: {referer}"]
     if flat:
         cmd += ["--flat-playlist"]
     # 直链场景跳过 playlist 判定，省一次网络往返
@@ -218,11 +224,15 @@ async def parse_generic(
     if not is_http_url(url):
         raise RuntimeError("不是有效的 http(s) 链接")
 
+    # 解析期 Referer：调用方给的真实页面 > 同域 origin。
+    # （webpage_url 兜底要等 dump 结果才知道，其值通常等于 origin；
+    #   无论哪种都必须在第一次网络请求前带上，否则防盗链站直接 403）
+    pre_referer = referer or origin_of(url)
     entries: list[dict[str, Any]] = []
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            entries = await _ytdlp_dump_json(url, flat=flat)
+            entries = await _ytdlp_dump_json(url, flat=flat, referer=pre_referer)
             last_err = None
             break
         except (TimeoutError, RuntimeError, OSError) as e:
@@ -666,10 +676,12 @@ async def download_generic_video(
 
     def _hook(d):
         if d.get("status") == "downloading":
+            # 暂停不做硬中断（批量在条目边界暂停，server 层检查）：
+            # HLS fragment 并发下载被异常打断会残留文件句柄，resume 后
+            # rename 必失败（实测 WinError 32 / Unable to remove Frag*）。
+            # 取消仍即时中断（不需要恢复，残留由 AbortDownload 清理）。
             if task_id and download_queue.is_cancelled(task_id):
                 _abort("下载已取消")
-            if task_id and download_queue.is_paused(task_id):
-                _abort("下载已暂停")
 
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             downloaded = d.get("downloaded_bytes") or 0

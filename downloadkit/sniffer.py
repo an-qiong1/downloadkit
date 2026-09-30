@@ -32,19 +32,17 @@ logger = logging.getLogger(__name__)
 # 系统 Edge（DrissionPage 不带浏览器，R6/R9）
 _EDGE_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 
-# ---------------- 纯函数：提流 / 过滤 / 选播放器（可单测） ----------------
+# ---------------- 正则常量 / 播放器解析（选流去重见 stream_filter.py） ------
 
-# 流地址（m3u8 / mpd / mp4），结尾排除引号与括号
-STREAM_RE = re.compile(
-    r'https?://[^\s"\'<>\\)]+?\.(?:m3u8|mpd|mp4)(?:[^\s"\'<>\\)]*)?', re.I
+# 选流去重纯函数（§4.3）P5 按 §5.1 抽至 stream_filter.py；
+# re-export 保持 downloadkit.sniffer.extract_stream_urls 等旧 import 兼容。
+from .stream_filter import (  # noqa: E402
+    AD_RE as _AD_RE,
+    STREAM_RE,
+    dedupe_streams,
+    extract_stream_urls,
+    prefer_main_streams,
 )
-# 干扰流排除（计划书 §4.3：trailer/preview/ad/commerc/vod_ad/advert；
-# 实测补充：plyr 播放器的空白占位 blank.mp4）
-_AD_RE = re.compile(
-    r"trailer|preview|advert|commerc|vod[_-]?ad|/ad[s]?[./_?#-]|\bblank\b", re.I
-)
-# 子播放列表特征：路径含分辨率段（如 /640x360/video.m3u8）
-_SUB_M3U8_RE = re.compile(r"/\d{2,4}x\d{2,4}/", re.I)
 # 疑似「拿播放器地址」的 API（读响应体用，避免读大响应）
 _API_LIKE_RE = re.compile(
     r"player|pframe|geturl|playurl|chapter|content|video_info|config|\.php|api/", re.I
@@ -53,49 +51,6 @@ _API_LIKE_RE = re.compile(
 _PLAYER_HINT_RE = re.compile(r"player|pframe|embed|player\.htm|vod", re.I)
 
 _WAF_MARKERS_RE = re.compile(r"safeline|安全检测|正在进行安全", re.I)
-
-
-def extract_stream_urls(text: str) -> list[str]:
-    """从任意文本（URL/响应体/HTML）挖流地址，排除干扰流，保序去重。"""
-    if not text:
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for m in STREAM_RE.finditer(str(text)):
-        u = m.group(0).rstrip("\\").rstrip(",;]")
-        if _AD_RE.search(u):
-            continue
-        if u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
-
-
-def dedupe_streams(urls: list[str]) -> list[str]:
-    """去重：同 host+path 视为同一流（query 的签名参数不参与），保留首见完整 URL。"""
-    out: list[str] = []
-    seen: set[str] = set()
-    for u in urls:
-        base = u.split("#", 1)[0]
-        m = re.match(r"(https?://[^/?#]+)(/[^?#]*)?", base, re.I)
-        key = (m.group(1).lower() + (m.group(2) or "/").lower()) if m else base
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(u)
-    return out
-
-
-def prefer_main_streams(urls: list[str]) -> list[str]:
-    """主/子播放列表区分（§4.3）：主列表与分辨率子列表并存时只保留主列表。"""
-    if not urls:
-        return []
-    has_main = any(".m3u8" in u.lower() and not _SUB_M3U8_RE.search(u) for u in urls)
-    has_sub = any(".m3u8" in u.lower() and _SUB_M3U8_RE.search(u) for u in urls)
-    if has_main and has_sub:
-        return [u for u in urls
-                if not (".m3u8" in u.lower() and _SUB_M3U8_RE.search(u))]
-    return urls
 
 
 def find_player_url(

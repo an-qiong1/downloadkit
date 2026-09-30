@@ -2953,6 +2953,25 @@ details[open] #dir-advanced-arrow {
   white-space: nowrap;
 }
 
+/* P5 结果勾选 + 选流下拉 */
+.probe-cb-wrap {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.probe-stream-sel {
+  flex: none;
+  max-width: 220px;
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+}
+
 /* ---- 选集展开弹窗（P4） ---- */
 
 .episode-overlay {

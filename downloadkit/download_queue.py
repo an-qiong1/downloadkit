@@ -116,6 +116,10 @@ class DownloadQueue:
             if task.status == TaskStatus.FAILED:
                 # download_func 已标记失败，不再覆盖
                 pass
+            elif task.status == TaskStatus.PAUSED:
+                # 条目边界暂停：download_func 正常 return 但标记了暂停，
+                # 不能被下面的 else 覆盖成 COMPLETED（resume 会重跑）
+                pass
             elif task.task_id in self._cancelled_tasks:
                 task.status = TaskStatus.CANCELLED
                 self._cancelled_tasks.discard(task.task_id)

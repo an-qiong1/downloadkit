@@ -1206,7 +1206,9 @@
       '，' + missCount + ' 未命中 / 共 ' + results.length + ' 条</span>';
     if (hits.length > 0 && status !== 'running') {
       html += '<button class="btn btn-primary inline-probe-dl-all" style="padding:6px 14px;font-size:12px">' +
-        '<i data-lucide="download" style="width:12px;height:12px;margin-right:4px"></i>下载全部命中（' + hits.length + '）</button>';
+        '<i data-lucide="download" style="width:12px;height:12px;margin-right:4px"></i>下载勾选（<span class="probe-checked-n">' + hits.length + '</span>）</button>' +
+        '<button class="btn btn-secondary probe-cb-all" style="padding:6px 10px;font-size:11px">全选</button>' +
+        '<button class="btn btn-secondary probe-cb-none" style="padding:6px 10px;font-size:11px">清空</button>';
     }
     html += '</div><div class="probe-list">';
 
@@ -1218,8 +1220,17 @@
           : '<span class="probe-layer probe-layer-miss">—</span>') +
         '<span class="probe-title" title="' + escHtml(r.url) + '">' + escHtml(r.title || shortenUrl(r.url)) + '</span>';
       if (r.status === 'hit') {
-        html += '<span class="probe-count">' + (r.streams || []).length + ' 流</span>' +
-          '<span class="probe-meta">' + escHtml(String(r.elapsed != null ? r.elapsed + 's' : '')) + '</span>' +
+        // 结果勾选（§4.3「拿不准展示供勾选，默认全选」）+ 多流选流下拉
+        html += '<label class="probe-cb-wrap" title="参与批量下载"><input type="checkbox" class="probe-cb" data-idx="' + idx + '" checked></label>' +
+          '<span class="probe-count">' + (r.streams || []).length + ' 流</span>';
+        if ((r.streams || []).length > 1) {
+          html += '<select class="probe-stream-sel" data-idx="' + idx + '" title="选择下载哪条流">';
+          r.streams.forEach(function(su) {
+            html += '<option value="' + escHtml(su) + '">' + escHtml(streamShortLabel(su)) + '</option>';
+          });
+          html += '</select>';
+        }
+        html += '<span class="probe-meta">' + escHtml(String(r.elapsed != null ? r.elapsed + 's' : '')) + '</span>' +
           '<button class="btn btn-secondary probe-dl-btn" data-idx="' + idx + '" style="padding:3px 10px;font-size:11px">下载</button>';
       } else {
         html += '<span class="probe-miss-txt">' + escHtml(r.error || '无视频') + '</span>' +
@@ -1231,26 +1242,60 @@
     box.innerHTML = html;
     if (typeof lucide !== 'undefined') lucide.createIcons();
 
+    function updateCheckedN() {
+      var n = box.querySelectorAll('.probe-cb:checked').length;
+      var el = box.querySelector('.probe-checked-n');
+      if (el) el.textContent = n;
+    }
+    box.querySelectorAll('.probe-cb').forEach(function(cb) {
+      cb.addEventListener('change', updateCheckedN);
+    });
+    var cbAll = box.querySelector('.probe-cb-all');
+    if (cbAll) cbAll.addEventListener('click', function() {
+      box.querySelectorAll('.probe-cb').forEach(function(cb) { cb.checked = true; });
+      updateCheckedN();
+    });
+    var cbNone = box.querySelector('.probe-cb-none');
+    if (cbNone) cbNone.addEventListener('click', function() {
+      box.querySelectorAll('.probe-cb').forEach(function(cb) { cb.checked = false; });
+      updateCheckedN();
+    });
+
     var dlAll = box.querySelector('.inline-probe-dl-all');
     if (dlAll) dlAll.addEventListener('click', function() { downloadProbeHits(results); });
     box.querySelectorAll('.probe-dl-btn').forEach(function(b) {
       b.addEventListener('click', function() {
         var r = results[+b.dataset.idx];
         if (!r || !r.streams || !r.streams.length) return;
-        downloadHints[r.streams[0]] = { title: r.title || '', folder: r.folder || '', referer: r.referer || '' };
-        downloadResource(r.streams[0], 'generic', b);
+        var sel = box.querySelector('.probe-stream-sel[data-idx="' + b.dataset.idx + '"]');
+        var su = (sel && sel.value) || r.streams[0];
+        downloadHints[su] = { title: r.title || '', folder: r.folder || '', referer: r.referer || '' };
+        downloadResource(su, 'generic', b);
       });
     });
   }
 
-  // 一键入队全部命中项（url=首条流地址，title/folder/referer 随 items 下发）
+  // 选流下拉的显示标签：类型 + 路径尾两段（完整 URL 悬浮 title）
+  function streamShortLabel(u) {
+    var kind = /\.m3u8(\?|$)/i.test(u) ? 'HLS' : /\.mpd(\?|$)/i.test(u) ? 'DASH' : 'MP4';
+    var p = String(u).split('#')[0].split('?')[0];
+    var seg = p.split('/').slice(-2).join('/');
+    return kind + ' · ' + seg;
+  }
+
+  // 一键入队勾选命中项（勾选行 + 行内选流；title/folder/referer 随 items 下发）
   function downloadProbeHits(results) {
-    var work = results
-      .filter(function(r) { return r.status === 'hit' && r.streams && r.streams.length; })
-      .map(function(r) {
-        return { url: r.streams[0], title: r.title || '', folder: r.folder || '', referer: r.referer || '' };
-      });
-    if (!work.length) { toast('没有可下载的命中项', 'warning'); return; }
+    var box = probeState.results;
+    var work = [];
+    results.forEach(function(r, idx) {
+      if (!r || r.status !== 'hit' || !r.streams || !r.streams.length) return;
+      var cb = box && box.querySelector('.probe-cb[data-idx="' + idx + '"]');
+      if (cb && !cb.checked) return;  // 未勾选 → 不入队
+      var sel = box && box.querySelector('.probe-stream-sel[data-idx="' + idx + '"]');
+      var su = (sel && sel.value) || r.streams[0];
+      work.push({ url: su, title: r.title || '', folder: r.folder || '', referer: r.referer || '' });
+    });
+    if (!work.length) { toast('没有勾选的命中项', 'warning'); return; }
     toast('开始批量下载 ' + work.length + ' 个命中资源...', 'info');
     api('/api/video/batch-download', {
       method: 'POST',

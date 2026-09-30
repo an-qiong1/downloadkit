@@ -52,6 +52,7 @@ from downloadkit.generic_video import (
 from downloadkit.bookmarks import parse_bookmarks_html
 from downloadkit.episodes import expand_episodes
 from downloadkit.sniffer import sniff as sniff_l2
+from downloadkit.stream_filter import stream_key
 from downloadkit.download_queue import download_queue, TaskStatus, DownloadTask
 from downloadkit.history import download_history
 from downloadkit.exceptions import CancelException, PauseException
@@ -1381,6 +1382,24 @@ async def api_batch_download(req: BatchDownloadRequest):
     task_id = f"batch_{int(time.time())}"
     # items（书签导入场景，带命名提示）优先；否则由 urls 构造
     work_items = req.items if req.items else [BatchItem(url=u) for u in req.urls]
+    # R10 跨页去重（§4.3）：直链流按归一化 host+path 只入队一次——
+    # 书签多页/多集命中同一 m3u8（签名参数不同）的主场景；网页 URL 各自
+    # 解析后才知流地址，不在本层去重。
+    seen_keys: set[str] = set()
+    unique_items: list[BatchItem] = []
+    skipped_dup = 0
+    for it in work_items:
+        u = it.url.strip()
+        if u and is_direct_media_url(u):
+            k = stream_key(u)
+            if k in seen_keys:
+                skipped_dup += 1
+                continue
+            seen_keys.add(k)
+        unique_items.append(it)
+    if skipped_dup:
+        logger.info(f"[Batch] 跨页去重跳过 {skipped_dup} 条重复直链（R10）")
+        work_items = unique_items
     _downloads[task_id] = {
         "status": "downloading",
         "type": "batch",
@@ -1393,6 +1412,11 @@ async def api_batch_download(req: BatchDownloadRequest):
     # 定义下载函数，接收 DownloadTask 参数
     async def _download_func(task: DownloadTask):
         try:
+            # 暂停→resume 会重新执行本函数：计数与产物记录重置，
+            # 避免重跑后 completed 超过 total（重下会覆盖同名文件）
+            _downloads[task_id]["completed"] = 0
+            _downloads[task_id]["failed"] = 0
+            _downloads[task_id]["files"] = []
             # 确定文件重名策略
             rename_strategy = req.rename_strategy
             if rename_strategy is None:
@@ -1400,6 +1424,12 @@ async def api_batch_download(req: BatchDownloadRequest):
                 rename_strategy = cfg.get('general', {}).get('rename_strategy', 'skip')
 
             for item in work_items:
+                # 条目边界暂停（A4）：不在下载 hook 里硬中断 yt-dlp——
+                # HLS fragment 并发下载被异常打断会残留文件句柄，resume 后
+                # rename 必失败（实测 WinError 32）；当前条目下完才暂停。
+                # 取消仍然即时中断（hook 里 AbortDownload）。
+                if download_queue.is_paused(task_id):
+                    raise RuntimeError("批量下载已暂停（条目边界）")
                 url = item.url.strip()
                 if not url:
                     continue
@@ -1457,6 +1487,12 @@ async def api_batch_download(req: BatchDownloadRequest):
                     _downloads[task_id]["failed"] += 1
                     logger.error(f"[Batch] 下载失败 {url}: {e}")
             
+            # 最后一条完成后仍带暂停标志 → 标记 paused（resume 重跑本函数，
+            # 已完成条目会重新下载并覆盖，计数已在函数开头重置）
+            if download_queue.is_paused(task_id):
+                _downloads[task_id]["status"] = "paused"
+                task.status = TaskStatus.PAUSED
+                return
             # 更新任务状态
             task.status = TaskStatus.COMPLETED
             task.progress = 1.0
@@ -1751,11 +1787,17 @@ async def api_queue_status():
 
 @app.post("/api/queue/{task_id}/pause")
 async def api_pause_download(task_id: str):
-    """暂停下载"""
+    """暂停下载。
+
+    批量任务只置队列标志，_downloads 状态由 download_func 在条目边界落盘：
+    这里立即置 paused 会让调用方（轮询到暂停后立刻 resume）与仍在下载的
+    旧执行并发，两个 yt-dlp 抢同一目标文件（实测 WinError 32 / Frag 清理失败）。
+    非批量任务保持立即置状态（没有条目边界可等）。
+    """
     download_queue.pause_task(task_id)
-    # 同时更新 _downloads 状态
-    if task_id in _downloads:
-        _downloads[task_id]["status"] = "paused"
+    info = _downloads.get(task_id)
+    if info is not None and info.get("type") != "batch":
+        info["status"] = "paused"
     return {"status": "paused"}
 
 
