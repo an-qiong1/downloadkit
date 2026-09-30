@@ -50,6 +50,7 @@ from downloadkit.generic_video import (
     is_http_url, is_direct_media_url, build_file_stem,
 )
 from downloadkit.bookmarks import parse_bookmarks_html
+from downloadkit.sniffer import sniff as sniff_l2
 from downloadkit.download_queue import download_queue, TaskStatus, DownloadTask
 from downloadkit.history import download_history
 from downloadkit.exceptions import CancelException, PauseException
@@ -114,15 +115,21 @@ class VideoDownloadRequest(BaseModel):
     apple_live_photo: bool = False  # 是否同时生成Apple Live Photo格式（适用于iPhone）
     rename_strategy: str | None = None  # 文件重名策略 (skip/overwrite/rename)，None则从配置读取
     filename_hint: str = ""  # 命名提示（书签标题/选集条目标题），决定产物文件名
+    referer: str = ""  # 嗅探阶段(L2)拿到的真实来源页，防盗链解析+下载全程透传
 
 class BatchItem(BaseModel):
     """批量任务的单条：书签导入场景携带书签标题作命名提示"""
     url: str
     title: str = ""   # 书签标题/命名提示
     folder: str = ""  # 书签所在文件夹（保留展示用）
+    referer: str = ""  # 嗅探阶段拿到的来源页（L2 结果随条目下发）
 
 class BookmarkImportRequest(BaseModel):
     html: str  # 浏览器导出的书签 HTML 文件全文
+
+class SniffRequest(BaseModel):
+    url: str  # 播放页/普通网页地址
+    timeout: float = 30.0  # L2 总预算（秒），WAF+主页面+播放器提升
 
 class BatchParseRequest(BaseModel):
     urls: list[str] = []  # 视频链接列表（与 items 二选一，items 优先）
@@ -1011,7 +1018,8 @@ async def api_video_download(req: VideoDownloadRequest):
                 filenames = [fp.name for fp in filepaths]
             
             elif platform == 'generic':
-                video = await parse_generic(url)
+                # referer：L2 嗅探拿到的真实来源页，解析与下载全程透传（R3 防盗链）
+                video = await parse_generic(url, referer=req.referer or None)
                 # 队列里显示真实标题（书签场景优先显示书签标题）
                 display_title = req.filename_hint or video.title
                 if display_title:
@@ -1293,7 +1301,7 @@ async def api_batch_parse(req: BatchParseRequest):
                 })
             
             elif platform == 'generic':
-                video = await parse_generic(url)
+                video = await parse_generic(url, referer=item.referer or None)
                 results.append({
                     "url": url,
                     "platform": platform,
@@ -1389,7 +1397,7 @@ async def api_batch_download(req: BatchDownloadRequest):
                         _downloads[task_id]["files"].extend([fp.name for fp in filepaths])
                     
                     elif platform == 'generic':
-                        video = await parse_generic(url)
+                        video = await parse_generic(url, referer=item.referer or None)
                         filepath = await download_generic_video(
                             video,
                             get_download_subdir('videos'),
@@ -1464,6 +1472,23 @@ async def api_bookmarks_import(req: BookmarkImportRequest):
         raise HTTPException(400, "未解析到任何书签链接，请确认这是浏览器导出的书签 HTML 文件")
     logger.info(f"[Bookmarks] 导入书签: {stats['links']} 链接 / {stats['folders']} 文件夹")
     return {"tree": tree, **stats}
+
+
+@app.post("/api/sniff")
+async def api_sniff(req: SniffRequest):
+    """L2 浏览器深度嗅探（DrissionPage + 系统 Edge）。
+
+    L0 直链 / L1 静态解析拿不到流时的最深层：真实浏览器打开页面，
+    过 WAF 挑战 + 监听网络 + 跨域 iframe 播放器提升，抓 m3u8/mp4。
+    返回 SniffResult：streams[] 每条带 referer/ua（可直接进下载接口）。
+    单条串行（浏览器单例锁），批量并发探测属 P3。
+    """
+    url = (req.url or "").strip()
+    if not is_http_url(url):
+        raise HTTPException(400, "无效 URL")
+    timeout = max(10.0, min(float(req.timeout or 30.0), 60.0))
+    result = await sniff_l2(url, timeout=timeout)
+    return result.to_dict()
 
 
 @app.get("/api/video/batch/{task_id}")
@@ -2324,6 +2349,12 @@ async def shutdown_event():
         await close_browser()
     except Exception as e:
         logger.warning(f"关闭抖音浏览器失败: {e}")
+
+    try:
+        from downloadkit import sniffer
+        await asyncio.to_thread(sniffer.shutdown)
+    except Exception as e:
+        logger.warning(f"关闭嗅探浏览器失败: {e}")
 
 
 def main():

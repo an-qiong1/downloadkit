@@ -76,8 +76,18 @@
       st.style.display = 'none';
       showResourcePreview(data, platform, url);
     }).catch(function(err) {
-      st.innerHTML = '解析失败：' + err.message;
+      // 解析失败往往正是 L1 对该站无效（WAF 重置连接等）——
+      // 失败提示里直接给 L2 深度嗅探入口，不让流程断在这里
       st.className = 'status-msg error';
+      st.innerHTML = '解析失败：' + escHtml(err.message) +
+        ' <button class="btn btn-secondary" id="status-sniff-btn">' +
+        '<i data-lucide="search"></i>深度嗅探</button>' +
+        '<div id="sniff-result" class="sniff-result" style="display:none"></div>';
+      lucide.createIcons();
+      var sb = $('#status-sniff-btn');
+      if (sb) {
+        sb.onclick = function() { runDeepSniff(url, { title: '' }, sb); };
+      }
     }).finally(function() { 
       btn.disabled = false; 
     });
@@ -281,7 +291,14 @@
           '<div class="preview-header-meta">' + escHtml(data.author || '未知作者') + ' · <span class="platform-tag" style="background:' + p.bg + ';color:' + p.color + ';margin-top:0">' + p.label + '</span></div>' +
         '</div>' +
         '<button class="btn btn-primary" id="resource-download-btn"><i data-lucide="download"></i>下载</button>' +
-      '</div>';
+        (platform === 'generic'
+          ? '<button class="btn btn-secondary" id="resource-sniff-btn"><i data-lucide="search"></i>深度嗅探</button>'
+          : '') +
+      '</div>' +
+      // L2 嗅探结果容器（点击「深度嗅探」后填充流列表）
+      (platform === 'generic'
+        ? '<div id="sniff-result" class="sniff-result" style="display:none"></div>'
+        : '');
 
     // 内容预览主体
     if (contentType === 'video' && data.video_url) {
@@ -483,6 +500,14 @@
       };
     }
 
+    // 绑定深度嗅探按钮（L2：L0/L1 拿不到流时的浏览器嗅探）
+    var sniffBtn = $('#resource-sniff-btn');
+    if (sniffBtn) {
+      sniffBtn.onclick = function() {
+        runDeepSniff(url, data, sniffBtn);
+      };
+    }
+
     // 绑定画廊点击事件（灯箱）
     preview.querySelectorAll('.preview-gallery-item').forEach(function(item) {
       item.addEventListener('click', function() {
@@ -496,7 +521,83 @@
     });
 
   }
-  
+
+  // ========== 深度嗅探（L2：DrissionPage 浏览器嗅探） ==========
+  // L0 直链 / L1 静态解析拿不到流时，真实浏览器过 WAF + 监听网络 +
+  // 跨域 iframe 播放器提升，抓 m3u8/mp4 并带 Referer 入下载队列。
+  function runDeepSniff(pageUrl, data, btn) {
+    var box = $('#sniff-result');
+    if (!box) return;
+    var iconHtml = '<i data-lucide="search"></i>';
+    btn.disabled = true;
+    btn.innerHTML = iconHtml + '嗅探中…';
+    box.style.display = 'block';
+    box.innerHTML = '<div class="sniff-loading"><span class="spinner"></span>' +
+      '<span>浏览器嗅探中…（过 WAF 挑战 + 定位播放器，首次约 10~40 秒）</span></div>';
+    lucide.createIcons();
+
+    api('/api/sniff', { method: 'POST', body: { url: pageUrl, timeout: 40 } }).then(function(res) {
+      btn.disabled = false;
+      btn.innerHTML = iconHtml + '重新嗅探';
+      lucide.createIcons();
+      if (!res.ok || !res.streams || !res.streams.length) {
+        box.innerHTML = '<div class="sniff-empty"><i data-lucide="alert-circle"></i>' +
+          '<span>嗅探未命中：' + escHtml(res.error || '页面未发现流地址') + '</span></div>';
+        lucide.createIcons();
+        return;
+      }
+      var methodLabels = { main: '主页面监听', player: '播放器提升', js: 'JS Hook' };
+      // hint 优先级：书签提示 > 解析标题 > 嗅探拿到的页面标题
+      // （解析失败场景 data.title 为空，没有 res.title 兜底文件名会退化成 URL 末段）
+      var hint = (downloadHints[pageUrl] && downloadHints[pageUrl].title) || data.title || res.title || '';
+      var html = '<div class="sniff-meta">命中 ' + res.streams.length + ' 条流 · ' +
+        escHtml(methodLabels[res.method] || res.method || '-') + ' · ' + res.elapsed + 's' +
+        (res.player_url ? ' · 播放器: ' + escHtml(shortenUrl(res.player_url, 50)) : '') + '</div>';
+      res.streams.forEach(function(s, i) {
+        html += '<div class="sniff-stream-row">' +
+          '<span class="sniff-kind">' + escHtml(s.kind) + '</span>' +
+          '<span class="sniff-url" title="' + escAttr(s.url) + '">' + escHtml(shortenUrl(s.url, 90)) + '</span>' +
+          '<button class="btn btn-primary sniff-dl" data-i="' + i + '">下载</button>' +
+        '</div>';
+      });
+      box.innerHTML = html;
+      box._sniff = { streams: res.streams, hint: hint };
+      box.querySelectorAll('.sniff-dl').forEach(function(b) {
+        b.onclick = function() {
+          var st = box._sniff;
+          var s = st.streams[parseInt(this.dataset.i, 10)];
+          if (!s) return;
+          this.disabled = true;
+          this.textContent = '入队…';
+          api('/api/video/download', { method: 'POST', body: {
+            url: s.url, platform: 'generic',
+            referer: s.referer || '',
+            filename_hint: st.hint,
+          } }).then(function(r) {
+            pollResourceDownload(r.task_id, b, '<i data-lucide="download"></i>');
+          }).catch(function(err) {
+            b.disabled = false;
+            b.textContent = '失败';
+            lucide.createIcons();
+            toast('入队失败：' + err.message, 'error');
+          });
+        };
+      });
+      lucide.createIcons();
+    }).catch(function(err) {
+      btn.disabled = false;
+      btn.innerHTML = iconHtml + '深度嗅探';
+      box.innerHTML = '<div class="sniff-empty"><i data-lucide="alert-circle"></i>' +
+        '<span>嗅探失败：' + escHtml(err.message) + '</span></div>';
+      lucide.createIcons();
+    });
+  }
+
+  function shortenUrl(u, n) {
+    if (!u || u.length <= n) return u;
+    return u.slice(0, n - 12) + '…' + u.slice(-10);
+  }
+
   // 下载资源
   // btn = 状态落点：内联列表按钮传自己，详情主按钮不传走默认。
   // 之前内联按钮点完全程写在主按钮上 —— 批量列表视图里主按钮压根
