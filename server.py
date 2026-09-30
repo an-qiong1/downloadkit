@@ -50,6 +50,7 @@ from downloadkit.generic_video import (
     is_http_url, is_direct_media_url, build_file_stem, probe_static,
 )
 from downloadkit.bookmarks import parse_bookmarks_html
+from downloadkit.episodes import expand_episodes
 from downloadkit.sniffer import sniff as sniff_l2
 from downloadkit.download_queue import download_queue, TaskStatus, DownloadTask
 from downloadkit.history import download_history
@@ -116,13 +117,32 @@ class VideoDownloadRequest(BaseModel):
     rename_strategy: str | None = None  # 文件重名策略 (skip/overwrite/rename)，None则从配置读取
     filename_hint: str = ""  # 命名提示（书签标题/选集条目标题），决定产物文件名
     referer: str = ""  # 嗅探阶段(L2)拿到的真实来源页，防盗链解析+下载全程透传
+    folder: str = ""  # 目标子目录（选集=剧名/书签=树路径），产物落 videos/<folder>/
 
 class BatchItem(BaseModel):
     """批量任务的单条：书签导入场景携带书签标题作命名提示"""
     url: str
     title: str = ""   # 书签标题/命名提示
-    folder: str = ""  # 书签所在文件夹（保留展示用）
+    folder: str = ""  # 目标子目录（书签树路径 '追剧/国漫' 或选集剧名），产物落 videos/<folder>/
     referer: str = ""  # 嗅探阶段拿到的来源页（L2 结果随条目下发）
+
+
+def _folder_subpath(folder: str) -> str:
+    """items 的 folder → 清洗后的相对子路径（书签树可多级 'a/b'）。
+
+    非法字符（\\/:*?"<>|）→ '_'；'.'/'..' 段跳过（防路径穿越）；
+    空结果 = 不建子目录，产物落 videos 根。
+    """
+    raw = (folder or "").strip().replace("\\", "/")
+    parts: list[str] = []
+    for seg in raw.split("/"):
+        seg = seg.strip()
+        if not seg or seg in (".", ".."):
+            continue
+        name = sanitize_filename(seg)      # 空/全控制字符 → "unknown"
+        if name and name != "unknown":
+            parts.append(name)
+    return "/".join(parts)
 
 class BookmarkImportRequest(BaseModel):
     html: str  # 浏览器导出的书签 HTML 文件全文
@@ -1030,9 +1050,14 @@ async def api_video_download(req: VideoDownloadRequest):
                 display_title = req.filename_hint or video.title
                 if display_title:
                     task.title = display_title
+                out_dir = get_download_subdir('videos')
+                sub = _folder_subpath(req.folder)
+                if sub:
+                    out_dir = out_dir / sub
+                    out_dir.mkdir(parents=True, exist_ok=True)
                 filepath = await download_generic_video(
                     video,
-                    get_download_subdir('videos'),
+                    out_dir,
                     req.quality,
                     task_id=task_id,
                     rename_strategy=rename_strategy,
@@ -1404,9 +1429,14 @@ async def api_batch_download(req: BatchDownloadRequest):
                     
                     elif platform == 'generic':
                         video = await parse_generic(url, referer=item.referer or None)
+                        out_dir = get_download_subdir('videos')
+                        sub = _folder_subpath(item.folder)
+                        if sub:
+                            out_dir = out_dir / sub
+                            out_dir.mkdir(parents=True, exist_ok=True)
                         filepath = await download_generic_video(
                             video,
-                            get_download_subdir('videos'),
+                            out_dir,
                             req.quality,
                             task_id=task_id,
                             rename_strategy=rename_strategy,
@@ -1628,6 +1658,38 @@ async def api_bookmarks_probe_stop(probe_id: str):
     if p["status"] == "running":
         p["status"] = "stopped"
     return {"status": p["status"], "done": p["done"], "hit": p["hit"]}
+
+
+# ---------------- 选集展开（P4：§4.6 三级回退） ----------------
+
+class EpisodesRequest(BaseModel):
+    url: str
+    timeout: float = 60.0  # 整体预算（主要约束 L2 段；路1 yt-dlp 固定 20s、L1 5s）
+
+
+@app.post("/api/video/episodes")
+async def api_video_episodes(req: EpisodesRequest):
+    """选集展开：yt-dlp 原生 playlist → 通用模板聚类（L1 静态 → L2 浏览器
+    过 WAF 取 DOM）→ 回退单集（count=0 + error）。L2 段与嗅探共用单例锁，
+    会排队。"""
+    url = (req.url or "").strip()
+    if not is_http_url(url):
+        raise HTTPException(400, "无效链接")
+    timeout = max(20.0, min(float(req.timeout or 60.0), 120.0))
+    plat = detect_platform(url)
+    result = await expand_episodes(
+        url,
+        timeout=timeout,
+        # generic 影视站 yt-dlp generic extractor 几乎必失败，跳过省 20s；
+        # 已知平台（B站合集/YouTube…）先走路1
+        try_ytdlp=(plat != "generic"),
+        use_browser=True,
+    )
+    logger.info(
+        f"[Episodes] {plat} {url[:60]} -> method={result['method']} "
+        f"count={result['count']} ({result['elapsed']}s)"
+    )
+    return result
 
 
 @app.get("/api/video/batch/{task_id}")

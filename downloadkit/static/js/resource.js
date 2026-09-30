@@ -82,11 +82,17 @@
       st.innerHTML = '解析失败：' + escHtml(err.message) +
         ' <button class="btn btn-secondary" id="status-sniff-btn">' +
         '<i data-lucide="search"></i>深度嗅探</button>' +
+        ' <button class="btn btn-secondary" id="status-episodes-btn">' +
+        '<i data-lucide="list"></i>展开选集</button>' +
         '<div id="sniff-result" class="sniff-result" style="display:none"></div>';
       lucide.createIcons();
       var sb = $('#status-sniff-btn');
       if (sb) {
         sb.onclick = function() { runDeepSniff(url, { title: '' }, sb); };
+      }
+      var eb = $('#status-episodes-btn');
+      if (eb) {
+        eb.onclick = function() { expandEpisodes(url, eb); };
       }
     }).finally(function() { 
       btn.disabled = false; 
@@ -292,7 +298,8 @@
         '</div>' +
         '<button class="btn btn-primary" id="resource-download-btn"><i data-lucide="download"></i>下载</button>' +
         (platform === 'generic'
-          ? '<button class="btn btn-secondary" id="resource-sniff-btn"><i data-lucide="search"></i>深度嗅探</button>'
+          ? '<button class="btn btn-secondary" id="resource-sniff-btn"><i data-lucide="search"></i>深度嗅探</button>' +
+            '<button class="btn btn-secondary" id="resource-episodes-btn"><i data-lucide="list"></i>展开选集</button>'
           : '') +
       '</div>' +
       // L2 嗅探结果容器（点击「深度嗅探」后填充流列表）
@@ -508,6 +515,12 @@
       };
     }
 
+    // 绑定展开选集按钮（P4：播放页 → 集数列表 → 勾选探测批量下载）
+    var epBtn = $('#resource-episodes-btn');
+    if (epBtn) {
+      epBtn.onclick = function() { expandEpisodes(url, epBtn); };
+    }
+
     // 绑定画廊点击事件（灯箱）
     preview.querySelectorAll('.preview-gallery-item').forEach(function(item) {
       item.addEventListener('click', function() {
@@ -615,7 +628,7 @@
     // 使用统一下载接口（书签场景带命名提示；探测命中项带 Referer 防盗链）
     var h = downloadHints[url] || {};
     var hint = h.title || '';
-    api('/api/video/download', { method: 'POST', body: { url: url, platform: platform, filename_hint: hint, referer: h.referer || '' } }).then(function(result) {
+    api('/api/video/download', { method: 'POST', body: { url: url, platform: platform, filename_hint: hint, referer: h.referer || '', folder: h.folder || '' } }).then(function(result) {
       pollResourceDownload(result.task_id, btn, iconHtml);
     }).catch(function(err) {
       btn.disabled = false;
@@ -1091,21 +1104,50 @@
   // 轮询式进度：POST 启动拿 probe_id → 每秒 GET 全量结果 → 前端整列重渲染。
   // 结果按完成顺序追加（并发完成先后不定），data-idx 用当前数组下标，每轮重绑。
 
-  var probeState = { id: '', timer: 0, running: false };
+  var probeState = { id: '', timer: 0, running: false, bar: null, results: null, launchBtns: [] };
 
   function showProbeBar(visible, total, done, hit) {
-    var bar = $('#bookmark-probe-bar');
+    var bar = probeState.bar;
     if (!bar) return;
     bar.style.display = visible ? 'flex' : 'none';
     if (!visible) return;
-    $('#probe-progress-text').textContent = '已探测 ' + done + '/' + total + ' · 命中 ' + hit;
-    $('#probe-fill').style.width = (total ? Math.round(done / total * 100) : 0) + '%';
-    $('#bookmark-probe-stop-btn').disabled = false;
+    bar.querySelector('.probe-text').textContent = '已探测 ' + done + '/' + total + ' · 命中 ' + hit;
+    bar.querySelector('.probe-fill').style.width = (total ? Math.round(done / total * 100) : 0) + '%';
+    var stop = bar.querySelector('.probe-stop-btn');
+    if (stop) stop.disabled = false;
   }
 
   function setProbeButtons(disabled) {
-    $('#bookmark-probe-btn').disabled = disabled;
-    $('#bookmark-parse-btn').disabled = disabled;
+    (probeState.launchBtns || []).forEach(function(b) { if (b) b.disabled = disabled; });
+  }
+
+  // 启动探测（书签 / 选集弹窗共用；P4 把落点参数化）。
+  // ui = {bar, results} 当前进度与结果的 DOM 落点；launchBtns 探测中禁用。
+  function startProbe(items, ui, launchBtns) {
+    if (probeState.running) {
+      toast('已有探测任务进行中，请先停止', 'warning');
+      return Promise.resolve(false);
+    }
+    probeState.bar = ui.bar;
+    probeState.results = ui.results;
+    probeState.launchBtns = launchBtns || [];
+    setProbeButtons(true);
+    ui.results.style.display = 'none';
+
+    return api('/api/bookmarks/probe', {
+      method: 'POST',
+      body: { items: items, urls: items.map(function(i) { return i.url; }), l2: true }
+    }).then(function(data) {
+      probeState.id = data.probe_id;
+      probeState.running = true;
+      showProbeBar(true, data.total, 0, 0);
+      probeState.timer = setInterval(pollProbe, 1000);
+      return true;
+    }).catch(function(err) {
+      setProbeButtons(false);
+      toast('探测启动失败：' + err.message, 'error');
+      return false;
+    });
   }
 
   function probeSelectedBookmarks() {
@@ -1114,22 +1156,9 @@
       toast('请先勾选要探测的书签', 'error');
       return;
     }
-    if (probeState.running) return;
-    setProbeButtons(true);
-    $('#bookmark-results').style.display = 'none';
-
-    api('/api/bookmarks/probe', {
-      method: 'POST',
-      body: { items: items, urls: items.map(function(i) { return i.url; }), l2: true }
-    }).then(function(data) {
-      probeState.id = data.probe_id;
-      probeState.running = true;
-      showProbeBar(true, data.total, 0, 0);
-      probeState.timer = setInterval(pollProbe, 1000);
-    }).catch(function(err) {
-      setProbeButtons(false);
-      toast('探测启动失败：' + err.message, 'error');
-    });
+    startProbe(items,
+      { bar: $('#bookmark-probe-bar'), results: $('#bookmark-results') },
+      [$('#bookmark-probe-btn'), $('#bookmark-parse-btn')]);
   }
 
   function pollProbe() {
@@ -1154,14 +1183,15 @@
 
   function stopProbe() {
     if (!probeState.id) return;
-    var btn = $('#bookmark-probe-stop-btn');
-    btn.disabled = true;
+    var btn = probeState.bar && probeState.bar.querySelector('.probe-stop-btn');
+    if (btn) btn.disabled = true;
     api('/api/bookmarks/probe/' + probeState.id + '/stop', { method: 'POST' }).catch(function() {});
   }
 
   // 探测结果列表：层徽章 + 标题 + 耗时 +（命中）下载入口
   function renderProbeResults(results, status) {
-    var box = $('#bookmark-results');
+    var box = probeState.results;
+    if (!box) return;
     box.style.display = 'block';
     box.className = 'resource-preview-container';
 
@@ -1233,4 +1263,123 @@
   }
 
   $('#bookmark-probe-btn').addEventListener('click', probeSelectedBookmarks);
-  $('#bookmark-probe-stop-btn').addEventListener('click', stopProbe);
+  // 停止按钮按 class 绑定（书签 bar 与选集弹窗 bar 各一个）
+  $$('.probe-stop-btn').forEach(function(b) { b.addEventListener('click', stopProbe); });
+
+  // ================= 选集展开（P4：播放页 → 集数列表 → 勾选探测批量下载） =================
+  // 三级回退在后端（episodes.py）；本模块只做弹窗、勾选与探测复用（startProbe）。
+
+  var epState = { items: [], series: '' };
+
+  function expandEpisodes(url, btn) {
+    if (btn.disabled) return;
+    var iconHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>展开中…';
+    api('/api/video/episodes', { method: 'POST', body: { url: url, timeout: 60 } })
+      .then(function(res) {
+        if (!res.count || res.count < 3) {
+          toast(res.error || '未识别到选集（已回退为单集下载）', 'warning');
+          return;
+        }
+        openEpisodeModal(res);
+      })
+      .catch(function(err) {
+        toast('展开选集失败：' + err.message, 'error');
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.innerHTML = iconHtml;
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      });
+  }
+
+  // 页面 title 常带「第05集在线播放」等当前集后缀 → 去掉，作剧名前缀
+  function cleanSeriesName(title) {
+    return String(title || '')
+      .replace(/\s*第\s*\d+\s*[集话期].*$/, '')
+      .replace(/\s+$/, '')
+      .trim();
+  }
+
+  function openEpisodeModal(res) {
+    var g = (res.groups && res.groups[0]) || { items: [] };
+    epState.series = cleanSeriesName(res.title);
+    epState.items = g.items || [];
+
+    $('#episode-title').textContent = epState.series || '选集展开';
+    var methodLabel = { ytdlp: 'yt-dlp 原生', static: '静态提取', browser: '浏览器提取' }[res.method] || res.method;
+    $('#episode-method').textContent =
+      g.count + ' 集 · ' + methodLabel +
+      ((res.groups || []).length > 1 ? ' · 另 ' + (res.groups.length - 1) + ' 组链接' : '') +
+      (res.elapsed != null ? ' · ' + res.elapsed + 's' : '');
+
+    renderEpisodeList();
+    $('#episode-probe-bar').style.display = 'none';
+    $('#episode-results').style.display = 'none';
+    $('#episode-overlay').style.display = 'flex';
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+  }
+
+  function renderEpisodeList() {
+    var box = $('#episode-list');
+    box.innerHTML = epState.items.map(function(it, i) {
+      return '<label class="episode-item" title="' + escAttr(it.url) + '">' +
+        '<input type="checkbox" class="episode-cb" data-idx="' + i + '">' +
+        '<span class="episode-label">' + escHtml(it.label || ('第' + (i + 1) + '集')) + '</span>' +
+        '</label>';
+    }).join('');
+    $('#episode-total').textContent = epState.items.length;
+    $('#episode-selected').textContent = '0';
+    box.querySelectorAll('.episode-cb').forEach(function(cb) {
+      cb.addEventListener('change', updateEpisodeCount);
+    });
+  }
+
+  function updateEpisodeCount() {
+    var n = document.querySelectorAll('#episode-list .episode-cb:checked').length;
+    $('#episode-selected').textContent = n;
+  }
+
+  function probeSelectedEpisodes() {
+    var checked = $$('#episode-list .episode-cb:checked');
+    if (!checked.length) {
+      toast('请先勾选要下载的集数', 'error');
+      return;
+    }
+    var series = epState.series;
+    var items = checked.map(function(cb) {
+      var it = epState.items[+cb.dataset.idx];
+      // title = 剧名 + 集数 → P1 build_file_stem 解析命名；folder = 剧名目录
+      return {
+        url: it.url,
+        title: (series ? series + ' ' : '') + it.label,
+        folder: series || ''
+      };
+    });
+    startProbe(items,
+      { bar: $('#episode-probe-bar'), results: $('#episode-results') },
+      [$('#episode-probe-btn'), $('#episode-all-btn'), $('#episode-none-btn')]);
+  }
+
+  function closeEpisodeModal() {
+    // 关闭弹窗时若探测正在进行且落点是本弹窗 → 停止（书签探测不受影响）
+    if (probeState.running && probeState.bar === $('#episode-probe-bar')) {
+      stopProbe();
+    }
+    $('#episode-overlay').style.display = 'none';
+  }
+
+  $('#episode-all-btn').addEventListener('click', function() {
+    $$('#episode-list .episode-cb').forEach(function(cb) { cb.checked = true; });
+    updateEpisodeCount();
+  });
+  $('#episode-none-btn').addEventListener('click', function() {
+    $$('#episode-list .episode-cb').forEach(function(cb) { cb.checked = false; });
+    updateEpisodeCount();
+  });
+  $('#episode-probe-btn').addEventListener('click', probeSelectedEpisodes);
+  $('#episode-close-btn').addEventListener('click', closeEpisodeModal);
+  $('#episode-overlay').addEventListener('click', function(e) {
+    if (e.target === this) closeEpisodeModal();
+  });

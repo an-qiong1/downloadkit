@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20260927m">
+<link rel="stylesheet" href="css/main.css?v=20260930a">
 </head>
 <body>
 
@@ -167,7 +167,7 @@
           <div id="bookmark-probe-bar" class="probe-bar" style="display:none">
             <span class="probe-text" id="probe-progress-text">已探测 0/0 · 命中 0</span>
             <div class="probe-track"><div class="probe-fill" id="probe-fill"></div></div>
-            <button class="btn btn-secondary" id="bookmark-probe-stop-btn" style="padding:4px 12px;font-size:12px">停止</button>
+            <button class="btn btn-secondary probe-stop-btn" id="bookmark-probe-stop-btn" style="padding:4px 12px;font-size:12px">停止</button>
           </div>
 
           <div id="bookmark-tree-wrap" style="display:none">
@@ -785,9 +785,37 @@
 <!-- Toast容器 -->
 <div class="toast-container" id="toast-container"></div>
 
+<!-- 选集展开弹窗（P4：播放页 → 集数列表 → 勾选探测批量下载） -->
+<div id="episode-overlay" class="episode-overlay" style="display:none">
+  <div class="episode-modal">
+    <div class="episode-head">
+      <div class="episode-title" id="episode-title">选集展开</div>
+      <div class="episode-head-right">
+        <span class="episode-method" id="episode-method"></span>
+        <button class="btn btn-secondary episode-close" id="episode-close-btn" title="关闭">×</button>
+      </div>
+    </div>
+    <div id="episode-status" class="status-msg" style="display:none"></div>
+    <!-- 探测进度（与书签模式共用 .probe-bar 样式与 probe 状态机） -->
+    <div id="episode-probe-bar" class="probe-bar" style="display:none">
+      <span class="probe-text">已探测 0/0 · 命中 0</span>
+      <div class="probe-track"><div class="probe-fill"></div></div>
+      <button class="btn btn-secondary probe-stop-btn" style="padding:4px 12px;font-size:12px">停止</button>
+    </div>
+    <div class="episode-list" id="episode-list"></div>
+    <div class="episode-actions">
+      <span class="episode-selected">已选 <strong id="episode-selected">0</strong> / <span id="episode-total">0</span></span>
+      <button class="btn btn-secondary" id="episode-all-btn" style="padding:5px 12px;font-size:12px">全选</button>
+      <button class="btn btn-secondary" id="episode-none-btn" style="padding:5px 12px;font-size:12px">清空</button>
+      <button class="btn btn-primary" id="episode-probe-btn" style="padding:5px 14px;font-size:12px"><i data-lucide="layers" style="width:12px;height:12px;margin-right:4px"></i>探测勾选</button>
+    </div>
+    <div id="episode-results" style="display:none"></div>
+  </div>
+</div>
+
 <script src="js/utils.js?v=20260927m"></script>
 <script src="js/music.js?v=20260927i"></script>
-<script src="js/resource.js?v=20260927m"></script>
+<script src="js/resource.js?v=20260930a"></script>
 <script src="js/files.js?v=20260927m"></script>
 <script src="js/queue.js?v=20260927m"></script>
 <script src="js/settings.js?v=20260927m"></script>

@@ -190,6 +190,12 @@ def _get_page():
     co.headless(False)          # WAF 挑战与播放行为用有头模式最稳（实测均为有头）
     co.set_argument("--lang=zh-CN")
     co.set_argument("--disable-popup-blocking")
+    # 临时 profile 每次都是"首启"——抑制首启向导/sync 确认页抢导航
+    # （仍可能漏网，抓取与嗅探侧另有「内部页重新导航」兜底）
+    co.set_argument("--no-first-run")
+    co.set_argument("--disable-sync")
+    co.set_argument("--hide-crash-restore-state")
+    co.set_argument("--disable-session-crashed-bubble")
     _page = ChromiumPage(co)
     logger.info("[Sniffer] Edge 已启动")
     return _page
@@ -245,11 +251,16 @@ def _page_ready(tab) -> bool:
     """WAF 挑战是否已通过：responseStatus<400 且非拦截页。
 
     挑战通过瞬间整页刷新，DrissionPage 会抛「页面被刷新」类异常 → 返回 False 下轮再查。
+    只认 http(s) 当前页：Edge 临时 profile 首启的 sync 确认页等内部页的
+    navigation responseStatus 同样是 200，会误判为「WAF 已过」。
     """
     try:
+        cur = str(tab.url or "")
         code = int(tab.run_js(_NAV_STATUS_JS) or 0)
         html = tab.html or ""
     except Exception:  # noqa: BLE001
+        return False
+    if not cur.startswith(("http://", "https://")):
         return False
     if _WAF_MARKERS_RE.search(html):
         return False
@@ -353,7 +364,25 @@ def _sniff_locked(url: str, timeout: float) -> SniffResult:
         waf_ok_at = 0.0
         player_url = ""
         seen_urls: set[str] = set()
+        phase1_renav = 0
+        last_renav = 0.0
         while time.monotonic() < phase1_end:
+            # Edge 临时 profile 首启的 sync 确认页会覆盖首次导航（tab 停在
+            # edge:// 内部页）→ 浏览器启动完成后重新导航，限 2 次防死循环
+            try:
+                cur_url = str(main_tab.url or "")
+            except Exception:  # noqa: BLE001
+                cur_url = ""
+            if (not cur_url.startswith(("http://", "https://"))
+                    and phase1_renav < 2
+                    and time.monotonic() - last_renav > 2.0):
+                phase1_renav += 1
+                last_renav = time.monotonic()
+                try:
+                    main_tab.get(url, timeout=min(12.0, max(4.0, timeout - 2)))
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
             for pkt in _collect(main_tab, count=10, timeout=1.0):
                 u = str(getattr(pkt, "url", "") or "")
                 if u and u not in seen_urls:
@@ -557,6 +586,85 @@ def _tab_html(tab) -> str:
 
 
 # ---------------- 对外 API ----------------
+
+# Chromium/Edge 导航失败错误页特征（title 常伪装成目标域名，须按内容识别）
+_NAV_ERROR_RE = re.compile(r"main-frame-error|chrome-error://|neterror", re.I)
+
+
+def fetch_page_html_sync(url: str, timeout: float = 25.0) -> str:
+    """打开页面并等 WAF 通过后返回完整 DOM HTML（P4 选集提取的 L2 通道）。
+
+    与 _sniff_locked 共用浏览器单例与 _lock（串行排队）。三层防护：
+      · 只认 http(s) 最终 URL —— 挡临时 profile 首启的 edge:// 同步弹窗等内部页
+      · 按内容识别导航失败错误页（title 伪装成目标域名）—— 连续确认后提前
+        放弃并重试导航一次，不傻等到 deadline
+      · WAF 拦截页继续等（挑战中），超时兜底同样按上述规则过滤
+    导航彻底失败/拦截页返回 ""。
+    """
+    t0 = time.monotonic()
+    deadline = t0 + timeout
+    with _lock:
+        page = _get_page()
+        tab = page.latest_tab
+
+        def _nav() -> None:
+            try:
+                tab.get(url, timeout=min(12.0, max(4.0, timeout - 2)))
+            except Exception:  # noqa: BLE001 — WAF 挑战中导航超时是常态
+                pass
+
+        _nav()
+        bad_streak = 0
+        retried = False
+        renav = 0
+        last_renav = t0
+        while time.monotonic() < deadline:
+            try:
+                cur = str(tab.url or "")
+                html = tab.html or ""
+            except Exception:  # noqa: BLE001 — 页面刷新瞬间抛错，下轮再查
+                cur, html = "", ""
+            if not cur.startswith(("http://", "https://")):
+                # Edge 首启 sync 弹窗等内部页覆盖首次导航 → 重新导航（限 2 次）
+                if renav < 2 and time.monotonic() - last_renav > 2.0:
+                    renav += 1
+                    last_renav = time.monotonic()
+                    _nav()
+                time.sleep(0.5)
+                continue
+            if html:
+                if _NAV_ERROR_RE.search(html[:20000]):
+                    bad_streak += 1
+                    if bad_streak >= 4:
+                        if not retried:
+                            retried = True
+                            bad_streak = 0
+                            _nav()          # 瞬时失败（DNS 首查）重试一次
+                        else:
+                            return ""       # 导航失败已确认
+                elif not _WAF_MARKERS_RE.search(html) and len(html) >= 200:
+                    return html
+                else:
+                    bad_streak = 0          # WAF 挑战中，继续等
+            time.sleep(0.5)
+        # 超时兜底：同样只放行 http(s) + 非错误页 + 非拦截页
+        try:
+            cur = str(tab.url or "")
+            html = tab.html or ""
+            if (cur.startswith(("http://", "https://"))
+                    and html and len(html) >= 200
+                    and not _NAV_ERROR_RE.search(html[:20000])
+                    and not _WAF_MARKERS_RE.search(html)):
+                return html
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
+
+async def fetch_page_html(url: str, timeout: float = 25.0) -> str:
+    """async 入口（to_thread 桥接；与嗅探共用全局锁，串行排队）。"""
+    return await asyncio.to_thread(fetch_page_html_sync, url, timeout=timeout)
+
 
 def sniff_sync(url: str, timeout: float = 30.0) -> SniffResult:
     """L2 深度嗅探（同步，直接调用会阻塞；服务端走 async 入口 sniff()）。"""
