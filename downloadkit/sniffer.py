@@ -224,6 +224,32 @@ def _page_ready(tab) -> bool:
     return code > 0
 
 
+def _sniff_exception_error(e: BaseException) -> str:
+    """嗅探外层异常的用户可读文案（浏览器 CDP 连接失效最常见）。
+
+    Edge 崩溃后下一次调用会自动重启浏览器——把 urllib3/requests 的连接异常
+    原文（Max retries exceeded / WinError 10061…）换成可操作的提示。
+    """
+    msg = str(e)
+    if (isinstance(e, OSError) or "Max retries" in msg
+            or "Connection" in type(e).__name__):
+        return "浏览器连接异常（已自动重启，直接重试即可）"
+    return f"{type(e).__name__}: {msg[:200]}"
+
+
+def _miss_error(nav_failed: bool, waf_ok: bool) -> str:
+    """未命中时的用户可读错误，按层区分（P5 遗留修复）。
+
+    导航失败（死端口/域名不可达/站点下线）≠ WAF 挑战未过 ≠ 页面已开但无流——
+    之前死端口页 _page_ready 恒 False，被兜底误报成「WAF 挑战未在时限内通过」。
+    """
+    if nav_failed:
+        return "页面打开失败（连接被拒绝/域名不可达/站点已下线）"
+    if waf_ok:
+        return "页面未见流地址（可能无视频/播放需登录/WAF 未通过）"
+    return "WAF 挑战未在时限内通过"
+
+
 def _pkt_body(pkt) -> str:
     """响应体（只给疑似 API 包用）。"""
     try:
@@ -321,6 +347,8 @@ def _sniff_locked(url: str, timeout: float) -> SniffResult:
         seen_urls: set[str] = set()
         phase1_renav = 0
         last_renav = 0.0
+        nav_failed = False       # 导航失败错误页（≠ WAF 挑战，见 _miss_error）
+        nav_fail_streak = 0
         while time.monotonic() < phase1_end:
             # Edge 临时 profile 首启的 sync 确认页会覆盖首次导航（tab 停在
             # edge:// 内部页）→ 浏览器启动完成后重新导航，限 2 次防死循环
@@ -338,6 +366,23 @@ def _sniff_locked(url: str, timeout: float) -> SniffResult:
                 except Exception:  # noqa: BLE001
                     pass
                 continue
+            # 导航失败错误页（死端口/DNS 失败）：连续 3 轮确认后提前结束
+            # 主页面阶段——页面打不开时 WAF/播放器阶段必然白等（P5 遗留修复）
+            if cur_url.startswith("chrome-error:"):
+                nav_fail_streak += 1
+            else:
+                try:
+                    _phtml = main_tab.html or ""
+                except Exception:  # noqa: BLE001 — 刷新瞬间抛错，下轮再查
+                    _phtml = ""
+                if _NAV_ERROR_RE.search(_phtml[:20000]):
+                    nav_fail_streak += 1
+                else:
+                    nav_fail_streak = 0
+            if nav_fail_streak >= 3:
+                nav_failed = True
+                logger.info(f"[Sniffer] 导航失败错误页确认，提前结束主页面阶段 {url[:70]}")
+                break
             for pkt in _collect(main_tab, count=10, timeout=1.0):
                 u = str(getattr(pkt, "url", "") or "")
                 if u and u not in seen_urls:
@@ -387,7 +432,8 @@ def _sniff_locked(url: str, timeout: float) -> SniffResult:
         main_urls = _streams_from(all_pkts, bodies)
 
         # ===== 阶段2：iframe 提升（方案Z）=====
-        if not player_url:   # 循环内轻探测没抓到 → 完整再查一次（含页面 HTML 兜底）
+        # 导航失败的错误页里没有播放器入口，跳过查提升
+        if not player_url and not nav_failed:   # 循环内轻探测没抓到 → 完整再查一次（含页面 HTML 兜底）
             player_url = find_player_url(
                 bodies,
                 _dom_iframes(main_tab),
@@ -452,7 +498,7 @@ def _sniff_locked(url: str, timeout: float) -> SniffResult:
 
         # ===== 阶段3：JS hook 兜底（仅当仍无流）=====
         stream_urls = _streams_from(all_pkts, bodies)
-        if not stream_urls:
+        if not stream_urls and not nav_failed:
             hook_seen: set[str] = set()
             try:
                 main_tab.run_js(_HOOK_JS)
@@ -492,14 +538,11 @@ def _sniff_locked(url: str, timeout: float) -> SniffResult:
         if res.ok and not res.method:
             res.method = "player" if from_player else "main"
         if not res.ok and not res.error:
-            res.error = (
-                "页面未见流地址（可能无视频/播放需登录/WAF 未通过）"
-                if waf_ok else "WAF 挑战未在时限内通过"
-            )
+            res.error = _miss_error(nav_failed, waf_ok)
 
     except Exception as e:  # noqa: BLE001 — 浏览器连接失效等
         logger.warning(f"[Sniffer] 嗅探异常 {url[:80]}: {type(e).__name__}: {e}")
-        res.error = f"{type(e).__name__}: {str(e)[:200]}"
+        res.error = _sniff_exception_error(e)
         _reset_browser_locked()   # 连接失效 → 丢弃单例，下次重建（已持锁）
     finally:
         for t in (player_tab,):

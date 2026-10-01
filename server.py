@@ -1620,10 +1620,19 @@ async def _run_probe(pid: str, work: list, use_l2: bool) -> None:
 
         # L2：浏览器嗅探（串行，单条 30s 预算）
         if use_l2 and not p["cancelled"].is_set():
-            async with sem_l2:
-                if p["cancelled"].is_set():
-                    return
-                r = await sniff_l2(url, timeout=30.0)
+            for attempt in (1, 2):
+                async with sem_l2:
+                    if p["cancelled"].is_set():
+                        return
+                    r = await sniff_l2(url, timeout=30.0)
+                if r.ok:
+                    break
+                # 真站 WAF 挑战时长波动大（同站第1条过、第2条超时是常态），
+                # 且重试时挑战 cookie 常已种上 → WAF 类 miss 自动重试一次
+                if attempt == 1 and "WAF 挑战" in (r.error or ""):
+                    logger.info(f"[Probe] WAF 类 miss 自动重试: {url[:70]}")
+                    continue
+                break
             if r.ok:
                 await record({
                     **base, "status": "hit", "layer": "L2",

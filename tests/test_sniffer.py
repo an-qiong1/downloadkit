@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """downloadkit.sniffer 纯函数单测：提流 / 去重 / 主子区分 / 播放器地址三级来源。"""
 from downloadkit.sniffer import (
+    _miss_error,
+    _sniff_exception_error,
     dedupe_streams,
     extract_stream_urls,
     find_player_url,
@@ -128,3 +130,47 @@ def test_player_from_page_html_last():
 def test_player_not_found():
     assert find_player_url([], [], "<html>no player</html>") == ""
     assert find_player_url([], [], "") == ""
+
+
+# ---------- 未命中错误分层（P5 遗留修复） ----------
+
+def test_miss_error_nav_failed():
+    """死端口/域名不可达 → 页面打开失败（不再误报 WAF）。"""
+    assert "页面打开失败" in _miss_error(nav_failed=True, waf_ok=False)
+    # 即使 waf_ok 意外为真，导航失败仍是第一优先级
+    assert "页面打开失败" in _miss_error(nav_failed=True, waf_ok=True)
+
+
+def test_miss_error_waf_ok_no_stream():
+    """页面已打开但没抓到流 → 无视频/需登录提示。"""
+    assert "未见流地址" in _miss_error(nav_failed=False, waf_ok=True)
+
+
+def test_miss_error_waf_pending():
+    """WAF 挑战未完成 → 只有这种情况才报 WAF 文案。"""
+    assert _miss_error(nav_failed=False, waf_ok=False) == "WAF 挑战未在时限内通过"
+
+
+def test_sniff_exception_error_connection():
+    """Edge CDP 连接失效 → 友好提示（自愈 + 重试），不吐 urllib3 原文。"""
+    from urllib3.exceptions import MaxRetryError
+    from requests.exceptions import ConnectionError as ReqConnError
+
+    e1 = ReqConnError(
+        "HTTPConnectionPool(host='127.0.0.1', port=50175): Max retries exceeded"
+    )
+    assert "浏览器连接异常" in _sniff_exception_error(e1)
+    e2 = OSError("[WinError 10061] 由于目标计算机积极拒绝，无法连接。")
+    assert "浏览器连接异常" in _sniff_exception_error(e2)
+    # MaxRetryError 走文案特征匹配
+    assert "浏览器连接异常" in _sniff_exception_error(
+        MaxRetryError(None, "http://127.0.0.1:50175/json")
+    )
+
+
+def test_sniff_exception_error_other():
+    """非连接类异常保留类型+消息（截断 200）。"""
+    out = _sniff_exception_error(ValueError("boom"))
+    assert out.startswith("ValueError: boom")
+    long = _sniff_exception_error(ValueError("x" * 500))
+    assert len(long) <= len("ValueError: ") + 200
