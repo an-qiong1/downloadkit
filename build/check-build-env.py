@@ -17,11 +17,13 @@ import sys
 
 # 与 downloadkit.spec / run.py 的实际 import 对齐
 REQUIRED = [
-    "fastapi",     # server.py
-    "uvicorn",     # server.py + run.py 起服务
-    "playwright",  # douyin_browser._launch()（抖音命脉）
-    "webview",     # run.py 桌面窗口（pywebview）
-    "mutagen",     # tagger.py 写 ID3
+    "fastapi",       # server.py
+    "uvicorn",       # server.py + run.py 起服务
+    "playwright",    # douyin_browser._launch()（抖音命脉）
+    "webview",       # run.py 桌面窗口（pywebview）
+    "mutagen",       # tagger.py 写 ID3
+    "DrissionPage",  # sniffer._get_page()（P2 L2 嗅探，spec collect_all）
+    "yt_dlp",        # generic_video（P0 解析，spec collect_all）
 ]
 
 

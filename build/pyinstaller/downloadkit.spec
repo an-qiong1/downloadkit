@@ -15,10 +15,20 @@ project_root = Path.cwd()
 # %LOCALAPPDATA%\ms-playwright 的浏览器缓存（那是 400MB+，不进包）。
 pw_data, pw_binaries, pw_hiddenimports = collect_all('playwright')
 
+# P2 嗅探引擎：sniffer._get_page() 在函数体内延迟 import DrissionPage，
+# 且 DrissionPage 4.x 内部有动态子模块加载——静态分析会漏，必须 collect_all
+# （纯 py 仅 0.5MB，收全无代价）。
+dp_data, dp_binaries, dp_hiddenimports = collect_all('DrissionPage')
+
+# P0/P5 解析与下载：generic_video 在函数体内延迟 import yt_dlp，且 yt-dlp
+# 的 extractor 靠插件机制动态加载（load_plugins），不收全会在 exe 里变成
+# 「Unsupported URL」全废——collect_all 收全部子模块（~15MB 纯 py）。
+yt_data, yt_binaries, yt_hiddenimports = collect_all('yt_dlp')
+
 a = Analysis(
     [str(project_root / 'run.py')],
     pathex=[str(project_root)],
-    binaries=pw_binaries,
+    binaries=pw_binaries + dp_binaries + yt_binaries,
     datas=[
         (str(project_root / 'downloadkit' / 'static'), 'downloadkit/static'),
         (str(project_root / 'server.py'), '.'),
@@ -26,7 +36,7 @@ a = Analysis(
         # 运行时拿不到实体文件，Pillow 就打不开。必须再作为数据文件
         # 放一份进包，run.py 的 _tray_image() 才读得到。
         (str(project_root / 'downloadkit.ico'), '.'),
-    ] + pw_data,
+    ] + pw_data + dp_data + yt_data,
     hiddenimports=[
         # uvicorn
         'uvicorn.logging',
@@ -66,7 +76,7 @@ a = Analysis(
         'clr_loader',
         'pythonnet',
         'bottle',
-    ] + pw_hiddenimports,
+    ] + pw_hiddenimports + dp_hiddenimports + yt_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
