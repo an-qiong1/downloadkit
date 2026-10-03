@@ -334,7 +334,7 @@
     };
     
     $('#settings-save').disabled = true;
-    $('#settings-save').textContent = '保存中...';
+    $('#settings-save').textContent = '保存中…';
     
     api('/api/settings/update', {
       method: 'POST',

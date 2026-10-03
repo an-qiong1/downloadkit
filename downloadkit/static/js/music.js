@@ -111,7 +111,7 @@
     
     var st = $('#music-status');
     st.style.display = 'block';
-    st.innerHTML = '<span class="spinner"></span> 搜索中...';
+    st.innerHTML = '<span class="spinner"></span> 搜索中…';
     st.className = 'status-msg';
     $('#music-results').innerHTML = '';
     $('#playlist-preview').classList.remove('show');
@@ -140,7 +140,7 @@
     
     var st = $('#music-status');
     st.style.display = 'block';
-    st.innerHTML = '<span class="spinner"></span> 正在解析歌单...';
+    st.innerHTML = '<span class="spinner"></span> 正在解析歌单…';
     st.className = 'status-msg';
     $('#music-results').innerHTML = '';
     $('#playlist-preview').classList.remove('show');
@@ -165,7 +165,7 @@
     
     var st = $('#music-status');
     st.style.display = 'block';
-    st.innerHTML = '<span class="spinner"></span> 正在解析单曲...';
+    st.innerHTML = '<span class="spinner"></span> 正在解析单曲…';
     st.className = 'status-msg';
     $('#music-results').innerHTML = '';
     $('#playlist-preview').classList.remove('show');

@@ -10,21 +10,33 @@
     return null;
   }
   
-  // 统一输入处理
-  $('#resource-input').addEventListener('keydown', function(e) { 
-    if (e.key === 'Enter') handleResourceInput(); 
+  // 统一输入处理：单行回车直接解析，多行时回车换行继续粘贴（Shift+Enter 恒换行）
+  $('#resource-input').addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter') return;
+    if (e.shiftKey) return;
+    var lines = $('#resource-input').value.split('\n').filter(function(l) { return l.trim(); });
+    if (lines.length <= 1) {
+      e.preventDefault();
+      handleResourceInput();
+    }
   });
   $('#resource-btn').addEventListener('click', handleResourceInput);
   
-  // 资源解析框清空按钮
+  // 资源解析框清空按钮 + 多行自适应高度（1~6 行）
   var resourceInput = $('#resource-input');
   var resourceClear = $('#resource-clear');
+  function autoResizeResourceInput() {
+    resourceInput.style.height = 'auto';
+    resourceInput.style.height = Math.min(resourceInput.scrollHeight, 6 * 21 + 10) + 'px';
+  }
   resourceInput.addEventListener('input', function() {
     resourceClear.classList.toggle('show', resourceInput.value.length > 0);
+    autoResizeResourceInput();
   });
   resourceClear.addEventListener('click', function() {
     resourceInput.value = '';
     resourceClear.classList.remove('show');
+    autoResizeResourceInput();
     resourceInput.focus();
     // 隐藏预览
     $('#resource-preview').style.display = 'none';
@@ -68,11 +80,11 @@
     
     var st = $('#resource-status');
     st.style.display = 'block';
-    st.innerHTML = '<span class="spinner"></span> 正在解析...';
+    st.innerHTML = '<span class="spinner"></span> 正在解析…';
     st.className = 'status-msg';
     $('#resource-preview').style.display = 'none';
     
-    api('/api/video/parse', { method: 'POST', body: { url: url } }).then(function(data) {
+    api('/api/video/parse', { method: 'POST', body: { url: url }, timeout: 120 }).then(function(data) {
       st.style.display = 'none';
       showResourcePreview(data, platform, url);
     }).catch(function(err) {
@@ -117,11 +129,16 @@
 
     var st = $('#resource-status');
     st.style.display = 'block';
-    st.innerHTML = '<span class="spinner"></span> 正在解析 ' + urls.length + ' 个链接...';
+    st.innerHTML = '<span class="spinner"></span> 正在解析 ' + urls.length + ' 个链接…';
     st.className = 'status-msg';
     $('#resource-preview').style.display = 'none';
 
-    api('/api/video/batch-parse', { method: 'POST', body: { urls: urls } }).then(function(data) {
+    // 批量总时长随条数增长：下限 120s，每条再放宽 30s
+    api('/api/video/batch-parse', {
+      method: 'POST',
+      body: { urls: urls },
+      timeout: Math.max(120, urls.length * 30)
+    }).then(function(data) {
       st.style.display = 'none';
       showInlineBatchResults(data.results || []);
     }).catch(function(err) {
@@ -478,7 +495,7 @@
           // 不是错误，显示"仍在加载"提示，之后继续等待数据到达
           var slowEl = document.createElement('div');
           slowEl.className = 'preview-video-slow';
-          slowEl.textContent = '视频较大，正在下载中（可能需要10-20秒）...';
+          slowEl.textContent = '视频较大，加载中（可能需要 10~20 秒）…';
           player.appendChild(slowEl);
         }
         lucide.createIcons();
@@ -546,10 +563,10 @@
     btn.innerHTML = iconHtml + '嗅探中…';
     box.style.display = 'block';
     box.innerHTML = '<div class="sniff-loading"><span class="spinner"></span>' +
-      '<span>浏览器嗅探中…（过 WAF 挑战 + 定位播放器，首次约 10~40 秒）</span></div>';
+      '<span>正在嗅探…（过 WAF 挑战 + 定位播放器，预计 30~60 秒，请稍候）</span></div>';
     lucide.createIcons();
 
-    api('/api/sniff', { method: 'POST', body: { url: pageUrl, timeout: 40 } }).then(function(res) {
+    api('/api/sniff', { method: 'POST', body: { url: pageUrl, timeout: 40 }, timeout: 120 }).then(function(res) {
       btn.disabled = false;
       btn.innerHTML = iconHtml + '重新嗅探';
       lucide.createIcons();
@@ -664,220 +681,8 @@
   }
   
   // ========== 批量下载模块 ==========
-  // 批量解析结果
-  var batchResults = [];
-  var batchSelected = {};
   // 命名提示：url → {title, folder}（书签模式填充；下载时作为文件名依据）
   var downloadHints = {};
-  
-  // 模式切换
-  $$('.mode-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      var mode = btn.dataset.mode;
-      $$('.mode-btn').forEach(function(b) { b.classList.toggle('active', b === btn); });
-      $('#single-mode').style.display = mode === 'single' ? 'block' : 'none';
-      $('#batch-mode').style.display = mode === 'batch' ? 'block' : 'none';
-      $('#bookmark-mode').style.display = mode === 'bookmark' ? 'block' : 'none';
-    });
-  });
-  
-  // 批量解析
-  $('#batch-parse-btn').addEventListener('click', function() {
-    var input = $('#batch-input').value.trim();
-    if (!input) {
-      toast('请输入链接', 'error');
-      return;
-    }
-    
-    // 从多行文本中提取所有URL
-    var urls = extractAllUrls(input);
-    
-    if (urls.length === 0) {
-      toast('未找到有效链接', 'error');
-      return;
-    }
-    
-    var btn = $('#batch-parse-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<i data-lucide="search"></i>解析中...';
-    lucide.createIcons();
-    
-    var st = $('#batch-status');
-    st.style.display = 'block';
-    st.innerHTML = '<span class="spinner"></span> 正在解析 ' + urls.length + ' 个链接...';
-    st.className = 'status-msg';
-    $('#batch-results').style.display = 'none';
-    
-    api('/api/video/batch-parse', { method: 'POST', body: { urls: urls } }).then(function(data) {
-      batchResults = data.results || [];
-      st.style.display = 'none';
-      showBatchResults();
-    }).catch(function(err) {
-      st.innerHTML = '解析失败：' + err.message;
-      st.className = 'status-msg error';
-    }).finally(function() { 
-      btn.disabled = false; 
-      btn.innerHTML = '<i data-lucide="search"></i>解析全部';
-      lucide.createIcons();
-    });
-  });
-  
-  // 清空批量输入
-  $('#batch-clear-btn').addEventListener('click', function() {
-    $('#batch-input').value = '';
-    $('#batch-results').style.display = 'none';
-    $('#batch-status').style.display = 'none';
-    batchResults = [];
-    batchSelected = {};
-  });
-  
-  // 显示批量解析结果
-  function showBatchResults() {
-    var container = $('#batch-results');
-    container.style.display = 'block';
-    
-    var platformColors = {
-      'douyin': { bg: '#FF6B6B20', color: '#FF6B6B', label: '抖音' },
-      'bilibili': { bg: '#00A1D620', color: '#00A1D6', label: 'B站' },
-      'youtube': { bg: '#FF000020', color: '#FF0000', label: 'YouTube' },
-      'xiaohongshu': { bg: '#FF244220', color: '#FF2442', label: '小红书' },
-      'generic': { bg: '#BF5AF220', color: '#BF5AF2', label: '网页' }
-    };
-    
-    var successCount = batchResults.filter(function(r) { return r.status === 'success'; }).length;
-    
-    var html = '';
-    
-    // 结果列表
-    html += '<div class="batch-results-list">';
-    batchResults.forEach(function(item, index) {
-      var p = platformColors[item.platform] || { bg: '#86868B20', color: '#86868B', label: '未知' };
-      
-      html += '<div class="batch-item" data-index="' + index + '">';
-      
-      if (item.status === 'success') {
-        html += '<div class="batch-item-checkbox"><input type="checkbox" class="batch-select" data-index="' + index + '" checked></div>';
-      }
-      
-      var itemIcon = getContentTypeIcon(item.content_type);
-      html += '<div class="batch-item-cover" style="background:linear-gradient(135deg,' + p.bg + ',' + p.bg.replace('20', '10') + ')"><i data-lucide="' + itemIcon + '"></i></div>';
-      html += '<div class="batch-item-info">';
-      html += '<div class="batch-item-title">' + escHtml(item.title || '未知标题') + '</div>';
-      html += '<div class="batch-item-meta">' + escHtml(item.author || '未知作者') + '</div>';
-      html += '</div>';
-      
-      if (item.status === 'success') {
-        html += '<span class="batch-item-status success">可下载</span>';
-      } else {
-        html += '<span class="batch-item-status failed" title="' + escAttr(item.error || '') + '">解析失败</span>';
-      }
-      
-      html += '</div>';
-    });
-    html += '</div>';
-    
-    // 操作栏
-    if (successCount > 0) {
-      html += '<div class="batch-toolbar">';
-      html += '<div class="batch-select-all">';
-      html += '<input type="checkbox" id="batch-select-all" checked>';
-      html += '<label for="batch-select-all">全选 (' + successCount + ')</label>';
-      html += '</div>';
-      html += '<div class="batch-download-actions">';
-      html += '<button class="btn btn-primary" id="batch-download-selected"><i data-lucide="download"></i>下载选中</button>';
-      html += '<button class="btn btn-secondary" id="batch-download-all"><i data-lucide="download"></i>下载全部</button>';
-      html += '</div>';
-      html += '</div>';
-    }
-    
-    container.innerHTML = html;
-    lucide.createIcons();
-    
-    // 初始化选中状态
-    batchSelected = {};
-    batchResults.forEach(function(item, index) {
-      if (item.status === 'success') {
-        batchSelected[index] = true;
-      }
-    });
-    
-    // 绑定事件
-    bindBatchEvents();
-  }
-  
-  // 绑定批量操作事件
-  function bindBatchEvents() {
-    // 单个选择
-    $$('.batch-select').forEach(function(checkbox) {
-      checkbox.addEventListener('change', function() {
-        var index = parseInt(checkbox.dataset.index);
-        if (checkbox.checked) {
-          batchSelected[index] = true;
-        } else {
-          delete batchSelected[index];
-        }
-        updateBatchSelectAll();
-      });
-    });
-    
-    // 全选
-    var selectAll = $('#batch-select-all');
-    if (selectAll) {
-      selectAll.addEventListener('change', function() {
-        var checked = this.checked;
-        $$('.batch-select').forEach(function(checkbox) {
-          checkbox.checked = checked;
-          var index = parseInt(checkbox.dataset.index);
-          if (checked) {
-            batchSelected[index] = true;
-          } else {
-            delete batchSelected[index];
-          }
-        });
-      });
-    }
-    
-    // 下载选中
-    var downloadSelected = $('#batch-download-selected');
-    if (downloadSelected) {
-      downloadSelected.addEventListener('click', function() {
-        var urls = Object.keys(batchSelected).map(function(index) {
-          return batchResults[parseInt(index)].url;
-        });
-        if (urls.length > 0) {
-          startBatchDownload(urls);
-        }
-      });
-    }
-    
-    // 下载全部
-    var downloadAll = $('#batch-download-all');
-    if (downloadAll) {
-      downloadAll.addEventListener('click', function() {
-        var urls = batchResults
-          .filter(function(item) { return item.status === 'success'; })
-          .map(function(item) { return item.url; });
-        if (urls.length > 0) {
-          startBatchDownload(urls);
-        }
-      });
-    }
-  }
-  
-  // 更新全选状态
-  function updateBatchSelectAll() {
-    var selectAll = $('#batch-select-all');
-    if (!selectAll) return;
-    
-    var successCount = batchResults.filter(function(r) { return r.status === 'success'; }).length;
-    var selectedCount = Object.keys(batchSelected).length;
-    
-    selectAll.checked = selectedCount === successCount;
-    var label = selectAll.nextElementSibling;
-    if (label) {
-      label.textContent = '全选 (' + selectedCount + '/' + successCount + ')';
-    }
-  }
   
   // 开始批量下载（存在书签命名提示时随 items 下发）
   function startBatchDownload(urls) {
@@ -946,7 +751,7 @@
 
   function importBookmarks(file) {
     $('#bookmark-file-label').value = file.name;
-    setBookmarkStatus('<span class="spinner"></span> 正在读取 ' + escHtml(file.name) + ' ...');
+    setBookmarkStatus('<span class="spinner"></span> 正在读取 ' + escHtml(file.name) + '…');
     $('#bookmark-tree-wrap').style.display = 'none';
     $('#bookmark-results').style.display = 'none';
     // 新导入作废进行中的探测
@@ -968,6 +773,11 @@
           setBookmarkStatus('');
           bookmarkTree = data.tree || [];
           downloadHints = {};  // 新导入覆盖旧提示
+          if (!data.links) {
+            $('#bookmark-tree-wrap').style.display = 'none';
+            toast('书签里没有可用链接', 'warning');
+            return;
+          }
           renderBookmarkTree();
           $('#bookmark-tree-wrap').style.display = 'block';
           toast('书签导入成功：' + data.links + ' 条链接 / ' + data.folders + ' 个文件夹', 'success');
@@ -1082,11 +892,12 @@
 
     var btn = this;
     btn.disabled = true;
-    setBookmarkStatus('<span class="spinner"></span> 正在解析 ' + items.length + ' 条书签...');
+    setBookmarkStatus('<span class="spinner"></span> 正在解析 ' + items.length + ' 条书签…');
 
     api('/api/video/batch-parse', {
       method: 'POST',
-      body: { urls: items.map(function(i) { return i.url; }), items: items }
+      body: { urls: items.map(function(i) { return i.url; }), items: items },
+      timeout: Math.max(120, items.length * 30)
     }).then(function(data) {
       setBookmarkStatus('');
       var results = data.results || [];
@@ -1321,7 +1132,7 @@
     var iconHtml = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>展开中…';
-    api('/api/video/episodes', { method: 'POST', body: { url: url, timeout: 60 } })
+    api('/api/video/episodes', { method: 'POST', body: { url: url, timeout: 60 }, timeout: 150 })
       .then(function(res) {
         if (!res.count || res.count < 3) {
           toast(res.error || '未识别到选集（已回退为单集下载）', 'warning');

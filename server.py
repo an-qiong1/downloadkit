@@ -889,6 +889,31 @@ def detect_platform(url: str) -> str:
         return None
 
 
+# 慢接口耗时日志：解析/嗅探类请求从收到到响应的总时长。
+# 与 sniffer/generic 内部的阶段日志配合，exe 版「一直解析」类问题
+# 先看这里定位是网络慢、单站重试还是接口挂起。
+_SLOW_API_PATHS = {
+    "/api/video/parse", "/api/video/batch-parse",
+    "/api/sniff", "/api/video/episodes",
+}
+
+
+@app.middleware("http")
+async def _log_api_timing(request, call_next):
+    path = request.url.path
+    watched = path in _SLOW_API_PATHS
+    t0 = time.monotonic()
+    try:
+        resp = await call_next(request)
+    except Exception:
+        logger.info(f"[API] {path} -> 异常退出 {time.monotonic() - t0:.1f}s")
+        raise
+    elapsed = time.monotonic() - t0
+    if watched or elapsed > 5:
+        logger.info(f"[API] {path} -> {resp.status_code} {elapsed:.1f}s")
+    return resp
+
+
 @app.post("/api/video/parse")
 async def api_video_parse(req: VideoParseRequest):
     """统一视频解析接口"""

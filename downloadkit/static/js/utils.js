@@ -31,7 +31,15 @@ function api(path, opts) {
     // 本项目的 string body 只会是 JSON.stringify 的产物。
     opts.headers['Content-Type'] = 'application/json';
   }
-  return fetch(window.location.origin + path, opts).then(function(r) {
+  // 整体超时（秒）：AbortController 主动失败，避免请求挂起时前端无限转圈。
+  // 超时统一转成可读错误走调用方的 catch（兑底按钮等照常出现）。
+  var timer = null;
+  if (opts.timeout && opts.timeout > 0) {
+    var ctl = new AbortController();
+    opts.signal = ctl.signal;
+    timer = setTimeout(function() { ctl.abort(); }, opts.timeout * 1000);
+  }
+  var p = fetch(window.location.origin + path, opts).then(function(r) {
     if (!r.ok) return r.json().then(function(e) {
       throw new Error(_extractErr(e) || r.statusText || '请求失败');
     }, function() {
@@ -39,6 +47,19 @@ function api(path, opts) {
     });
     return r.json();
   });
+  if (timer) {
+    p = p.then(function(v) {
+      clearTimeout(timer);
+      return v;
+    }, function(e) {
+      clearTimeout(timer);
+      if (e && e.name === 'AbortError') {
+        throw new Error('请求超时（超过 ' + opts.timeout + ' 秒），请重试，或用深度嗅探/展开选集换个方式');
+      }
+      throw e;
+    });
+  }
+  return p;
 }
 
 function toast(msg, type) {
@@ -83,6 +104,7 @@ var state = {
 var tabTitles = {
   'music': '音乐下载',
   'resource': '资源解析',
+  'movie': '影视解析',
   'subscriptions': '创作者订阅',
   'downloads': '下载',
   'collections': '我的歌单',

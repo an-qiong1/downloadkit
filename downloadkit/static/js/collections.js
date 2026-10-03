@@ -18,7 +18,7 @@
         '<h3 style="margin:0;font-size:16px;font-weight:600">收藏歌单</h3>' +
         '<button class="btn btn-primary" id="coll-add-btn"><i data-lucide="plus"></i>添加收藏</button>' +
       '</div>' +
-      '<div id="coll-loading" class="status-msg" style="display:none"><span class="spinner"></span> 加载中...</div>' +
+      '<div id="coll-loading" class="status-msg" style="display:none"><span class="spinner"></span> 加载中…</div>' +
       '<div id="coll-empty" class="status-msg" style="display:none">还没有收藏的歌单，点击右上角添加</div>' +
       '<div id="coll-list"></div>' +
       // 添加弹窗
@@ -186,7 +186,7 @@
 
     var btn = $('#coll-add-confirm');
     btn.disabled = true;
-    btn.textContent = '解析中...';
+    btn.textContent = '解析中…';
 
     api('/api/collections', { method: 'POST', body: { url: url } }).then(function() {
       toast('收藏成功', 'success');

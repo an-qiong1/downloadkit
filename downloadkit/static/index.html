@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20260930b">
+<link rel="stylesheet" href="css/main.css?v=20261003a">
 </head>
 <body>
 
@@ -35,6 +35,10 @@
         <a class="nav-item" data-tab="resource">
           <i data-lucide="link" class="nav-icon"></i>
           <span>资源解析</span>
+        </a>
+        <a class="nav-item" data-tab="movie">
+          <i data-lucide="film" class="nav-icon"></i>
+          <span>影视解析</span>
         </a>
         <a class="nav-item" data-tab="subscriptions">
           <i data-lucide="users" class="nav-icon"></i>
@@ -109,47 +113,28 @@
         </div>
       </div>
 
-      <!-- 资源解析面板 -->
+      <!-- 资源解析面板（社交媒体：单/批合一输入框） -->
       <div class="tab-panel" id="panel-resource">
-        <!-- 模式切换 -->
-        <div class="resource-mode-toggle">
-          <button class="mode-btn active" data-mode="single">单个链接</button>
-          <button class="mode-btn" data-mode="batch">批量下载</button>
-          <button class="mode-btn" data-mode="bookmark">书签导入</button>
-        </div>
-        
-        <!-- 单个链接模式 -->
         <div class="single-mode" id="single-mode">
           <div class="search-section">
-            <div class="search-box">
+            <div class="search-box search-box-multi">
               <i data-lucide="link" class="search-icon"></i>
-              <input class="search-input" id="resource-input" type="text" placeholder="粘贴视频/图文链接，支持抖音、B站、YouTube、小红书..." autocomplete="off">
+              <textarea class="search-input search-textarea" id="resource-input" rows="1"
+                        placeholder="粘贴链接或抖音口令，支持抖音、B站、YouTube、小红书...&#10;多个链接每行一个，自动批量解析"></textarea>
               <button class="search-clear" id="resource-clear" title="清空"><i data-lucide="x"></i></button>
               <button class="search-btn" id="resource-btn" title="解析"><i data-lucide="arrow-right"></i></button>
             </div>
-            <div class="resource-hint">支持多个链接，每行一个，自动批量解析</div>
+            <div class="resource-hint">单行回车解析一条；多行每行一个链接，自动批量解析</div>
           </div>
-          
+
           <div id="resource-status" class="status-msg" style="display:none"></div>
           <div id="resource-preview" style="display:none"></div>
         </div>
-        
-        <!-- 批量模式 -->
-        <div class="batch-mode" id="batch-mode" style="display:none">
-          <div class="batch-input-section">
-            <textarea class="batch-textarea" id="batch-input" placeholder="粘贴多个链接，每行一个&#10;支持抖音、B站、YouTube、小红书...&#10;&#10;示例:&#10;https://www.bilibili.com/video/BV1xx...&#10;https://www.youtube.com/watch?v=xxx&#10;https://v.douyin.com/xxx"></textarea>
-            <div class="batch-actions">
-              <button class="btn btn-primary" id="batch-parse-btn"><i data-lucide="search"></i>解析全部</button>
-              <button class="btn btn-secondary" id="batch-clear-btn">清空</button>
-            </div>
-          </div>
-          
-          <div id="batch-status" class="status-msg" style="display:none"></div>
-          <div id="batch-results" style="display:none"></div>
-        </div>
-        
-        <!-- 书签导入模式 -->
-        <div class="bookmark-mode" id="bookmark-mode" style="display:none">
+      </div>
+
+      <!-- 影视解析面板（书签导入 → 批量探测 → 解析下载） -->
+      <div class="tab-panel" id="panel-movie">
+        <div class="bookmark-mode" id="bookmark-mode">
           <div class="search-section">
             <div class="search-box bookmark-pick" id="bookmark-pick" title="点击选择书签 HTML 文件">
               <i data-lucide="bookmark" class="search-icon"></i>
@@ -813,9 +798,9 @@
   </div>
 </div>
 
-<script src="js/utils.js?v=20260927m"></script>
+<script src="js/utils.js?v=20261003a"></script>
 <script src="js/music.js?v=20260927i"></script>
-<script src="js/resource.js?v=20260930b"></script>
+<script src="js/resource.js?v=20261003a"></script>
 <script src="js/files.js?v=20260927m"></script>
 <script src="js/queue.js?v=20260927m"></script>
 <script src="js/settings.js?v=20260927m"></script>
