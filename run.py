@@ -361,6 +361,34 @@ def make_uvicorn_log_config():
     return cfg
 
 
+def attach_app_file_log():
+    """把应用日志（server / downloadkit.* logger）接到 downloadkit.log。
+
+    windowed EXE 里 sys.stderr 是 None，uvicorn 的 log_config 又只配置
+    uvicorn.* loggers，于是 middleware 的 [API] 耗时行、generic 的
+    [Generic] 阶段行、下载器的开始/完成行全部丢失——排障时只剩启动日志。
+    挂到 root logger：所有应用 logger 默认 propagate 到 root，一处覆盖。
+    """
+    import logging
+    try:
+        path = _log_path()
+        fh = logging.FileHandler(path, encoding="utf-8")
+        fh.setFormatter(logging.Formatter(
+            "[%(asctime)s] %(levelname)s %(name)s: %(message)s", "%H:%M:%S"))
+        root = logging.getLogger()
+        # 同文件已有 FileHandler 就不重复挂（防多次调用写双份）
+        for h in root.handlers:
+            if isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == fh.baseFilename:
+                fh.close()
+                return
+        root.addHandler(fh)
+        if root.level == logging.NOTSET or root.level > logging.INFO:
+            root.setLevel(logging.INFO)
+        log(f"app file log attached: {path}")
+    except Exception as e:
+        log(f"attach app file log failed: {e}")
+
+
 # ---------- main ----------
 
 # ------------------------------------------------------------------
@@ -618,6 +646,7 @@ def main():
         sys.exit(1)
 
     # 5. Build uvicorn config with patched log_config (no isatty)
+    attach_app_file_log()
     log("Building custom log_config...")
     try:
         log_config = make_uvicorn_log_config()
