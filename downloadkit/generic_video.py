@@ -18,6 +18,7 @@ import html as html_module
 import json
 import logging
 import re
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -98,15 +99,80 @@ def origin_of(url: str) -> str:
 
 
 def _yt_dlp_cmd() -> list[str]:
-    """yt-dlp 调用方式：打包环境用同目录 exe，开发环境用 python -m。
+    """yt-dlp 调用方式：打包环境用独立 exe，开发环境用 python -m。
 
     Windows 上 yt-dlp 常不在 PATH，`python -m yt_dlp` 是最稳的兜底
     （同 backend/app/utils/ytdlp.py 的做法）。
+
+    **frozen（打包 exe）下绝不能返回 [sys.executable, "-m", ...]**：
+    打包后 sys.executable 就是 downloadkit.exe 本体，spawn 出来的是一个
+    完整应用实例——撞单实例锁弹「已在运行」窗，父进程 45s 超时才失败，
+    表现为「解析时弹窗 + 一直解析」（2026-10-03 实测复现）。
+    frozen 找不到独立 yt-dlp 时返回 []，由 _ytdlp_dump_json 降级到
+    进程内 Python API。
     """
     ytdlp = Path(sys.executable).parent / "yt-dlp.exe"
     if ytdlp.exists():
         return [str(ytdlp)]
-    return [sys.executable, "-m", "yt_dlp"]
+    if not getattr(sys, "frozen", False):
+        return [sys.executable, "-m", "yt_dlp"]
+    which = shutil.which("yt-dlp") or shutil.which("yt-dlp.exe")
+    if which:
+        return [which]
+    return []
+
+
+async def _ytdlp_dump_json_inproc(
+    url: str, *, flat: bool = False, timeout: float = PARSE_TIMEOUT,
+    referer: str = "",
+) -> list[dict[str, Any]]:
+    """进程内 yt-dlp Python API（frozen exe 无独立 yt-dlp 时的降级路径）。
+
+    为什么子进程优先、这是降级：批量场景要硬超时 kill，阻塞的
+    extract_info 中断不了——进程内 wait_for 超时后工作线程会挂到
+    yt-dlp 自身网络超时（socket_timeout 30s × retries 3）才结束，
+    由 server 侧 Semaphore(4) 限流兜底，单次泄漏可控。
+
+    输出对齐 `--dump-json`：playlist 按 entries 逐条展开（壳不输出），
+    JSON 归一化（default=str 与 yt-dlp 序列化行为一致）。
+    """
+    def _work() -> list[dict[str, Any]]:
+        import yt_dlp
+
+        opts: dict[str, Any] = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "socket_timeout": 30,
+            "retries": 3,
+            # 对齐子进程分支：flat=False → --no-playlist；flat=True → --flat-playlist
+            "noplaylist": not flat,
+            "extract_flat": bool(flat),
+        }
+        if referer:
+            opts["http_headers"] = {"Referer": referer, "User-Agent": DEFAULT_UA}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if info is None:
+            raise RuntimeError("yt-dlp 未返回任何结果")
+        if info.get("_type") in ("playlist", "multi_video") or info.get("entries") is not None:
+            entries = [e for e in (info.get("entries") or []) if isinstance(e, dict)]
+        else:
+            entries = [info]
+        if not entries:
+            raise RuntimeError("yt-dlp 未返回任何结果")
+        return json.loads(json.dumps(entries))
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_work), timeout=timeout)
+    except (asyncio.TimeoutError, TimeoutError):
+        raise TimeoutError(f"解析超时（>{timeout}s）: {url[:80]}") from None
+    except Exception as e:  # noqa: BLE001 — DownloadError/ExtractorError 等统一转 RuntimeError
+        if isinstance(e, (RuntimeError, OSError)):
+            raise
+        err = str(e)
+        last = [l for l in err.splitlines() if l.strip()][-3:]
+        raise RuntimeError("; ".join(last) or type(e).__name__) from e
 
 
 async def _ytdlp_dump_json(
@@ -118,10 +184,16 @@ async def _ytdlp_dump_json(
     用子进程而非 Python API 的原因：批量场景必须能硬超时 kill，
     阻塞的 extract_info 无法中断。
 
+    frozen exe 无独立 yt-dlp 时（_yt_dlp_cmd 返回 []）降级进程内 API——
+    绝不能拿 sys.executable 当解释器 spawn（见 _yt_dlp_cmd 注释）。
+
     referer: 解析期就带上的 Referer——防盗链站 parse 阶段同样 403（A8），
         只在下载期带 header 于事无补。
     """
-    cmd = _yt_dlp_cmd() + [
+    cmd = _yt_dlp_cmd()
+    if not cmd:
+        return await _ytdlp_dump_json_inproc(url, flat=flat, timeout=timeout, referer=referer)
+    cmd += [
         "--dump-json", "--no-download", "--no-warnings", "--quiet",
         # 实测部分 CDN 首连 20s 不够（偶发 connect timeout），放宽到 30s
         "--socket-timeout", "30",
