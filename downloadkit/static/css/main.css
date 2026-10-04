@@ -1343,6 +1343,24 @@ details[open] #dir-advanced-arrow {
   max-height: 140px;
 }
 
+/* 影视解析 Tab：手动输入区与书签导入之间的分节（细线 + 居中文案） */
+.movie-section-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0 16px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.movie-section-divider::before,
+.movie-section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
 /* 批量结果列表 */
 .batch-results-list {
   display: flex;

@@ -10,47 +10,61 @@
     return null;
   }
   
-  // 统一输入处理：单行回车直接解析，多行时回车换行继续粘贴（Shift+Enter 恒换行）
-  $('#resource-input').addEventListener('keydown', function(e) {
-    if (e.key !== 'Enter') return;
-    if (e.shiftKey) return;
-    var lines = $('#resource-input').value.split('\n').filter(function(l) { return l.trim(); });
-    if (lines.length <= 1) {
-      e.preventDefault();
-      handleResourceInput();
-    }
-  });
-  $('#resource-btn').addEventListener('click', handleResourceInput);
-  
-  // 资源解析框清空按钮 + 多行自适应高度（1~6 行）
-  var resourceInput = $('#resource-input');
-  var resourceClear = $('#resource-clear');
-  function autoResizeResourceInput() {
-    resourceInput.style.height = 'auto';
-    resourceInput.style.height = Math.min(resourceInput.scrollHeight, 6 * 21 + 10) + 'px';
+  // 解析输入区容器组：资源解析 / 影视解析两个 Tab 各有一套 input/btn/
+  // status/preview，交互逻辑共用，结果渲染到各自容器互不串台。
+  var RESOURCE_TARGET = {
+    input: '#resource-input', btn: '#resource-btn', clear: '#resource-clear',
+    status: '#resource-status', preview: '#resource-preview'
+  };
+  var MOVIE_TARGET = {
+    input: '#movie-input', btn: '#movie-btn', clear: '#movie-clear',
+    status: '#movie-status', preview: '#movie-preview'
+  };
+
+  function autoResizeInput(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 6 * 21 + 10) + 'px';
   }
-  resourceInput.addEventListener('input', function() {
-    resourceClear.classList.toggle('show', resourceInput.value.length > 0);
-    autoResizeResourceInput();
-  });
-  resourceClear.addEventListener('click', function() {
-    resourceInput.value = '';
-    resourceClear.classList.remove('show');
-    autoResizeResourceInput();
-    resourceInput.focus();
-    // 隐藏预览
-    $('#resource-preview').style.display = 'none';
-    $('#resource-status').style.display = 'none';
-  });
+
+  // 绑定一个解析输入区：单行回车直接解析，多行回车换行继续粘贴
+  // （Shift+Enter 恒换行）；输入自适应 1~6 行；清空连带清状态与预览。
+  function bindParseInput(tgt) {
+    var input = $(tgt.input);
+    var clear = $(tgt.clear);
+    input.addEventListener('keydown', function(e) {
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      var lines = input.value.split('\n').filter(function(l) { return l.trim(); });
+      if (lines.length <= 1) {
+        e.preventDefault();
+        handleResourceInput(tgt);
+      }
+    });
+    $(tgt.btn).addEventListener('click', function() { handleResourceInput(tgt); });
+    input.addEventListener('input', function() {
+      clear.classList.toggle('show', input.value.length > 0);
+      autoResizeInput(input);
+    });
+    clear.addEventListener('click', function() {
+      input.value = '';
+      clear.classList.remove('show');
+      autoResizeInput(input);
+      input.focus();
+      $(tgt.preview).style.display = 'none';
+      $(tgt.status).style.display = 'none';
+    });
+  }
+  bindParseInput(RESOURCE_TARGET);
+  bindParseInput(MOVIE_TARGET);
   
-  function handleResourceInput() {
-    var input = $('#resource-input').value.trim();
+  function handleResourceInput(tgt) {
+    tgt = tgt || RESOURCE_TARGET;
+    var input = $(tgt.input).value.trim();
     if (!input) return;
     
     // 检测多行输入 → 批量解析
     var lines = input.split('\n').filter(function(l) { return l.trim(); });
     if (lines.length > 1) {
-      handleBatchInput(lines);
+      handleBatchInput(lines, tgt);
       return;
     }
     
@@ -70,39 +84,40 @@
     }
     
     // 使用统一解析接口
-    parseVideo(url, platform);
+    parseVideo(url, platform, tgt);
   }
   
   // 统一视频解析
-  function parseVideo(url, platform) {
-    var btn = $('#resource-btn');
+  function parseVideo(url, platform, tgt) {
+    tgt = tgt || RESOURCE_TARGET;
+    var btn = $(tgt.btn);
     btn.disabled = true;
     
-    var st = $('#resource-status');
+    var st = $(tgt.status);
     st.style.display = 'block';
     st.innerHTML = '<span class="spinner"></span> 正在解析…';
     st.className = 'status-msg';
-    $('#resource-preview').style.display = 'none';
+    $(tgt.preview).style.display = 'none';
     
     api('/api/video/parse', { method: 'POST', body: { url: url }, timeout: 120 }).then(function(data) {
       st.style.display = 'none';
-      showResourcePreview(data, platform, url);
+      showResourcePreview(data, platform, url, tgt);
     }).catch(function(err) {
       // 解析失败往往正是 L1 对该站无效（WAF 重置连接等）——
       // 失败提示里直接给 L2 深度嗅探入口，不让流程断在这里
       st.className = 'status-msg error';
       st.innerHTML = '解析失败：' + escHtml(err.message) +
-        ' <button class="btn btn-secondary" id="status-sniff-btn">' +
+        ' <button class="btn btn-secondary status-sniff-btn">' +
         '<i data-lucide="search"></i>深度嗅探</button>' +
-        ' <button class="btn btn-secondary" id="status-episodes-btn">' +
+        ' <button class="btn btn-secondary status-episodes-btn">' +
         '<i data-lucide="list"></i>展开选集</button>' +
-        '<div id="sniff-result" class="sniff-result" style="display:none"></div>';
+        '<div class="sniff-result" style="display:none"></div>';
       lucide.createIcons();
-      var sb = $('#status-sniff-btn');
+      var sb = st.querySelector('.status-sniff-btn');
       if (sb) {
-        sb.onclick = function() { runDeepSniff(url, { title: '' }, sb); };
+        sb.onclick = function() { runDeepSniff(url, { title: '' }, sb, tgt.status); };
       }
-      var eb = $('#status-episodes-btn');
+      var eb = st.querySelector('.status-episodes-btn');
       if (eb) {
         eb.onclick = function() { expandEpisodes(url, eb); };
       }
@@ -112,7 +127,8 @@
   }
   
   // 从单输入框检测多行时的批量处理
-  function handleBatchInput(lines) {
+  function handleBatchInput(lines, tgt) {
+    tgt = tgt || RESOURCE_TARGET;
     var urls = [];
     lines.forEach(function(line) {
       var url = extractUrl(line.trim());
@@ -124,14 +140,14 @@
       return;
     }
 
-    var btn = $('#resource-btn');
+    var btn = $(tgt.btn);
     btn.disabled = true;
 
-    var st = $('#resource-status');
+    var st = $(tgt.status);
     st.style.display = 'block';
     st.innerHTML = '<span class="spinner"></span> 正在解析 ' + urls.length + ' 个链接…';
     st.className = 'status-msg';
-    $('#resource-preview').style.display = 'none';
+    $(tgt.preview).style.display = 'none';
 
     // 批量总时长随条数增长：下限 120s，每条再放宽 30s
     api('/api/video/batch-parse', {
@@ -140,7 +156,7 @@
       timeout: Math.max(120, urls.length * 30)
     }).then(function(data) {
       st.style.display = 'none';
-      showInlineBatchResults(data.results || []);
+      showInlineBatchResults(data.results || [], tgt.preview);
     }).catch(function(err) {
       st.innerHTML = '解析失败：' + err.message;
       st.className = 'status-msg error';
@@ -288,9 +304,10 @@
     lucide.createIcons();
   }
 
-  // 显示资源预览
-  function showResourcePreview(data, platform, url) {
-    var preview = $('#resource-preview');
+  // 显示资源预览（tgt 指定渲染到哪个 Tab 的容器）
+  function showResourcePreview(data, platform, url, tgt) {
+    tgt = tgt || RESOURCE_TARGET;
+    var preview = $(tgt.preview);
     preview.style.display = 'block';
     preview.className = 'resource-preview-container';
 
@@ -313,15 +330,15 @@
           '<div class="preview-header-title">' + escHtml(data.title || '无标题') + '</div>' +
           '<div class="preview-header-meta">' + escHtml(data.author || '未知作者') + ' · <span class="platform-tag" style="background:' + p.bg + ';color:' + p.color + ';margin-top:0">' + p.label + '</span></div>' +
         '</div>' +
-        '<button class="btn btn-primary" id="resource-download-btn"><i data-lucide="download"></i>下载</button>' +
+        '<button class="btn btn-primary preview-download-btn"><i data-lucide="download"></i>下载</button>' +
         (platform === 'generic'
-          ? '<button class="btn btn-secondary" id="resource-sniff-btn"><i data-lucide="search"></i>深度嗅探</button>' +
-            '<button class="btn btn-secondary" id="resource-episodes-btn"><i data-lucide="list"></i>展开选集</button>'
+          ? '<button class="btn btn-secondary preview-sniff-btn"><i data-lucide="search"></i>深度嗅探</button>' +
+            '<button class="btn btn-secondary preview-episodes-btn"><i data-lucide="list"></i>展开选集</button>'
           : '') +
       '</div>' +
-      // L2 嗅探结果容器（点击「深度嗅探」后填充流列表）
+      // L2 嗅探结果容器（点击「深度嗅探」后填充流列表；class 化避免双 Tab id 冲突）
       (platform === 'generic'
-        ? '<div id="sniff-result" class="sniff-result" style="display:none"></div>'
+        ? '<div class="sniff-result" style="display:none"></div>'
         : '');
 
     // 内容预览主体
@@ -517,23 +534,23 @@
     });
 
     // 绑定下载按钮
-    var dlBtn = $('#resource-download-btn');
+    var dlBtn = preview.querySelector('.preview-download-btn');
     if (dlBtn) {
       dlBtn.onclick = function() {
-        downloadResource(url, platform);
+        downloadResource(url, platform, dlBtn);
       };
     }
 
-    // 绑定深度嗅探按钮（L2：L0/L1 拿不到流时的浏览器嗅探）
-    var sniffBtn = $('#resource-sniff-btn');
+    // 绑定深度嗅探按钮（L2：L0/L1 拿不到流时的浏览器嗅探；结果落本预览区的盒子）
+    var sniffBtn = preview.querySelector('.preview-sniff-btn');
     if (sniffBtn) {
       sniffBtn.onclick = function() {
-        runDeepSniff(url, data, sniffBtn);
+        runDeepSniff(url, data, sniffBtn, tgt.preview);
       };
     }
 
     // 绑定展开选集按钮（P4：播放页 → 集数列表 → 勾选探测批量下载）
-    var epBtn = $('#resource-episodes-btn');
+    var epBtn = preview.querySelector('.preview-episodes-btn');
     if (epBtn) {
       epBtn.onclick = function() { expandEpisodes(url, epBtn); };
     }
@@ -555,8 +572,10 @@
   // ========== 深度嗅探（L2：DrissionPage 浏览器嗅探） ==========
   // L0 直链 / L1 静态解析拿不到流时，真实浏览器过 WAF + 监听网络 +
   // 跨域 iframe 播放器提升，抓 m3u8/mp4 并带 Referer 入下载队列。
-  function runDeepSniff(pageUrl, data, btn) {
-    var box = $('#sniff-result');
+  function runDeepSniff(pageUrl, data, btn, boxHostSel) {
+    // 盒子在调用方容器内（失败态在 status、预览态在 preview），按宿主找
+    var host = boxHostSel ? $(boxHostSel) : null;
+    var box = host ? host.querySelector('.sniff-result') : null;
     if (!box) return;
     var iconHtml = '<i data-lucide="search"></i>';
     btn.disabled = true;
@@ -635,7 +654,8 @@
   // 三态与音乐页对齐：下载中（禁用）/ 已下载 / 下载失败，后两者
   // 都留在按钮上当反馈，不再 2 秒后抹回「下载」。
   function downloadResource(url, platform, btn) {
-    btn = btn || $('#resource-download-btn');
+    // 兜底：调用方没传按钮时取首个可见预览区的下载按钮（class 化，双 Tab 无 id 冲突）
+    btn = btn || document.querySelector('.preview-download-btn');
     if (!btn) return;
     var iconHtml = '<i data-lucide="download"></i>';
     btn.disabled = true;

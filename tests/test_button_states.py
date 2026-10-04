@@ -40,10 +40,10 @@ def test_download_resource_takes_btn_param():
 
 
 def test_download_resource_defaults_and_null_guard():
-    """不传 btn 落主按钮（单资源详情的原路径）；落点不存在时静默返回"""
+    """不传 btn 落首个预览区的下载按钮（单资源详情的原路径）；落点不存在时静默返回"""
     body = RES.split("function downloadResource")[1].split("function pollResourceDownload")[0]
-    assert re.search(r"btn\s*=\s*btn\s*\|\|\s*\$\('#resource-download-btn'\)", body), \
-        "没保留主按钮默认落点"
+    assert re.search(r"btn\s*=\s*btn\s*\|\|\s*document\.querySelector\('\.preview-download-btn'\)", body), \
+        "没保留主按钮默认落点（双 Tab 后按钮 class 化，不再用 id 查询）"
     assert re.search(r"if\s*\(!btn\)\s*return", body), \
         "缺 null 防护：批量列表里主按钮不在 DOM 会直接崩"
 

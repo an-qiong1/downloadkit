@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>DownloadKit</title>
 <script src="vendor/lucide.min.js"></script>
-<link rel="stylesheet" href="css/main.css?v=20261003a">
+<link rel="stylesheet" href="css/main.css?v=20261004a">
 </head>
 <body>
 
@@ -132,8 +132,26 @@
         </div>
       </div>
 
-      <!-- 影视解析面板（书签导入 → 批量探测 → 解析下载） -->
+      <!-- 影视解析面板（手动输入解析 + 书签导入批量） -->
       <div class="tab-panel" id="panel-movie">
+        <!-- 手动输入解析（与资源解析同款交互：单行回车/多行批量） -->
+        <div class="search-section">
+          <div class="search-box search-box-multi">
+            <i data-lucide="film" class="search-icon"></i>
+            <textarea class="search-input search-textarea" id="movie-input" rows="1"
+                      placeholder="粘贴影视链接开始解析，支持播放页/聚合页...&#10;多个链接每行一个，自动批量解析"></textarea>
+            <button class="search-clear" id="movie-clear" title="清空"><i data-lucide="x"></i></button>
+            <button class="search-btn" id="movie-btn" title="解析"><i data-lucide="arrow-right"></i></button>
+          </div>
+          <div class="resource-hint">单行回车解析一条；多行每行一个链接，自动批量解析。解析失败可深度嗅探或展开选集</div>
+        </div>
+
+        <div id="movie-status" class="status-msg" style="display:none"></div>
+        <div id="movie-preview" style="display:none"></div>
+
+        <!-- 分节：以下为书签批量导入 -->
+        <div class="movie-section-divider"><span>或导入书签批量解析</span></div>
+
         <div class="bookmark-mode" id="bookmark-mode">
           <div class="search-section">
             <div class="search-box bookmark-pick" id="bookmark-pick" title="点击选择书签 HTML 文件">
@@ -800,7 +818,7 @@
 
 <script src="js/utils.js?v=20261003a"></script>
 <script src="js/music.js?v=20260927i"></script>
-<script src="js/resource.js?v=20261003a"></script>
+<script src="js/resource.js?v=20261004a"></script>
 <script src="js/files.js?v=20260927m"></script>
 <script src="js/queue.js?v=20260927m"></script>
 <script src="js/settings.js?v=20260927m"></script>
