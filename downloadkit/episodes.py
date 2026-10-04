@@ -240,7 +240,11 @@ def extract_from_html(html: str, base_url: str) -> dict[str, Any]:
             "count": len(members),
             "items": [{"url": m["url"], "label": m["label"]} for m in members],
         })
-    out.sort(key=lambda g: -g["count"])
+    # 与当前页同模板的组才是本页选集——推荐位链接（/movie/{id} 等）常比
+    # 选集（/v_play/{b64}）数量多，按 count 降序会排到前面抢走弹窗主列表
+    # （实测 cz4k：18 个相关推荐 vs 3 个真选集，弹窗显示了推荐位）
+    cur_tpl = template_path(urlparse(str(base_url)).path)
+    out.sort(key=lambda g: (0 if g["template"] == cur_tpl else 1, -g["count"]))
     return {"count": (out[0]["count"] if out else 0), "groups": out}
 
 

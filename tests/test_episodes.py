@@ -188,6 +188,30 @@ def test_second_group_ordering():
     assert [g["count"] for g in r["groups"]] == [5, 3]
 
 
+def test_same_template_group_pinned_over_larger_reco_group():
+    """与当前页同模板的选集组置顶——推荐位链接数量常更多。
+
+    实测 cz4k 播放页：18 个 /movie/{id}.html 相关推荐 vs 3 个
+    /v_play/{b64}.html 真选集；按 count 降序会让弹窗主列表显示
+    推荐位（空 label 被兜底成第2~第17集，集数全错）。
+    """
+    recos = "".join(
+        f'<a href="/movie/{i}.html">相关推荐{i}</a>' for i in range(100, 118)
+    )
+    eps = "".join(
+        f'<a href="/v_play/{_b64(f"mv_1-nf_{n}")}.html">第{n}集</a>'
+        for n in range(1, 4)
+    )
+    html = f"<html><body>{recos}{eps}</body></html>"
+    cur = f"https://www.cz4k.com/v_play/{_b64('mv_1-nf_1')}.html"
+    r = extract_from_html(html, cur)
+    assert r["groups"][0]["template"] == "/v_play/{b64}.html"
+    assert r["count"] == 3
+    assert [i["label"] for i in r["groups"][0]["items"]] == ["第1集", "第2集", "第3集"]
+    assert r["groups"][1]["template"] == "/movie/{id}.html"
+    assert r["groups"][1]["count"] == 18
+
+
 # ---------- 本地 L1 集成（关掉 yt-dlp 与浏览器） ----------
 
 PAGES = {

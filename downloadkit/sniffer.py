@@ -129,7 +129,9 @@ class SniffResult:
 
 # ---------------- 浏览器实例管理 ----------------
 
-_lock = threading.Lock()        # 串行化 L2 嗅探（DrissionPage 单例非线程安全）
+_lock = threading.RLock()       # 串行化 L2 嗅探（DrissionPage 单例非线程安全）；
+                                # RLock 可重入——fetch_page_html 的有头回退是同线程
+                                # 递归（外层已持锁），用 Lock 会自锁永久堵死（实测事故）
 _page: Any = None               # ChromiumPage 单例
 _page_headless: bool = False    # 当前单例是否 headless
 _headed_hosts: set[str] = set()  # headless 嗅探失败过、须有头的站（host 粒度，进程内记忆）
@@ -187,14 +189,9 @@ def _get_page(headless: bool = False):
 
 def shutdown() -> None:
     """关闭嗅探浏览器（server shutdown 时调用）。"""
-    global _page
     with _lock:
         if _page is not None:
-            try:
-                _page.quit()
-            except Exception:  # noqa: BLE001
-                pass
-            _page = None
+            _close_page_locked()   # 限时 quit + 强杀兜底（CDP 挂起不再堵死）
             logger.info("[Sniffer] Edge 已关闭")
 
 
@@ -735,15 +732,41 @@ def sniff_sync(url: str, timeout: float = 30.0) -> SniffResult:
 
 
 def _close_page_locked() -> None:
-    """关闭当前浏览器单例（必须已持 _lock；下次 _get_page 按需重建）。"""
+    """关闭当前浏览器单例（必须已持 _lock；下次 _get_page 按需重建）。
+
+    DrissionPage quit() 首个调用 Browser.close 是无超时保护的 CDP 请求，
+    WAF 挑战导航中可能无限挂起（实测 cz4k 回退时卡死，锁被堵死全服务
+    堵塞）——先摘引用（重建不等 quit），quit 限时 6s，超时按 process_id
+    强杀兜底。
+    """
     global _page, _page_headless
-    if _page is not None:
+    pg, _page = _page, None     # 先摘引用：即使 quit 卡死，_get_page 也能立即重建
+    _page_headless = False
+    if pg is None:
+        return
+
+    def _q() -> None:
         try:
-            _page.quit()
+            pg.quit(timeout=3)
         except Exception:  # noqa: BLE001 — 关不掉也不影响重建
             pass
-        _page = None
-        _page_headless = False
+
+    t = threading.Thread(target=_q, daemon=True)
+    t.start()
+    t.join(6.0)
+    if t.is_alive():
+        try:
+            pid = pg.process_id
+        except Exception:  # noqa: BLE001
+            pid = None
+        if pid:
+            try:
+                from psutil import Process
+                Process(pid).kill()
+                logger.warning(f"[Sniffer] quit 挂起超时，已强杀浏览器进程 pid={pid}")
+            except Exception:  # noqa: BLE001
+                pass
+    logger.info("[Sniffer] 浏览器单例已关闭")
 
 
 async def sniff(url: str, timeout: float = 30.0) -> SniffResult:

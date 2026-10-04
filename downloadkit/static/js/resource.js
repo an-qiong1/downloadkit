@@ -106,7 +106,7 @@
       // L1 失败往往正是该站有 WAF 拦截（468/403）——自动转 L2 深度嗅探，
       // 不用等用户点；按钮保留为手动重试入口（runDeepSniff 完成后回显「重新嗅探」）
       st.className = 'status-msg error';
-      st.innerHTML = '解析失败：' + escHtml(err.message) +
+      st.innerHTML = '<span class="sniff-l1-err">解析失败：' + escHtml(err.message) + '</span>' +
         ' <button class="btn btn-secondary status-sniff-btn">' +
         '<i data-lucide="search"></i>深度嗅探</button>' +
         ' <button class="btn btn-secondary status-episodes-btn">' +
@@ -597,6 +597,13 @@
         lucide.createIcons();
         return;
       }
+      // 命中后收敛上方 L1 红字——自动嗅探命中即整体流程成功，
+      // 红字「解析失败」一直挂着会被误读为整个流程失败
+      var errSpan = host.querySelector('.sniff-l1-err');
+      if (errSpan) {
+        errSpan.textContent = 'L1 直连被 WAF 拦截，深度嗅探已命中 ↓';
+      }
+      host.classList.remove('error');
       var methodLabels = { main: '主页面监听', player: '播放器提升', js: 'JS Hook' };
       // hint 优先级：书签提示 > 解析标题 > 嗅探拿到的页面标题
       // （解析失败场景 data.title 为空，没有 res.title 兜底文件名会退化成 URL 末段）
