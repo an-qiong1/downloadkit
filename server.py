@@ -1747,14 +1747,18 @@ async def api_video_episodes(req: EpisodesRequest):
         raise HTTPException(400, "无效链接")
     timeout = max(20.0, min(float(req.timeout or 60.0), 120.0))
     plat = detect_platform(url)
-    result = await expand_episodes(
-        url,
-        timeout=timeout,
-        # generic 影视站 yt-dlp generic extractor 几乎必失败，跳过省 20s；
-        # 已知平台（B站合集/YouTube…）先走路1
-        try_ytdlp=(plat != "generic"),
-        use_browser=True,
-    )
+    try:
+        result = await expand_episodes(
+            url,
+            timeout=timeout,
+            # generic 影视站 yt-dlp generic extractor 几乎必失败，跳过省 20s；
+            # 已知平台（B站合集/YouTube…）先走路1
+            try_ytdlp=(plat != "generic"),
+            use_browser=True,
+        )
+    except Exception as e:  # noqa: BLE001 — 兜底：任何漏抛都转可读错误 + 留日志定位
+        logger.exception(f"[Episodes] 展开异常 {url[:80]}: {type(e).__name__}: {e}")
+        raise HTTPException(500, f"展开选集出错（{type(e).__name__}）")
     logger.info(
         f"[Episodes] {plat} {url[:60]} -> method={result['method']} "
         f"count={result['count']} ({result['elapsed']}s)"

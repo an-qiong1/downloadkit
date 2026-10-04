@@ -17,6 +17,7 @@ sniffer / generic_video / test_sniffer 经 sniffer 的 re-export 兼容。
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 # 流地址（m3u8 / mpd / mp4），结尾排除引号与括号
 STREAM_RE = re.compile(
@@ -32,19 +33,48 @@ SUB_M3U8_RE = re.compile(r"/\d{2,4}x\d{2,4}/", re.I)
 
 
 def extract_stream_urls(text: str) -> list[str]:
-    """从任意文本（URL/响应体/HTML）挖流地址，排除干扰流，保序去重。"""
+    """从任意文本（URL/响应体/HTML）挖流地址，排除干扰流，保序去重。
+
+    路径校验：URL 的 path 必须以流扩展名结尾。播放器接口这类
+    ``https://host/player/py.php?code=x&url=https://cdn/1.m3u8``
+    会被正则整串匹配（首 scheme 一路吃到末尾 .m3u8），若直接收录，
+    下载时会拿播放器页面当流地址 → 解析必败。整串排除后，再从其内部
+    嵌套 scheme 处递归挖掘 ``url=`` 参数里的真流直链（首 scheme 即
+    整串自身，跳过防自环；depth 限 3 防畸形串爆栈）。
+    """
     if not text:
         return []
     out: list[str] = []
     seen: set[str] = set()
-    for m in STREAM_RE.finditer(str(text)):
+    _extract_into(str(text), out, seen, 0)
+    return out
+
+
+_SCHEME_RE = re.compile(r"https?://", re.I)
+
+
+def _extract_into(text: str, out: list[str], seen: set[str], depth: int) -> None:
+    for m in STREAM_RE.finditer(text):
         u = m.group(0).rstrip("\\").rstrip(",;]")
         if AD_RE.search(u):
             continue
-        if u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
+        if _is_stream_path(u):
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+        elif depth < 3:
+            starts = [mm.start() for mm in _SCHEME_RE.finditer(u)]
+            for s in starts[1:]:  # 首 scheme 即 u 自身，跳过
+                _extract_into(u[s:], out, seen, depth + 1)
+
+
+def _is_stream_path(url: str) -> bool:
+    """path 段（去 query/fragment）以 .m3u8/.mpd/.mp4 结尾才算流地址。"""
+    try:
+        path = urlsplit(url).path.lower()
+    except ValueError:  # 非法 URL（含控制字符等）→ 不收
+        return False
+    return path.endswith((".m3u8", ".mpd", ".mp4"))
 
 
 def stream_key(url: str) -> str:

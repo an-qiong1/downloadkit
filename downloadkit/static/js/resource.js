@@ -103,8 +103,8 @@
       st.style.display = 'none';
       showResourcePreview(data, platform, url, tgt);
     }).catch(function(err) {
-      // 解析失败往往正是 L1 对该站无效（WAF 重置连接等）——
-      // 失败提示里直接给 L2 深度嗅探入口，不让流程断在这里
+      // L1 失败往往正是该站有 WAF 拦截（468/403）——自动转 L2 深度嗅探，
+      // 不用等用户点；按钮保留为手动重试入口（runDeepSniff 完成后回显「重新嗅探」）
       st.className = 'status-msg error';
       st.innerHTML = '解析失败：' + escHtml(err.message) +
         ' <button class="btn btn-secondary status-sniff-btn">' +
@@ -121,6 +121,8 @@
       if (eb) {
         eb.onclick = function() { expandEpisodes(url, eb); };
       }
+      // 自动深度嗅探：直接触发，状态由 runDeepSniff 的 loading 盒子接管
+      if (sb) runDeepSniff(url, { title: '' }, sb, tgt.status);
     }).finally(function() { 
       btn.disabled = false; 
     });
@@ -1170,11 +1172,12 @@
       });
   }
 
-  // 页面 title 常带「第05集在线播放」等当前集后缀 → 去掉，作剧名前缀
+  // 页面 title 常带「第05集在线播放」等当前集后缀 → 去掉，作剧名前缀；
+  // 去掉后缀后残留的尾部分隔符（「XXX-」「XXX |」）一并清掉
   function cleanSeriesName(title) {
     return String(title || '')
       .replace(/\s*第\s*\d+\s*[集话期].*$/, '')
-      .replace(/\s+$/, '')
+      .replace(/[\s\-_—|:：·]+$/, '')
       .trim();
   }
 

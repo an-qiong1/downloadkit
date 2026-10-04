@@ -246,18 +246,28 @@ def extract_from_html(html: str, base_url: str) -> dict[str, Any]:
 
 # ---------------- 路1：yt-dlp 原生 playlist ----------------
 
-async def _expand_ytdlp(url: str) -> list[dict]:
-    """flat dump 判真播放列表 → entries 扁平化。失败/非 playlist 返回 []。"""
+async def _expand_ytdlp(url: str) -> tuple[list[dict], str]:
+    """flat dump 判真播放列表 → entries 扁平化，附 playlist 级标题。
+
+    返回 (items, playlist_title)。失败/非 playlist 返回 ([], "")。
+    """
     from downloadkit.generic_video import _classify_entries, _ytdlp_dump_json
 
     try:
         entries = await _ytdlp_dump_json(url, flat=True, timeout=20)
     except Exception as e:  # noqa: BLE001 — 影视站 generic 必失败，属预期
         logger.debug(f"[Episodes] yt-dlp 路径失败 {url[:80]}: {e}")
-        return []
+        return [], ""
     is_playlist, _ = _classify_entries(entries)
     if not is_playlist:
-        return []
+        return [], ""
+    # flat dump 每条 entry 携带 playlist 级标题（剧名的唯一来源，路1 曾传空）
+    title = ""
+    for e in entries:
+        t = str(e.get("playlist_title") or e.get("playlist") or "").strip()
+        if t:
+            title = t
+            break
     items: list[dict] = []
     seen: set[str] = set()
     for i, e in enumerate(entries):
@@ -271,7 +281,7 @@ async def _expand_ytdlp(url: str) -> list[dict]:
         seen.add(u)
         label = str(e.get("title") or "").strip()[:LABEL_MAX] or f"第{i + 1}集"
         items.append({"url": u, "label": label})
-    return items
+    return items, title
 
 
 # ---------------- 路2-L1：静态抓取 ----------------
@@ -330,9 +340,9 @@ async def expand_episodes(
 
     # 路1：yt-dlp 原生 playlist
     if try_ytdlp:
-        items = await _expand_ytdlp(url)
+        items, ytdlp_title = await _expand_ytdlp(url)
         if len(items) >= MIN_GROUP:
-            return _finish("ytdlp", "", {
+            return _finish("ytdlp", ytdlp_title, {
                 "count": len(items),
                 "groups": [{"template": "yt-dlp", "count": len(items), "items": items}],
             })
@@ -347,14 +357,19 @@ async def expand_episodes(
 
     # 路2-L2：浏览器过 WAF 取 DOM（与嗅探共用单例锁，串行排队）
     html2 = ""
+    doc_title = ""
     if use_browser:
         from downloadkit.sniffer import fetch_page_html
-        html2 = await fetch_page_html(url, timeout=min(30.0, max(15.0, timeout)))
+        html2, doc_title = await fetch_page_html(
+            url, timeout=min(30.0, max(15.0, timeout))
+        )
         if html2:
             data = extract_from_html(html2, url)
             if data["count"] >= MIN_GROUP:
                 from downloadkit.generic_video import _extract_page_title
-                return _finish("browser", _extract_page_title(html2), data)
+                # document.title（渲染后，SPA 动态改名也能拿到）优先于源码提取
+                title = doc_title.strip() or _extract_page_title(html2)
+                return _finish("browser", title, data)
 
     # 路3：回退单集。两层都没拿到页面 → 报「打不开」而非「无选集」，
     # 免得把站点不可达/需登录误报成页面没有选集

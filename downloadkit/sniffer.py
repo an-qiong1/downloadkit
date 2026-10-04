@@ -26,6 +26,7 @@ import threading
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,7 @@ class SniffResult:
     requests_seen: int = 0
     elapsed: float = 0.0
     error: str = ""
+    nav_failed: bool = False    # 导航失败（死域名）——与 WAF 类 miss 区分，不触发有头回退
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -129,20 +131,46 @@ class SniffResult:
 
 _lock = threading.Lock()        # 串行化 L2 嗅探（DrissionPage 单例非线程安全）
 _page: Any = None               # ChromiumPage 单例
+_page_headless: bool = False    # 当前单例是否 headless
+_headed_hosts: set[str] = set()  # headless 嗅探失败过、须有头的站（host 粒度，进程内记忆）
 
 
-def _get_page():
-    """获取（或启动）浏览器单例。必须在 _lock 内调用。"""
-    global _page
+def _host_of(url: str) -> str:
+    """URL 的 host（小写），失败返回 ''。"""
+    try:
+        return (urlsplit(str(url)).hostname or "").lower()
+    except Exception:  # noqa: BLE001 — 畸形 URL 归 ''
+        return ""
+
+
+def _want_headless(url: str) -> bool:
+    """该 URL 默认用 headless（不弹窗）；曾因 WAF 回退过的站直接有头。"""
+    return _host_of(url) not in _headed_hosts
+
+
+def _get_page(headless: bool = False):
+    """获取（或启动）浏览器单例。必须在 _lock 内调用。
+
+    headless=True 不弹出窗口（默认路径）；WAF 站由调用方回退后传 False
+    有头重试（host 记入 _headed_hosts，后续该站直接有头）。
+    """
+    global _page, _page_headless
     if _page is not None:
-        return _page
+        if bool(headless) == _page_headless:
+            return _page
+        # 换站且目标模式不同（A 站回退过有头，B 站要 headless）→ 关掉重建：
+        # 误弹窗/误 headless 都不可接受，2~4s 启动换行为正确
+        logger.info(
+            f"[Sniffer] headless 模式切换 {_page_headless} → {bool(headless)}，重建浏览器"
+        )
+        _close_page_locked()
     from DrissionPage import ChromiumOptions, ChromiumPage
 
     co = ChromiumOptions()
     if os.path.exists(_EDGE_PATH):
         co.set_browser_path(_EDGE_PATH)
     co.auto_port()              # 独立端口/临时 profile，不污染用户日常浏览器
-    co.headless(False)          # WAF 挑战与播放行为用有头模式最稳（实测均为有头）
+    co.headless(bool(headless))  # 默认 headless 不弹窗；WAF 站回退有头（见 _want_headless）
     co.set_argument("--lang=zh-CN")
     co.set_argument("--disable-popup-blocking")
     # 临时 profile 每次都是"首启"——抑制首启向导/sync 确认页抢导航
@@ -152,7 +180,8 @@ def _get_page():
     co.set_argument("--hide-crash-restore-state")
     co.set_argument("--disable-session-crashed-bubble")
     _page = ChromiumPage(co)
-    logger.info("[Sniffer] Edge 已启动")
+    _page_headless = bool(headless)
+    logger.info(f"[Sniffer] Edge 已启动 (headless={bool(headless)})")
     return _page
 
 
@@ -330,7 +359,7 @@ def _sniff_locked(url: str, timeout: float) -> SniffResult:
     from_player = False
 
     try:
-        page = _get_page()
+        page = _get_page(headless=_want_headless(url))
 
         # ===== 阶段1：主页面（WAF 等待 + 收包 + 提播放器地址）=====
         main_tab = page.latest_tab
@@ -539,6 +568,7 @@ def _sniff_locked(url: str, timeout: float) -> SniffResult:
             res.method = "player" if from_player else "main"
         if not res.ok and not res.error:
             res.error = _miss_error(nav_failed, waf_ok)
+        res.nav_failed = nav_failed
 
     except Exception as e:  # noqa: BLE001 — 浏览器连接失效等
         logger.warning(f"[Sniffer] 嗅探异常 {url[:80]}: {type(e).__name__}: {e}")
@@ -589,20 +619,25 @@ def _tab_html(tab) -> str:
 _NAV_ERROR_RE = re.compile(r"main-frame-error|chrome-error://|neterror", re.I)
 
 
-def fetch_page_html_sync(url: str, timeout: float = 25.0) -> str:
-    """打开页面并等 WAF 通过后返回完整 DOM HTML（P4 选集提取的 L2 通道）。
+def fetch_page_html_sync(
+    url: str, timeout: float = 25.0, _headed_retry: bool = False
+) -> tuple[str, str]:
+    """打开页面并等 WAF 通过后返回 (完整 DOM HTML, document.title)。
 
     与 _sniff_locked 共用浏览器单例与 _lock（串行排队）。三层防护：
       · 只认 http(s) 最终 URL —— 挡临时 profile 首启的 edge:// 同步弹窗等内部页
       · 按内容识别导航失败错误页（title 伪装成目标域名）—— 连续确认后提前
         放弃并重试导航一次，不傻等到 deadline
       · WAF 拦截页继续等（挑战中），超时兜底同样按上述规则过滤
-    导航彻底失败/拦截页返回 ""。
+    导航彻底失败/拦截页返回 ("", "")。
+    headless 优先（不弹窗）；超时空结果（疑似 WAF）时换有头单例重试一轮，
+    导航失败（死域名）不回退。
+    title 取渲染后的 document.title —— SPA 动态改名的剧名也能拿到。
     """
     t0 = time.monotonic()
     deadline = t0 + timeout
     with _lock:
-        page = _get_page()
+        page = _get_page(headless=_want_headless(url))
         tab = page.latest_tab
 
         def _nav() -> None:
@@ -639,9 +674,9 @@ def fetch_page_html_sync(url: str, timeout: float = 25.0) -> str:
                             bad_streak = 0
                             _nav()          # 瞬时失败（DNS 首查）重试一次
                         else:
-                            return ""       # 导航失败已确认
+                            return "", ""   # 导航失败已确认
                 elif not _WAF_MARKERS_RE.search(html) and len(html) >= 200:
-                    return html
+                    return html, _tab_title(tab)
                 else:
                     bad_streak = 0          # WAF 挑战中，继续等
             time.sleep(0.5)
@@ -653,21 +688,62 @@ def fetch_page_html_sync(url: str, timeout: float = 25.0) -> str:
                     and html and len(html) >= 200
                     and not _NAV_ERROR_RE.search(html[:20000])
                     and not _WAF_MARKERS_RE.search(html)):
-                return html
+                return html, _tab_title(tab)
         except Exception:  # noqa: BLE001
             pass
+        # 超时空结果且当前是 headless → 疑似 WAF/播放未触发，换有头重试一轮
+        if not _headed_retry and _page_headless and _want_headless(url):
+            host = _host_of(url)
+            _headed_hosts.add(host)
+            logger.info(f"[Sniffer] headless 抓页为空 → 回退有头重试 {host}")
+            _close_page_locked()
+            return fetch_page_html_sync(url, timeout=timeout, _headed_retry=True)
+        return "", ""
+
+
+def _tab_title(tab) -> str:
+    """渲染后的 document.title（SPA 动态剧名），失败返回 ''。"""
+    try:
+        return str(tab.title or "").strip()
+    except Exception:  # noqa: BLE001 — 页面刷新瞬间抛错
         return ""
 
 
-async def fetch_page_html(url: str, timeout: float = 25.0) -> str:
+async def fetch_page_html(url: str, timeout: float = 25.0) -> tuple[str, str]:
     """async 入口（to_thread 桥接；与嗅探共用全局锁，串行排队）。"""
     return await asyncio.to_thread(fetch_page_html_sync, url, timeout=timeout)
 
 
 def sniff_sync(url: str, timeout: float = 30.0) -> SniffResult:
-    """L2 深度嗅探（同步，直接调用会阻塞；服务端走 async 入口 sniff()）。"""
+    """L2 深度嗅探（同步，直接调用会阻塞；服务端走 async 入口 sniff()）。
+
+    headless 优先（不弹窗）；miss 且非导航失败（疑似 WAF/播放未触发）时
+    自动换有头单例再跑一轮，host 记入 _headed_hosts 后续直接有头。
+    """
     with _lock:
+        res = _sniff_locked(url, timeout=timeout)
+        if (res.ok or res.nav_failed or _page_headless is False
+                or not _want_headless(url)):
+            return res
+        host = _host_of(url)
+        _headed_hosts.add(host)
+        logger.info(
+            f"[Sniffer] headless 未命中（{(res.error or '')[:40]}）→ 回退有头重试 {host}"
+        )
+        _close_page_locked()
         return _sniff_locked(url, timeout=timeout)
+
+
+def _close_page_locked() -> None:
+    """关闭当前浏览器单例（必须已持 _lock；下次 _get_page 按需重建）。"""
+    global _page, _page_headless
+    if _page is not None:
+        try:
+            _page.quit()
+        except Exception:  # noqa: BLE001 — 关不掉也不影响重建
+            pass
+        _page = None
+        _page_headless = False
 
 
 async def sniff(url: str, timeout: float = 30.0) -> SniffResult:

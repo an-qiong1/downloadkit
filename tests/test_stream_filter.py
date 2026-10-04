@@ -44,6 +44,32 @@ class TestExtract:
             "https://x.com/media/ep1.mp4"
         ]
 
+    def test_player_api_wrapper_rejected_nested_direct_kept(self):
+        """播放器接口整串（path 非 .m3u8）排除；其 url= 参数里的真流直链保留。
+
+        cz4k 类站实测坑：py.php?...&url=https://cdn/1.m3u8 被正则整串匹配，
+        整串当流下载 → 必失败；真流被吞。
+        """
+        player = (
+            "https://plaa.py1080p.com:8181/player/py.php"
+            "?code=cs&if=l&url=https://m3hls3.pxxxojo.com/1.m3u8"
+        )
+        out = extract_stream_urls(player)
+        assert player not in out
+        assert out == ["https://m3hls3.pxxxojo.com/1.m3u8"]
+
+    def test_player_api_only_yields_nothing(self):
+        """播放器接口 URL 没嵌套可提取的流 → 不产出任何条目。"""
+        assert extract_stream_urls(
+            "GET https://host/player/py.php?code=cs&if=l&id=1"
+        ) == []
+
+    def test_m3u8_with_query_kept(self):
+        """扩展名后带 query/fragment 的直链仍算流（path 校验只看 path 段）。"""
+        assert extract_stream_urls(
+            "https://cdn.x.com/hls/main.m3u8?sign=ab#frag"
+        ) == ["https://cdn.x.com/hls/main.m3u8?sign=ab#frag"]
+
 
 class TestDedupe:
     def test_cross_page_same_stream_one_entry(self):
