@@ -30,6 +30,10 @@
 | 2026-09-27 | P4 整体验收 | 重打包 105.89MB → `test-exe.ps1` 6 API 全响应、`test-exe-tray.py` 33/33、`test-exe-douyin.py` 9/9（首次 7/8 系脚本硬编码旧 sec_uid 撞退订 404，改用实时订阅列表后全过，非 P4 回归）；红线三处 0/0/0 与打包前一致（videos 基线因用户手删从 3→0），无残留进程 |
 | 2026-09-27 | Bug 修复：设置页 422 | 用户实测「选择目录/打开」报「Input should be a valid dictionary」；curl 四组对照定位：`api()` 只给对象 body 设 `Content-Type`，settings.js 6 处自行 stringify 成字符串 → fetch 发 `text/plain` → 9-26 升级的 fastapi 0.141.1 不解析非 JSON body → Pydantic 422（老版不看 header 所以旧版没炸；`test-exe.ps1` 自带 header 所以验收没拦住）；修 6 处传对象 + `api()` 加 string body 兜底 + 新增 `test_api_content_type.py` 3 例（pytest 480 passed）+ 验收脚本补 open-dir 3f；浏览器实测两按钮通过，重打包 105.89MB → 三套验收全绿（6 API 含 3f / 33/33 / 9/9），红线 0/0/0 |
 | 2026-09-27 | 依赖对齐 | `backend/requirements.txt` 7 项钉死版本对齐 .venv 实际安装（fastapi 0.115.0→0.141.1、uvicorn 0.30.0→0.54.0、httpx 0.27.0→0.28.1、pydantic 2.9.0→2.13.5、yt-dlp 2024.8.0→2026.8.19、mutagen 1.47.0→1.48.1、python-dotenv 1.0.1→1.2.3），起因是上一条 422 事故里 fastapi 两处版本不一致；逐项核对 requires-python 均 ≥3.10 兼容 NAS Dockerfile 的 python:3.11-slim，8 项 NAS 版专用项（sqlalchemy/celery/redis 等，.venv 未装）原样保留 |
+| 2026-10-14 | 音乐五级回退修复 `819226e` | yt-dlp 成功判定改用产物指纹（大小+mtime_ns）替代 rc==0；断点续传只对同源 URL 续传（换源一律重下，杜绝拼接坏文件）；gequbao 改版适配；itzo 独立源；migu 降级不删；取消异常不再被吞。全量 565 passed，三首歌端到端实测。验证脚本留在 `temp/splice_test.py` 等三件套 |
+| 2026-10-14 | 抖音解析修复 `8963a57` | 图文分流（落地页校验返回 type_mismatch 改走 resolve_stream）、空结果不谎报、轮播计数排除 clone + slideTo 定位真实索引、标题加 document.title 兜底、slideTo 加 scrollIntoView 降级；落盘两个修复：`download_content(output_dir)` 从静默忽略改为真生效（None=配置目录行为不变，指定=output_dir/分类），图文扩展名按魔数对齐（.jpg 实为 WEBP → .webp）+ `_existing_target` 同 stem 兜底防重下。实机三类内容（视频/实况/图文）全过，`tests/test_douyin_note_routing.py` 6 例 + `tests/test_douyin_output_dir.py` 22 例，593 passed |
+| 2026-10-14 | 架构文档标注 `bb477ce` | ARCHITECTURE.md 补「三套部署方案」：Windows 桌面（server.py + static，64 路由）/ 单容器 Docker / NAS 多容器（backend+frontend，即 media-fetch，20 路由，落后无测试）；判别规则两条（引用在 docker-compose 的 build: 里不在 import 里；依赖清单 pyproject.toml 与 backend/requirements.txt 分两份），防再次误判 NAS 版为死代码 |
+| 2026-10-14 | CLI 视频命令 `0b7450a` | 新增 `parse`（--json / -e 选集 / --referer / --name）与 `video`（-q 画质 / -o 目录 / -e + -n 批量选集），覆盖抖音/B站/YouTube/小红书/generic 兜底；平台分发抽 `downloadkit/video_service.py`（detect_platform + parse_url + download_parsed），server 只换 import 不动路由分发（该区域零测试）；修 CLI 的 INFO 日志污染 stdout（--json 曾产非法 JSON）。`tests/test_cli_video.py` 43 例，实测 30/30，636 passed |
 
 ---
 
@@ -237,6 +241,32 @@
 首次 7/8 是脚本硬编码旧 sec_uid 撞上退订 404，已改为用 [2] 步实时订阅列表取值，属脚本缺陷非 P4 回归）✓ →
 红线三处 **0/0/0** 与打包前基线一致（用户手删过 videos，基线从 P3 的 0/0/3 变 0/0/0，以本次为准）✓ →
 无残留进程（8765 仅 TIME_WAIT）✓ → 分次提交 ✓
+
+---
+
+## P5 CLI 补齐（2026-10-14 起；放缓 UI 开发，先把后端能力做进 CLI）
+
+> 背景：UI（server.py + static，64 路由）功能已齐，CLI 此前只有 4 个音乐命令。
+> 目标：CLI 覆盖后端全部能力，让脚本/无头环境可用。
+> 共识：每步都跑全量 pytest + 真实/离线实测；平台分发逻辑优先复用
+> `downloadkit/video_service.py`，不要在 CLI 里另抄一份。
+
+- [x] **P5-1 视频解析与下载 `parse` / `video`**（2026-10-14 完成，`0b7450a`）
+  - `parse <url>`：解析不下载，`--json`（stdout 纯 JSON）、`-e/--episodes` 选集展开、`--referer`、`--name`
+  - `video <url>`：解析+下载，`-q best/1080/720/480/360`、`-o` 输出根目录（抖音再建分类子目录）、`-e` + `-n 1,3/1-5/a` 批量选集
+  - 新模块 `downloadkit/video_service.py`：`detect_platform` + `parse_url` + `download_parsed`，输出对齐 `/api/video/parse` 契约；server 只把本地 `detect_platform` 换成 import（同一函数对象有测试断言），路由层分发不动（零测试区，重构风险大）
+  - 顺手修：CLI 的 INFO 日志污染 stdout（`logger.py` 的 stdout handler 在 import 时就挂上，`--json` 会产出非法 JSON）→ CLI 压 WARNING、`--json` 压 ERROR、`-v` 恢复
+  - 测试 `tests/test_cli_video.py` 43 例；实测 30/30（离线测试场脚本 `C:\我的仓库\工作空间\temp\cli_video_e2e.py` 可复跑作范式：本机 3 mp4 + http.server + subprocess 调 CLI）；pytest 636 passed
+
+- [ ] **P5-2 队列 `queue`**：列出进行中/已完成/失败、单任务重试/暂停/取消/移除、一键重试全部失败、打开文件（`/api/queue/*`、`/api/open-file`、`/api/queue/{id}/dismiss`）
+- [ ] **P5-3 订阅 `subscribe`**：`add/list/check/check-all/remove`、范围设置（only_new/backfill_n/all）、启停定时（`/api/subscriptions/*`）
+- [ ] **P5-4 文件管理 `files`**：`ls`（分类目录）、`rm`（安全路径校验）、`open`（`/api/files/*`）
+- [ ] **P5-5 嗅探与书签 `sniff` / `bookmarks`**：L2 浏览器嗅探、书签 HTML 导入批量解析（`/api/sniff`、`/api/bookmarks/parse`）
+- [ ] **P5-6 设置 `settings`**：`get` / `set <key> <value>`、代理测试连接、Cookie 路径设置（`/api/settings/*`、`/api/proxy/test`）
+- [ ] **P5-7 收藏与历史 `collections` / `history`**（`/api/collections/*`、`/api/history/*`）
+- [ ] **P5-8 收尾**：`download` 命令补 `-o`、全命令 `--help` 中文化与 docstring 核对（不许再有「谎称支持」）、CLI 测试补齐、EXE 打包后 CLI 入口验证
+
+**P5 验收（每步固定）**：`pytest tests -q` 全量通过 → CLI 实测（能离线就离线，涉及抖音注意短链限流约 1 分钟 1-2 次）→ 改动文件 UTF-8 校验 `U+FFFD` 计数 0 → 分次提交（中文提交信息走 `-F` 文件）。
 
 ---
 
