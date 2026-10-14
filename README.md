@@ -1,70 +1,75 @@
-﻿# downloadkit
+# DownloadKit
 
-多平台资源下载工具，支持音乐、视频、图片等多种资源的搜索和下载。
+多平台资源下载工具：音乐、视频、图文一站下载，带 Web 界面 + 命令行两种用法。
 
-**两套部署方案**：
-- 🪟 **Windows 桌面**：Python CLI + 内置 Web UI（静态页面），简单轻量
-- 🐳 **NAS Docker**：FastAPI + Celery + Redis + React 前端，适合 NAS 长期运行
+**三套部署形态**（同一仓库，互不通用，详见 [ARCHITECTURE.md](ARCHITECTURE.md)）：
+
+- 🪟 **Windows 桌面版（主线）**：`server.py` + 手写静态 Web UI + 打包 exe，功能最全
+- 🐳 **单容器 Docker**：同一套代码，容器里跑
+- 🐳 **NAS 多容器 Docker**：`backend/` + `frontend/`（原 media-fetch），功能长期落后主线，改动需两边同步
 
 > 👉 **只是想用，不想看代码？** 直接看 → **[新手使用说明（图文）](docs/使用说明.md)**
 > 双击 exe、扫码登录、订阅创作者，全程带截图，不用装 Python、不用敲命令。
 
 ## 功能
 
-- **音乐下载**：网易云音乐、QQ 音乐，支持单曲/批量/歌单导入，MP3 格式带 ID3 标签
-- **视频下载**：抖音、B站、YouTube、小红书，无水印下载
+**下载能力**
+
+- **音乐下载**：网易云、QQ 音乐、歌曲宝、咪咕等多源，**五级回退**（源站直链 → itzo 换链 → 曲库源 → CDN → yt-dlp 兜底），MP3 带 ID3 标签；单曲 / 搜索选曲 / 歌单批量
+- **视频下载**：抖音（无水印）、B站、YouTube、小红书，外加 generic 兜底（任意网页/直链）
+- **资源解析**：`L0 直链 → L1 yt-dlp 静态解析 → L2 浏览器嗅探` 三层降级；多行输入批量解析、播放页选集展开、多流勾选、解析期 Referer 透传
+- **影视解析**：独立主导航 Tab，书签 HTML 导入 → 批量并发探测 → 勾选批量下载，按剧名建子目录
+- **创作者订阅**：抖音创作者自动检查更新，水位线防重复；下载范围 `only_new / backfill_n / all`；定时双模式（间隔 / 每天时刻 + 抖动）；卡片显示上次检查状态
 - **实况照片**：Google Motion Photo 生成，兼容小米/OPPO/三星等设备相册
-- **下载队列**：任务队列管理，支持暂停/恢复/重试/取消
-- **下载历史**：SQLite 持久化存储，支持搜索和清理
-- **CLI**：命令行工具，支持交互和非交互模式
+
+**管理能力**
+
+- **下载队列**：暂停/恢复/重试/取消、断点续传、进度保留、一键重试全部失败、完成项点行直接打开文件
+- **文件管理**：分类目录浏览、勾选删除、打开目录（全链路路径安全校验）
+- **下载历史**：SQLite 持久化，搜索与清理
+- **我的歌单**：收藏歌单，一键批量下载
+
+**体验与环境**
+
+- **抖音扫码登录**：登录态持久化，扫码只需一次；浏览器优先系统 Edge，Playwright Chromium 兜底
+- **代理三态**：关闭 / 跟随系统 / 手动，可按平台覆盖（YouTube / B站 / 抖音 / 小红书），带测试连接
+- **桌面集成**：系统托盘常驻、开机自启、关闭窗口最小化到托盘（订阅检查不中断）、托盘菜单快捷项
+- **设置导出/导入**、解答页（FAQ + 报错对照 + 全文搜索）、窗口内一键改下载目录
 
 ## 使用方式
 
-### 方案一：Windows 桌面
+### 方案一：Windows 桌面（推荐）
+
+**直接用打包版**：双击 `dist/downloadkit.exe`（无需 Python）。重新打包：
+
+```powershell
+powershell -File build\build-release.ps1
+```
+
+**从源码跑**：
 
 ```bash
 git clone https://github.com/an-qiong1/downloadkit.git
 cd downloadkit
-pip install -e .
-```
 
-**Web 界面（推荐）**：
-```bash
+# 建虚拟环境 + 装依赖（可选 extra 见下表）
+python -m venv .venv
+.venv\Scripts\pip install -e ".[media,browser,douyin,desktop,dev]"
+
+# 起桌面窗口（WebView2 原生窗口 + 托盘 + 单实例；也可双击 start.bat）
 python run.py
-```
-浏览器自动打开 `http://127.0.0.1:8765`，搜索、下载、管理文件全在网页上完成。
-Windows 用户也可以双击 `start.bat` 启动（自动检测虚拟环境）。
 
-**CLI 命令行**：
-```bash
-# 搜索歌曲
-python -m downloadkit.cli search "晴天"
-# 非交互模式：直接指定下载第几首
-python -m downloadkit.cli search "晴天" -s 16
-# 歌单下载
-python -m downloadkit.cli playlist "https://music.163.com/playlist?id=xxx"
-# 抖音下载
-python -m downloadkit.cli douyin "https://v.douyin.com/xxx"
+# 只想要浏览器访问、不起窗口（无 pywebview 也能跑）
+python server.py
 ```
 
-### 方案二：NAS Docker 部署
+`python run.py` 会自动开窗口并打开 `http://127.0.0.1:8765`（端口被占会顺延到 8800 内的空闲端口）；
+`python server.py` 只起 Web 后端，浏览器自己访问上面的地址即可。
+装完环境可以跑一次 `检查环境.bat` 自检（Python 版本、fastapi、pywebview、playwright 内核、WebView2）。
 
-使用完整的 FastAPI + Celery + Redis + React 前端：
+### 方案二：单容器 Docker
 
-```bash
-docker compose -f docker-compose.nas.yml up -d --build
-```
-
-访问 `http://<nas-ip>:3000`（前端）或 `http://<nas-ip>:8000`（API）。
-
-如需生产配置（带资源限制）：
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-### 方案三：单容器 Docker
-
-轻量部署，使用原始静态前端：
+同一套 `server.py` + 静态前端，自带资源限制与健康检查，下载目录 bind mount 到 `./downloads`：
 
 ```bash
 docker compose up -d --build
@@ -72,109 +77,141 @@ docker compose up -d --build
 
 访问 `http://<host>:8765`。
 
+### 方案三：NAS 多容器 Docker
+
+FastAPI + Celery + Redis + React 前端：
+
+```bash
+docker compose -f docker-compose.nas.yml up -d --build
+```
+
+访问 `http://<nas-ip>:3000`（前端）或 `http://<nas-ip>:8000`（API）。
+`docker-compose.prod.yml` 是同一套 NAS 版的常驻配置（重启策略 + 独立卷布局）。
+
+> ⚠️ NAS 版只有 20 条路由（主线 64 条），**没有**订阅 / 视频解析 / 队列 / 设置 / 书签嗅探 /
+> 抖音登录 / 文件管理，测试覆盖为 0。差异盘点见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
 ### 可选依赖
 
 ```bash
-# 实况照片功能（Pillow + moviepy）
-pip install -e ".[media]"
-# 浏览器解析功能（Playwright）
-pip install -e ".[browser]"
-# 开发测试（pytest）
-pip install -e ".[dev]"
+pip install -e ".[media]"    # 实况照片（Pillow + moviepy）
+pip install -e ".[browser]"  # 浏览器解析（playwright）
+pip install -e ".[douyin]"   # 抖音签名（PyExecJS + gmssl）
+pip install -e ".[desktop]"  # 桌面窗口与托盘（pywebview + pystray）
+pip install -e ".[dev]"      # 测试（pytest）
 ```
-
-**功能与依赖对照表**：
 
 | 功能 | 必需依赖 | 可选依赖 |
 |------|----------|----------|
 | 音乐下载 | ✅ | - |
-| 视频下载 | ✅ | - |
+| 视频解析/下载 | ✅ | `playwright`（L2 浏览器嗅探、抖音扫码登录） |
 | 实况照片 | - | `Pillow`, `moviepy` |
-| 浏览器解析 | - | `playwright` |
+| 桌面窗口 / 托盘 | - | `pywebview`, `pystray` |
+
+B站视频合并需要系统 `ffmpeg`。
+
+## CLI
+
+入口：`downloadkit`（`pip install -e .` 后）或 `python -m downloadkit.cli`，Windows 下也可用根目录的 `music-dl.cmd`。
+
+| 命令 | 作用 |
+|------|------|
+| `search <关键词>` | 跨平台搜歌并选曲下载，`-n` 条数、`-s 16 / 1,3 / 1-3` 非交互直选 |
+| `playlist <歌单链接>` | 歌单解析 + 批量下载（QQ音乐 / 网易云） |
+| `download <歌曲链接>` | 按链接直接下单曲 |
+| `douyin <链接或分享文本>` | 抖音无水印下载，`-o` 输出根目录 |
+| `parse <链接>` | **只解析不下载**：抖音/B站/YouTube/小红书/任意网页，`--json` 机器可读、`-e` 展开选集、`--referer`、`--name` |
+| `video <链接>` | 解析 + 下载，`-q best/1080/720/480/360`、`-o` 输出目录、`-e` + `-n 1,3/1-5/a` 批量选集 |
+
+```bash
+# 搜歌并直接下第 16 首
+downloadkit search "晴天" -s 16
+
+# 解析成 JSON 交给其它脚本用
+downloadkit parse "https://www.bilibili.com/video/BV..." --json
+
+# 按清晰度下载，产物落到 ./out
+downloadkit video "https://youtu.be/xxx" -q 1080 -o ./out
+
+# 展开选集，只下第 1、3 集
+downloadkit video "https://www.douyin.com/video/xxx" -e -n 1,3
+```
+
+CLI 输出默认压掉 INFO 日志保证管道干净，需要细节时加 `-v`。
 
 ## 下载原理
 
-1. 音乐搜索通过网易云 / QQ 音乐官方 API
-2. 音乐下载通过 `itzo.cn` 代理获取真实外链，必要时回退 yt-dlp
-3. 视频解析通过各平台 API 或第三方接口
+1. 音乐搜索走网易云 / QQ 音乐官方接口；下载按**五级回退**逐级尝试（源站 → itzo 换链 → 曲库 → CDN → yt-dlp）
+2. 视频按平台分发到 `downloadkit/video_service.py`（`detect_platform` → `parse_url` → `download_parsed`），UI 与 CLI 共用同一套逻辑
+3. 通用网页走三层降级：直链识别 → yt-dlp 静态解析 → 浏览器嗅探（DrissionPage + Edge，可过 WAF）
+4. 断点续传只对**同一来源 URL** 生效，换源一律重下，避免拼接出坏文件
 
 ## 项目结构
 
 ```
-downloadkit/          # 核心 Python 库
-├── cli.py            # CLI 入口
-├── downloader.py     # 下载引擎
-├── download_queue.py # 下载队列
-├── platforms/        # 平台适配（netease, qqmusic, itzo, gequbao, migu）
-├── static/           # 原始 Web 前端（静态页面，Windows 桌面用）
-├── searcher.py       # 聚合搜索
-├── playlist.py       # 歌单解析
-├── douyin.py         # 抖音解析
-├── bilibili.py       # B站解析
-├── youtube.py        # YouTube解析
-├── xiaohongshu.py    # 小红书解析
-├── motion_photo.py   # 实况照片生成
-├── history.py        # 下载历史(SQLite)
-├── file_manager.py   # 安全文件管理
-├── utils.py          # 工具函数
-├── exceptions.py     # 异常定义
-├── proxy.py          # 代理工具
-├── logger.py         # 日志工具
-└── browser_cookie.py # Cookie 管理
-backend/              # FastAPI 后端（NAS Docker 用）
-├── app/
-│   ├── api/          # API 路由
-│   ├── core/         # 配置、数据库
-│   ├── models/       # SQLAlchemy 模型
-│   ├── schemas/      # Pydantic 模式
-│   ├── services/     # 业务逻辑、平台解析器
-│   └── tasks/        # Celery 异步任务
-├── Dockerfile
-└── requirements.txt
-frontend/             # React 前端（NAS Docker 用）
-├── src/              # React + Ant Design
-├── Dockerfile
-└── nginx.conf
-server.py             # Web 后端 (FastAPI，Windows 用)
-run.py                # 一键启动（Windows）
-tests/                # 测试用例
-scripts/              # 工具脚本
-docs/                 # 文档、设计资料
+downloadkit/              # 核心 Python 包
+├── cli.py                # CLI 入口（click + rich）
+├── video_service.py      # 视频平台分发共享层（server 与 CLI 共用）
+├── searcher.py           # 聚合搜索
+├── downloader.py         # 下载引擎（多源回退、断点续传）
+├── download_queue.py     # 下载队列
+├── playlist.py           # 歌单解析
+├── platforms/            # 音乐平台适配（netease, qqmusic, itzo, gequbao, migu…）
+├── douyin.py             # 抖音解析（API / 浏览器 / 图文 / 实况）
+├── douyin_browser.py     # 抖音浏览器后端（扫码登录、订阅抓取）
+├── bilibili.py / youtube.py / xiaohongshu.py / generic_video.py
+├── subscription.py       # 创作者订阅（水位线、下载范围）
+├── subscription_service.py  # 订阅业务（预览、单查、补下）
+├── poller.py             # 定时检查（间隔 / 每天时刻 + 抖动 + 退避）
+├── motion_photo.py       # 实况照片生成
+├── history.py            # 下载历史（SQLite）
+├── file_manager.py       # 路径安全
+├── proxy.py              # 代理三态与平台覆盖
+├── browser_cookie.py     # Cookie 管理
+└── static/               # Web 前端（手写 HTML/CSS/JS，主线用）
+server.py                 # Web 后端（FastAPI，64 条路由）
+run.py                    # 桌面启动（WebView2 窗口 + 托盘 + 单实例）
+backend/  frontend/       # NAS 多容器版（FastAPI+Celery+Redis / React+AntD）
+build/                    # 打包与验收脚本（build-release.ps1、test-exe-*）
+tests/                    # 测试用例（636 passed / 6 skipped）
+docs/                     # 使用说明（图文）、验证与优化报告
+PLAN.md                   # 当前开发计划与进度（交接文档）
+ARCHITECTURE.md           # 架构与三套部署形态判别
+DEVELOPMENT.md            # 开发环境、加平台、发版流程
+CHANGELOG.md              # 更新日志
 ```
 
 ## 配置
 
 ### 下载目录
 
-默认下载根目录为 `~/Downloads/DownloadKit`，分类文件夹（`music` /
-`videos` / `images` / `animated`）全部收在这个总文件夹里，不会直接散落在
-系统下载目录下。旧版默认值（`./downloads`、`~/Downloads`）会在启动时自动
-迁移：配置值一次跳到最新默认，磁盘上已有的旧分类目录一次性搬进总文件夹
-（同名不覆盖，搬不动的留在原地）。
+默认下载根目录为 `~/Downloads/DownloadKit`，分类文件夹（`music` / `videos` / `images` / `animated`）
+都收在这个总文件夹里。旧版默认值（`./downloads`、`~/Downloads`）会在启动时自动迁移：
+配置值一次跳到最新默认，磁盘上已有的旧分类目录一次性搬进总文件夹（同名不覆盖，搬不动的留原地）。
 
-可通过以下方式修改：
+修改方式：
 
-1. **环境变量**：`MUSIC_DL_DIR=/path/to/downloads`（Docker 场景，且此时不做迁移）
+1. **界面**：设置 → 下载目录（改总目录时，没单独自定义过的分类目录会跟着改；4 个分类目录收在「高级」折叠里）
 2. **配置文件**：`~/.downloadkit/config.toml`
-3. **界面**：设置 → 下载目录（改总目录时，没单独自定义过的分类目录会跟着改）
+3. **环境变量**：`MUSIC_DL_DIR=/path/to/downloads`（Docker 场景，此时不做迁移）
+4. **设置页导出/导入**：配置可备份成 JSON 再导入
 
 ### 代理设置
 
-程序会自动检测系统代理设置。如需手动配置：
+程序自动检测系统代理；界面里可切 `关闭 / 跟随系统 / 手动`，手动支持按平台覆盖并「测试连接」。
 
 ```bash
-# 环境变量
+# 或用环境变量
 export HTTP_PROXY=http://127.0.0.1:7890
 export HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
 ### Cookie 配置
 
-部分平台（如抖音）需要 Cookie 才能正常使用：
+部分平台（如抖音）需要登录态：
 
-1. 在浏览器中登录对应平台
-2. 导出 Cookie 文件（JSON 格式）
-3. 放置到 `~/.downloadkit/cookies/` 目录
+1. **推荐**：设置页 → 抖音扫码登录（登录态持久化，只需一次）
+2. 或在浏览器登录后导出 Cookie（JSON），放到 `~/.downloadkit/cookies/`
 
 ## 安全特性
 
@@ -198,131 +235,107 @@ allow_origins = ["http://127.0.0.1:8765", "http://localhost:8765"]
 
 ## 测试
 
-### 运行测试
-
 ```bash
-# 运行所有测试
-pytest
+# 全量（当前 636 passed / 6 skipped）
+$env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m pytest tests -q
 
-# 运行特定测试
+# 指定用例
 pytest tests/test_boundary.py -v
 
-# 运行带覆盖率的测试
+# 覆盖率
 pytest --cov=downloadkit
 ```
 
-### 测试覆盖
+打包版验收（发版前固定跑）：
 
-- 路径安全测试：28 个用例
-- 历史记录测试：6 个用例
-- 下载队列测试：10 个用例
-- CORS 配置测试：4 个用例
+```powershell
+powershell -File build\build-release.ps1   # 重打包
+build\test-exe.ps1                          # API 冒烟
+python build\test-exe-tray.py               # 托盘 33 项
+python build\test-exe-douyin.py             # 抖音 9 项
+```
+
+## 文档索引
+
+| 文档 | 内容 |
+|------|------|
+| [docs/使用说明.md](docs/使用说明.md) | 新手图文教程（exe、扫码登录、订阅） |
+| [PLAN.md](PLAN.md) | 下一阶段开发计划与逐条进度（交接文档） |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 分层架构、三套部署形态判别、功能落差 |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | 环境搭建、加新平台、调试与发版 |
+| [CHANGELOG.md](CHANGELOG.md) | 更新日志 |
 
 ## 常见问题
 
 ### Q: 启动后浏览器没有自动打开？
 
-A: 手动访问 `http://127.0.0.1:8765`
+A: 手动访问 `http://127.0.0.1:8765`（被占用时看 `downloadkit.log` 里的实际端口）。
 
 ### Q: 下载失败怎么办？
 
-A: 
-1. 检查网络连接
-2. 检查平台是否需要登录/Cookie
-3. 尝试使用代理
-4. 查看控制台错误信息
+A:
+1. 检查网络连接，或在设置页试一下代理「测试连接」
+2. 确认该平台是否需要登录/Cookie（抖音建议直接扫码登录）
+3. 设置 → 解答页里有 FAQ 与报错对照表
+
+### Q: 支持哪些视频平台？
+
+A: 抖音/TikTok、B站、YouTube、小红书，以及任意网页（generic + 浏览器嗅探兜底）。
+
+### Q: 下载的文件保存在哪里？
+
+A: 默认在 `~/Downloads/DownloadKit`，按类型分：`music/` `videos/` `images/` `animated/`。
+
+### Q: 如何批量下载？
+
+A:
+- 资源解析/影视解析页：多行输入框，一行一条链接，回车批量解析入队
+- 书签导入：导入浏览器书签 HTML，按文件夹勾选批量探测下载
+- CLI：`video -e -n 1-5` 展开选集批量，或写脚本循环调用
 
 ### Q: 如何更新到最新版本？
 
 A:
 ```bash
 git pull
-pip install -e .
+.venv\Scripts\pip install -e .
 ```
-
-### Q: 支持哪些视频平台？
-
-A: 目前支持：
-- 抖音/TikTok
-- B站
-- YouTube
-- 小红书
-
-### Q: 下载的文件保存在哪里？
-
-A: 默认在 `~/Downloads/DownloadKit` 目录，按类型分类：
-- `~/Downloads/DownloadKit/music/` - 音乐
-- `~/Downloads/DownloadKit/videos/` - 视频
-- `~/Downloads/DownloadKit/images/` - 图片
-- `~/Downloads/DownloadKit/animated/` - 实况照片
-
-### Q: 如何批量下载？
-
-A: 
-- Web 界面：使用批量解析功能
-- CLI：多次调用命令或编写脚本
+exe 用户重新执行 `build\build-release.ps1` 打包即可。
 
 ## 故障排除
 
 ### 编码错误
 
-Windows 用户如遇编码问题，程序会自动尝试修复。如仍有问题：
+Windows 控制台如遇中文乱码/编码报错：
 
-```bash
-# 设置环境变量
-set PYTHONIOENCODING=utf-8
+```powershell
+$env:PYTHONIOENCODING='utf-8'
 ```
 
 ### 依赖安装失败
 
 ```bash
-# 升级 pip
 python -m pip install --upgrade pip
-
-# 使用国内镜像
 pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ### FFmpeg 相关错误
 
-B站视频下载需要 FFmpeg：
+B站视频合并需要 FFmpeg：
 
 ```bash
-# Windows (使用 scoop)
-scoop install ffmpeg
-
-# macOS
-brew install ffmpeg
-
-# Ubuntu/Debian
-sudo apt install ffmpeg
+scoop install ffmpeg    # Windows
+brew install ffmpeg     # macOS
+sudo apt install ffmpeg # Ubuntu/Debian
 ```
 
 ## 开发指南
 
-### 添加新平台
+详细流程见 [DEVELOPMENT.md](DEVELOPMENT.md)，要点：
 
-1. 在 `downloadkit/platforms/` 创建新文件
-2. 实现 `BasePlatform` 接口
-3. 在 `downloadkit/platforms/__init__.py` 注册
-4. 在 `server.py` 添加路由
-
-### 代码风格
-
-- 使用中文注释
-- 遵循 PEP 8
-- 使用类型提示
-- 编写文档字符串
-
-### 提交规范
-
-```
-feat: 添加新功能
-fix: 修复问题
-docs: 更新文档
-test: 添加测试
-refactor: 重构代码
-```
+- **加新平台**：`downloadkit/platforms/` 新建适配器 → `platforms/__init__.py` 注册 → `server.py` 加路由 → 补测试
+- **代码风格**：中文注释、PEP 8、类型提示、文档字符串
+- **提交规范**：`feat:` / `fix:` / `docs:` / `test:` / `refactor:`；中文提交信息用 `git commit -F 文件` 写入，避免编码损坏
 
 ## 许可证
 
@@ -334,53 +347,17 @@ MIT License
 
 ## 更新日志
 
-### v0.4.1 (2026-09-27)
+完整记录见 [CHANGELOG.md](CHANGELOG.md)，最近两版摘要：
 
-- 🐛 修复创作者订阅「订阅」「预览」报 `DouyinBrowser is not iterable`（实参顺序 + 整段文案当 URL 两层根因）
-- 🐛 修复测试脚本 `test-exe-tray.py` 在中文控制台下 UnicodeEncodeError 崩溃
-- ✨ 窗口改为 1120×700 并在工作区居中（原来 1280×800 落在左上角）
-- ✨ 下载目录归到 `~/Downloads/DownloadKit` 总文件夹，四个分类目录收在里面；
-  旧目录启动时自动搬迁（同名不覆盖、搬不动的留原地）
-- ✅ 新增 32 个回归用例，全量 249 passed / 6 skipped
+### v0.5.0 (2026-10-04)
 
-### v0.4.0 (2026-09-26)
+- ✅ 批量资源嗅探下载（L0/L1/L2 三层降级、书签导入批量探测、播放页选集展开、选流勾选、深度嗅探）
+- ✅ 影视解析独立成主导航 Tab，支持手动输入多行批量
+- ✅ 代理三态与平台覆盖 + 测试连接、队列一键重试全部失败、设置导出/导入、解答页搜索、托盘快捷项
+- 🐛 修复打包版解析超 2 分钟 + 弹「已在运行」（frozen 下误 spawn 应用本体当 yt-dlp）
 
-- ✅ 抖音创作者订阅与自动增量下载（水位线防回补，首次订阅只建基线）
-- ✅ 抖音扫码登录与登录态持久化，扫码只需一次
-- ✅ 抖音浏览器优先系统 Edge，Playwright 自带 Chromium 兜底
-- ✅ Windows exe 一体化打包，playwright driver 随包分发
-- ✅ 歌单收藏、ID3 标签写入、设置页目录选择与 Cookie 登录
-- ✅ NAS Docker 部署支持与下载目录挂载
-- ✅ 统一版本号为 0.4.0（修正安装包误写的 1.0.0）
-- ✅ 开机自启动（写 HKCU Run，不弹 UAC）与关闭窗口最小化到托盘（后台常驻不中断订阅检查）
-- ✅ 新手使用说明（图文），README 顶部给入口
-- ✅ 静态资源引用一致性测试（防止 JS 引用不存在的元素 ID）
+### 未发布（2026-10-14 开发中）
 
-### v0.3.1 (2026-06-01)
-
-- ✅ Web UI拆分重构（3500行 → 237行 + 7个模块文件）
-- ✅ 提取公共函数check_download_status()消除重复代码
-- ✅ 补充测试覆盖（60个测试通过）
-- ✅ 补全依赖声明（添加biliup可选依赖）
-- ✅ 统一日志框架（使用logging模块）
-
-### v0.3.0 (2026-05-30)
-
-- ✅ 修复文件接口路径安全漏洞
-- ✅ 修复下载历史记录功能
-- ✅ 统一下载队列管理
-- ✅ 限制 CORS 配置
-- ✅ 添加边界测试用例
-- ✅ 更新文档
-
-### v0.2.0
-
-- 添加小红书下载支持
-- 添加实况照片功能
-- 优化下载队列
-
-### v0.1.0
-
-- 初始版本
-- 支持音乐、视频下载
-- Web UI 界面
+- ✨ CLI 新增 `parse` / `video` 视频命令，平台分发抽共享层 `video_service.py`
+- 🐛 音乐下载五级回退修复（yt-dlp 成功误判、跨源拼接坏文件、gequbao 改版、itzo 独立源）
+- 🐛 抖音解析修复（图文分流、轮播计数、落盘目录生效、图文扩展名按魔数对齐）
