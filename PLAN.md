@@ -1,6 +1,6 @@
 # DownloadKit 下一阶段开发计划
 
-> 建立：2026-09-27 ｜ 当前版本 v0.4.1
+> 建立：2026-09-27 ｜ 当前版本 v0.5.0
 > 用法：每完成一项，把该项的 `- [ ]` 改成 `- [x]`，并在下方「进度」补一行记录。
 
 ---
@@ -36,6 +36,7 @@
 | 2026-10-14 | CLI 视频命令 `0b7450a` | 新增 `parse`（--json / -e 选集 / --referer / --name）与 `video`（-q 画质 / -o 目录 / -e + -n 批量选集），覆盖抖音/B站/YouTube/小红书/generic 兜底；平台分发抽 `downloadkit/video_service.py`（detect_platform + parse_url + download_parsed），server 只换 import 不动路由分发（该区域零测试）；修 CLI 的 INFO 日志污染 stdout（--json 曾产非法 JSON）。`tests/test_cli_video.py` 43 例，实测 30/30，636 passed |
 | 2026-10-14 | 根目录整理 + README 重写 `69cb7f8` | 删运行/构建产物（两处 log、`__pycache__`、`.pytest_cache`、`egg-info`、`logs/`），根目录 37→32 项；README 全量重写：两套部署改三套并标注 NAS 落差、CLI 4→6 命令、补功能清单与 0.5.0/未发布日志摘要、修 prod compose 归属与 `python server.py` 无窗口跑法 |
 | 2026-10-14 | P5-2 队列 `queue` | 新增 `queue` 命令组（list/pause/resume/cancel/retry/retry-failed/rm/open）+ 全局 `--server`（env `DOWNLOADKIT_SERVER`）。队列是服务内存态，一律走 HTTP 不直连模块；`list` 三过滤 + `--json` 纯 stdout；Task ID 列 no_wrap 保证 80 列终端全长可见，失败原因挪表格下方不截断；pause/resume/cancel 先查队列拦下不存在任务（服务端这三端点 fire-and-forget 会假报成功）；`open` 对齐界面「点完成行」—— 打开成功才 dismiss。`tests/test_cli_queue.py` 24 例，离线实测 22/22（真起服务 + 真实入队下载），660 passed |
+| 2026-10-14 | 版本号同步到 0.5.0 | 根因：`__init__.py` 是空的没有 `__version__`，版本散在 4 处手写 → CHANGELOG 已发 0.5.0，代码四处还停 0.4.1。统一 `pyproject.toml` / `cli.py` `version_option` / 关于页 / `downloadkit.iss` / 本文档头部 → **0.5.0**（按用户拍板：只修错位不发版，[未发布] 段留到 P5 做完 + exe 三套验收过再发 0.6.0）。新增 `tests/test_version_sync.py`：横向扫 4 处钉死到 pyproject（关于页原本有测试钉、CLI 那处没人管所以漏了一整版）+ 锁住历史指代不被批量替换；已验证故意改错会红。全量 662 passed |
 
 ---
 
