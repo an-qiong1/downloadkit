@@ -267,7 +267,15 @@
   - 全局 `--server`（env `DOWNLOADKIT_SERVER`，默认 8765）；队列是服务内存态，一律走 HTTP 不直连模块
   - 三个坑：① Task ID 列必须 `no_wrap`（rich 80 列下会把 40 字符 id 压没，用户就复制不到 id）；② pause/resume/cancel 服务端 fire-and-forget 会假报成功 → CLI 先查队列拦下不存在任务；③ `open` 对齐界面行为，打开成功才 dismiss，失败留在列表
   - `tests/test_cli_queue.py` 24 例；离线实测 22/22（真起服务 + 真实入队下载 + headless open-file），660 passed
-- [ ] **P5-3 订阅 `subscribe`**：`add/list/check/check-all/remove`、范围设置（only_new/backfill_n/all）、启停定时（`/api/subscriptions/*`）
+- [x] **P5-3 订阅 `subscribe`**（2026-10-14 完成）
+  - `add <链接|sec_uid>`（默认抓主页拿昵称，`--no-profile` 跳过、`--scope`/`--backfill` 定范围）、`list`、`remove`/`rm`、`scope`（`new` / `backfill N` / `all`）、`check <创作者>`（`--dry-run`）、`check-all`、`poller`
+  - `poller` 是 `invoke_without_command=True` 的 group：裸命令=看状态，子命令 `on`/`off`/`set`
+  - 与 `queue` 同源走 HTTP —— 浏览器实例和定时器轮次都在服务进程内存里，CLI 不直连模块；复用 `_queue_api`（其 docstring 已改为对两组命令都成立）
+  - **范围短写只做翻译不做校验**：`new`→`only_new`、`backfill`→`backfill_n`、`all`，合法性交给服务端 `validate_scope`；缺 N / 多给 N / 未知值一律本地拦截不发请求
+  - 四个坑：① `check-all` 不给 `--scope` 时 body 必须传 `scope: None`（传空串服务端 400）；② `poller set` 只给 `--daily-at` 推断 `daily_at`、只给 `--interval` 推断 `interval`、两个都给必须显式 `--mode`；③ 创作者解析三层「昵称精确 → 唯一前缀 → 唯一子串」，多义或无命中列候选绝不猜；④ rich 80 列折行会把「现有 5 个作品」从中间切断，实测断言必须折行免疫
+  - **离线实测用替身浏览器**：先试的「禁用 Chromium」方案不成立 —— `PLAYWRIGHT_BROWSERS_PATH` 指空目录只会让预热失败，代码会回退 `channel="msedge"` 启动系统 Edge（`douyin_browser.py:298`）。改为在 `import server` 之前把 `downloadkit.douyin._browser_instance`（1714 行的全局）换成替身对象，`get_browser()` 在 1736 行见非空直接返回，`DouyinBrowser.start()` 根本不会被调用，而 `check_creator` 全套逻辑（基线、水位线、去重、范围）照常跑；订阅库再用 `USERPROFILE`/`HOME` 重定向隔离
+  - `check-all` 撞 `LoginRequired` 会 break：只记 1 条失败，`total` 仍是创作者总数（实测 2 创作者 = 「创作者 2 · 失败 1」+ `stopped_at`）
+  - `tests/test_cli_subscribe.py` 101 例；离线实测 106/106（替身浏览器、全程 0 下载任务、真实订阅库 mtime 未变），765 passed
 - [ ] **P5-4 文件管理 `files`**：`ls`（分类目录）、`rm`（安全路径校验）、`open`（`/api/files/*`）
 - [ ] **P5-5 嗅探与书签 `sniff` / `bookmarks`**：L2 浏览器嗅探、书签 HTML 导入批量解析（`/api/sniff`、`/api/bookmarks/parse`）
 - [ ] **P5-6 设置 `settings`**：`get` / `set <key> <value>`、代理测试连接、Cookie 路径设置（`/api/settings/*`、`/api/proxy/test`）

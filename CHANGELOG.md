@@ -8,6 +8,13 @@
 ## [未发布]
 
 ### 新增
+- **CLI 订阅命令 `subscribe`**（P5-3；此前订阅只能在界面里操作）：`add <链接|sec_uid>` 加订阅（默认抓主页拿昵称，`--no-profile` 跳过、`--scope`/`--backfill` 定范围）、`list` 列订阅 + 总览、`remove` / `rm` 取消、`scope` 改下载范围（`new` / `backfill N` / `all`）、`check <创作者>` 单查（`--dry-run` 只看不下载）、`check-all` 全查、`poller` 定时器（裸命令看状态，子命令 `on` / `off` / `set`）
+  - 与 `queue` 命令组同源走 HTTP：浏览器实例和定时器轮次都活在服务进程里，CLI 不直连模块；连不上服务给「这个命令需要 DownloadKit 正在运行」+ `--server` 指引，而不是裸 traceback
+  - **范围短写只做翻译不做校验**：`new`→`only_new`、`backfill`→`backfill_n`、`all`，真正的合法性由服务端 `validate_scope` 定夺；`backfill` 缺 N / 非 backfill 多给 N / 未知值一律本地拦截不发请求。范围改成 `all` 需确认（`--yes` 跳过），创作者已配 `all` 时 `check` 同样要确认
+  - 实测修掉四个坑：① `check-all` 不给 `--scope` 时 body 必须传 `scope: None`（传空串服务端 400）；② `poller set` 只给 `--daily-at` 推断 `daily_at`、只给 `--interval` 推断 `interval`、两个都给必须显式 `--mode`；③ 创作者解析三层「昵称精确 → 唯一前缀 → 唯一子串」，多义或无命中一律列候选绝不猜；④ rich 80 列折行会把「现有 5 个作品」从中间切断，实测断言必须折行免疫
+  - **离线实测改用替身浏览器**：先试的「禁用 Chromium」方案不成立——`PLAYWRIGHT_BROWSERS_PATH` 指空目录只会让启动时预热失败，代码会回退 `channel="msedge"` 启动系统 Edge（`douyin_browser.py:298`），照样产生真实抖音流量。改为在 `import server` 之前把 `downloadkit.douyin._browser_instance` 换成替身对象，`get_browser()` 见实例非空直接返回、`DouyinBrowser.start()` 根本不会被调用；替身读一个 JSON 配置，于是「建基线」「发现新作品」「掉登录态」这些分支能在同一次起服务里反复触发，而 `check_creator` 全套真实逻辑照常跑。订阅库再用 `USERPROFILE`/`HOME` 重定向隔离
+  - `check-all` 撞 `LoginRequired` 会 break：只记 1 条失败，`total` 仍是创作者总数（实测 2 个创作者 = 「创作者 2 · 失败 1」+ 显式 `stopped_at`），不会假装后面几个检查过了
+  - `tests/test_cli_subscribe.py` 101 例；离线实测 106/106（替身浏览器、全程 0 下载任务、真实订阅库 mtime 未变），全量 765 passed
 - **CLI 队列命令 `queue`**（P5-2；此前队列只能在界面里操作）：`queue list [all|active|done|failed]` 列任务（`--json` 纯 stdout 管道友好）、`pause` / `resume` / `cancel` / `retry` 单任务操作、`retry-failed` 一键重试全部失败（`retried`/`orphaned` 转述）、`rm` 移出列表、`open` 打开产物文件并对齐界面「打开成功才移除」的行为
   - 新增全局 `--server`（环境变量 `DOWNLOADKIT_SERVER`，默认 `http://127.0.0.1:8765`）
   - **队列状态是服务进程的内存态**（`download_queue.active_tasks` + `server._downloads`），CLI 一律走 HTTP 读写正在运行的服务，不直连模块（直连只会看到空队列）
