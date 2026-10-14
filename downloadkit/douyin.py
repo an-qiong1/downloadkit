@@ -119,11 +119,97 @@ def _existing_target(candidates) -> Optional[Path]:
 
     旧文件不算「可下载」：同一作品曾以旧命名落盘的，切换新命名后
     重下不许再下出第二份（订阅增量判定走 aweme_id 水位线，与此无关）。
+
+    另需兜底「扩展名被 `_align_ext` 修正过」的情况：抖音图文的
+    ``file_ext`` 常写死 ``jpg``，而实际返回 WEBP，落盘后会改成
+    ``.webp``。此时按 ``.jpg`` 找必然落空 → 重下出第二份。
+    所以候选名不存在时，再按同名 stem 找一次其它扩展名。
     """
+    _KNOWN_MEDIA_EXT = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".heic"}
     for p in candidates:
-        if p is not None and p.exists():
+        if p is None:
+            continue
+        if p.exists():
             return p
+        try:
+            hit = next(
+                (q for q in p.parent.glob(p.stem + ".*")
+                 if q.is_file() and q.suffix.lower() in _KNOWN_MEDIA_EXT
+                 and q.suffix.lower() != p.suffix.lower()),
+                None,
+            )
+        except OSError:
+            hit = None
+        if hit is not None:
+            return hit
     return None
+
+
+def _align_ext(path: Path) -> Path:
+    """按文件头魔数修正扩展名，返回（可能已改名的）路径。
+
+    抖音图文的 ``file_ext`` 是解析时写死的 ``jpg``，但接口实际返回的
+    经常是 WEBP（2026-10-14 实测 5/5 全是），于是出现「扩展名是 .jpg、
+    内容是 WEBP」的名实不符——看图软件靠嗅探能开，按扩展名判断的
+    工具会认错。这里落盘后核对魔数，不一致就改成真实扩展名。
+
+    只改名不重编码：不引入有损压缩，也不依赖 Pillow（它只是可选依赖）。
+    """
+    try:
+        with path.open("rb") as f:
+            head = f.read(12)
+    except OSError:
+        return path
+    if len(head) < 12:
+        return path
+
+    if head[:2] == b"\xff\xd8":
+        real = "jpg"
+    elif head[:4] == b"\x89PNG":
+        real = "png"
+    elif head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        real = "webp"
+    elif head[4:8] == b"ftyp":
+        real = "mp4"
+    elif head[:4] == b"\x00\x00\x00\x18" or head[4:8] in (b"moov", b"mdat"):
+        real = "mp4"
+    else:
+        return path
+
+    if path.suffix.lower().lstrip(".") in (real, "jpeg" if real == "jpg" else real):
+        return path
+
+    target = path.with_suffix("." + real)
+    if target.exists():
+        # 已有正确扩展名的同名文件，别覆盖它
+        return path
+    try:
+        path.rename(target)
+    except OSError:
+        return path
+    logger.info(f"[Download] 扩展名对齐魔数: {path.name} -> {target.name}")
+    return target
+
+
+def _resolve_out_dir(category: str, output_dir: Optional[Path] = None) -> Path:
+    """解析某类产物的落盘目录。
+
+    历史上 ``download_content(output_dir=...)`` 被静默忽略、一律用配置的
+    分类目录，导致调用方（尤其 CLI 的 ``-o``）以为能指定位置却落空。
+    现在：
+
+    - ``output_dir`` 未指定（None）→ 走 ``get_download_subdir(category)``，
+      即设置里的分类目录，**与历史行为完全一致**（含 `download_dir_video`
+      等自定义子目录配置）。
+    - ``output_dir`` 指定了 → 用 ``output_dir / category``，显式指定优先。
+
+    :param category: videos / images / animated / music
+    """
+    if output_dir is None:
+        return get_download_subdir(category)
+    d = Path(output_dir) / category
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 class OptimizedOfficialParser:
@@ -1988,21 +2074,96 @@ async def _fetch_content_browser(input_text: str) -> Optional[DouyinContent]:
     因此这里只填充元数据，把下载交给 _browser_download_pending，
     由 download_content 识别后走浏览器下载分支。
 
+    支持视频 / 图文 / 轮播 / 实况照片：
+      - 拿到 aweme_id 后先用最终 URL 判定类型；
+      - /note/ 或 /slides/ 走 resolve_note（DOM 轮播逐项取图/取实况视频）；
+      - 其余走 resolve_stream。
+      原因：resolve_stream 硬编码导航到 /video/{id}，对图文作品会错误
+      解析成不相关的视频，所以图文必须分流。
+      类型判不出来时（短链被限流、只给了裸 aweme_id），resolve_note 内部
+      会用落地页再兜一次底，被重定向回 /video/ 就改走视频解析。
+
     Args:
         input_text: 抖音链接或分享文案
 
     Returns:
         DouyinContent；失败返回 None（交给调用方走兜底）
     """
-    from .douyin_browser import parse_video_url
+    from .douyin_browser import parse_video_url, resolve_short_url
+    import re as _re
 
     browser = await get_browser()
 
-    # 短链需要先解析出 aweme_id
+    # 先解析出 aweme_id（内部会处理短链跳转）
     aweme_id = await parse_video_url(input_text, browser=browser)
     if not aweme_id:
         logger.info("[Fetch:browser] 未能解析出作品 ID")
         return None
+
+    # 获取最终 URL 以判断内容类型
+    m = _re.search(r"https?://[^\s]*douyin\.com/[^\s]*", input_text)
+    final_url = None
+    if m:
+        final_url = await resolve_short_url(m.group(0), browser=browser)
+
+    is_note = bool(final_url and (_re.search(r'/note/', final_url) or
+                                   _re.search(r'/slides/', final_url)))
+
+    # resolve_short_url 只对 v.douyin.com 生效，且被限流时会原样返回短链
+    # （见其 docstring：约 1 分钟只放行 1~2 次）。这时 final_url 不含
+    # /note/，is_note 恒为 False —— 图文作品会被当成视频走 resolve_stream。
+    # 下面 resolve_note 会再用落地页兜一次底，这里先把不确定的状态记出来。
+    if m and not is_note:
+        _re_short = _re.search(r"^https?://v\.douyin\.com/", final_url or "")
+        if _re_short or not final_url:
+            logger.info(
+                f"[Fetch:browser] 无法从 URL 确认内容类型"
+                f"({'短链未解析' if _re_short else '无 douyin.com URL'})"
+                f"，先按视频处理，图文会被 resolve_note 落地页兜底"
+            )
+
+    if is_note:
+        logger.info(f"[Fetch:browser] 图文/轮播类型，走 resolve_note (final={final_url[:60]})")
+        note_data = await browser.resolve_note(aweme_id)
+
+        # 落地页被重定向回 /video/{id} —— 说明这条其实是视频，
+        # 改走视频解析，不要当图文处理
+        if note_data.get("type_mismatch"):
+            logger.info(f"[Fetch:browser] {aweme_id} 实际是视频，改走 resolve_stream")
+        else:
+            content = DouyinContent(
+                item_id=aweme_id,
+                content_type=ContentType.ANIMATED if note_data["motion_pairs"] else ContentType.IMAGE,
+                title=note_data["title"] or f"douyin_{aweme_id}",
+                author=note_data["author"] or "",
+                video_url_watermark="",
+                file_ext="jpg",
+                backend="browser",
+                author_sec_uid=note_data.get("author_sec_uid", ""),
+                publish_date=note_data.get("publish_date", ""),
+            )
+            for img_url in note_data.get("images", []):
+                content.images.append(MediaItem(url=img_url, type="image", file_ext="jpg"))
+            for pair in note_data.get("motion_pairs", []):
+                content.motion_photo_pairs.append(MotionPhotoPair(
+                    image=MediaItem(url=pair["img"], type="image", file_ext="jpg"),
+                    video=MediaItem(url=pair["video"], type="video", file_ext="mp4"),
+                ))
+            logger.info(
+                f"[Fetch:browser] 图文解析成功 {aweme_id} "
+                f"图片={len(content.images)} 实况对={len(content.motion_photo_pairs)}"
+            )
+
+            # swiper 没加载出来 / 选择器失效 / 被风控时会拿到空结果，
+            # 这时候报「成功」会把失败信号吞掉。返回 None 交给旧后端兜底。
+            if not content.images and not content.motion_photo_pairs:
+                logger.warning(
+                    f"[Fetch:browser] 图文解析出 0 张图 0 对实况 "
+                    f"(aweme_id={aweme_id} final={final_url})，视为失败走兜底"
+                )
+                return None
+
+            return content
 
     item = await browser.resolve_stream(aweme_id)
 
@@ -2047,7 +2208,7 @@ async def _browser_download_pending(
     """
     browser = await get_browser()
 
-    video_dir = get_download_subdir('videos')
+    video_dir = _resolve_out_dir('videos', output_dir)
     filename = build_download_base(content)
     target = video_dir / f"{filename}.mp4"
 
@@ -2165,7 +2326,7 @@ async def fetch_content(input_text: str) -> DouyinContent:
 
 async def download_content(
     content: DouyinContent,
-    output_dir: str | Path = "./downloads",
+    output_dir: str | Path | None = None,
     merge_motion_photo: bool | None = None,
     apple_live_photo: bool = False,
     task_id: str = None,
@@ -2177,7 +2338,11 @@ async def download_content(
     
     Args:
         content: 抖音内容对象
-        output_dir: 输出目录（已废弃，现在使用分类子目录）
+        output_dir: 输出根目录（可选）。
+            None → 用设置里的分类子目录（videos/images/animated），与历史行为一致；
+            指定 → 产物落在 output_dir/{videos,images,animated}/。
+            注：本参数曾被静默忽略（docstring 标「已废弃」但各分支一律用
+            get_download_subdir），导致 CLI 的 -o 形同虚设；2026-10-14 起真正生效。
         merge_motion_photo: 是否自动合并实况照片为Motion Photo格式（None时从配置读取）
         apple_live_photo: 是否同时生成Apple Live Photo格式（适用于iPhone）
         task_id: 任务ID（用于暂停/取消检测）
@@ -2199,8 +2364,8 @@ async def download_content(
         cfg = load_config()
         rename_strategy = cfg.get('general', {}).get('rename_strategy', 'skip')
     
-    # 确保output_dir是Path对象
-    output_dir = Path(output_dir)
+    # 统一成 Path；None 保留 None（表示「用配置的分类目录」）
+    output_dir = Path(output_dir) if output_dir is not None else None
 
     downloaded = []
 
@@ -2235,7 +2400,7 @@ async def download_content(
             if not content.video_url and content.video_url_watermark:
                 logger.warning(" [!]  无法获取无水印视频，将下载带水印版本")
             
-            video_dir = get_download_subdir('videos')
+            video_dir = _resolve_out_dir('videos', output_dir)
             base = build_download_base(content)
             filepath = video_dir / f"{base}.{content.file_ext}"
 
@@ -2262,7 +2427,7 @@ async def download_content(
             # 实况照片：逐对下载并合并为 Motion Photo
             from .motion_photo import create_motion_photo
             
-            animated_dir = get_download_subdir('animated')
+            animated_dir = _resolve_out_dir('animated', output_dir)
             
             pairs = content.motion_photo_pairs
             if not pairs:
@@ -2358,7 +2523,7 @@ async def download_content(
         
         else:
             # 普通图文下载
-            images_dir = get_download_subdir('images')
+            images_dir = _resolve_out_dir('images', output_dir)
             base = build_download_base(content)
             for idx, img in enumerate(content.images):
                 # 检查是否暂停/取消
@@ -2380,6 +2545,8 @@ async def download_content(
                 
                 logger.info(f"[Download] 下载 {img.type} {idx+1}/{len(content.images)}: {filepath.name}")
                 await download_file(client, img.url, filepath, task_id, rename_strategy=rename_strategy)
+                # file_ext 是解析时写死的，实际可能是 WEBP —— 落盘后按魔数对齐
+                filepath = _align_ext(filepath)
                 downloaded.append(filepath)
                 
                 # 更新进度
@@ -2391,8 +2558,8 @@ async def download_content(
     
     return downloaded
 
-async def fetch(input_text: str, output_dir: str | Path = "./downloads", merge_motion_photo: bool = True, apple_live_photo: bool = False) -> DouyinContent:
-    """一站式解析下载"""
+async def fetch(input_text: str, output_dir: str | Path | None = None, merge_motion_photo: bool = True, apple_live_photo: bool = False) -> DouyinContent:
+    """一站式解析下载（output_dir=None 表示用设置里的分类目录）"""
     content = await fetch_content(input_text)
     await download_content(content, output_dir, merge_motion_photo, apple_live_photo)
     return content
@@ -2403,7 +2570,7 @@ async def fetch_video_info(item_id: str) -> DouyinContent:
     return await fetch_content(url)
 
 
-async def download_video(content: DouyinContent, output_dir: str | Path = "./downloads") -> Path:
+async def download_video(content: DouyinContent, output_dir: str | Path | None = None) -> Path:
     files = await download_content(content, output_dir)
     return files[0] if files else None
 

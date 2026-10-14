@@ -1046,7 +1046,7 @@ async def api_video_download(req: VideoDownloadRequest):
             if platform == 'douyin':
                 content = await fetch_content(url)
                 filepaths = await download_content(
-                    content, get_download_dir(),
+                    content,
                     merge_motion_photo=req.merge_motion_photo,
                     apple_live_photo=req.apple_live_photo,
                     task_id=task_id,
@@ -1464,7 +1464,7 @@ async def api_batch_download(req: BatchDownloadRequest):
                     
                     if platform == 'douyin':
                         content = await fetch_content(url)
-                        filepaths = await download_content(content, get_download_dir(), merge_motion_photo=req.merge_motion_photo, task_id=task_id, rename_strategy=rename_strategy)
+                        filepaths = await download_content(content, merge_motion_photo=req.merge_motion_photo, task_id=task_id, rename_strategy=rename_strategy)
                         _downloads[task_id]["files"].extend([fp.name for fp in filepaths])
                     
                     elif platform == 'bilibili':

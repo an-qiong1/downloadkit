@@ -1149,6 +1149,233 @@ class DouyinBrowser:
             logger.error(f"下载失败 {aweme_id}: {type(e).__name__}: {e}")
             raise
 
+    async def resolve_note(
+        self,
+        aweme_id: str,
+    ) -> dict:
+        """解析图文/实况作品页，返回图片与实况视频配对数据。
+
+        必须在已登录的浏览器会话中调用（带用户 cookie），
+        纯 HTTP 无法拿到内容（slidesinfo API 返回 filter reason=8）。
+
+        Returns:
+            dict: {
+                "aweme_id": str,
+                "title": str,
+                "author": str,
+                "author_sec_uid": str,
+                "images": list[str],   # 全部图片 URL（去重）
+                "motion_pairs": list[dict],  # [{"img": ..., "video": ...}]
+                "publish_date": str,
+            }
+
+            另外，落地页被重定向到非图文页（调用方类型判错）时返回
+            ``{"type_mismatch": True, "aweme_id": ...}``，调用方应改走
+            ``resolve_stream``，不要当图文解析。
+        """
+        if not aweme_id:
+            raise ValueError("aweme_id 不能为空")
+
+        await self.start()
+        page = await self._get_page(reuse=False)
+
+        note_url = f"https://www.douyin.com/note/{aweme_id}"
+        logger.info(f"[ResolveNote] 打开图文页: {note_url}")
+        try:
+            await page.goto(note_url, wait_until="domcontentloaded", timeout=60000)
+            # 图文页需要比视频页更久加载 swiper 内容
+            await page.wait_for_timeout(PAGE_SETTLE_MS + 3000)
+
+            # 风控检查
+            await self._raise_if_captcha(page)
+
+            # 抖音会把 /note/{视频ID} 重定向回 /video/{id}。导航后回读真实
+            # 地址，确认这确实是图文页——否则说明调用方的类型判错了
+            # （短链被限流时 resolve_short_url 返回原短链、或只传了裸
+            # aweme_id），这时必须显式报回去，而不是把视频页当图文解析。
+            landed = page.url or ""
+            if not re.search(r"/(?:note|slides)/", landed):
+                logger.warning(
+                    f"[ResolveNote] 落地页不是图文页，跳过: {landed[:100]}"
+                )
+                return {"type_mismatch": True, "aweme_id": aweme_id}
+
+            # 提取元数据
+            meta = await page.evaluate(r"""() => {
+                // 标题
+                const desc = document.querySelector('[data-e2e="video-desc"]')
+                          || document.querySelector('h1');
+                let title = desc ? (desc.innerText || '').trim() : '';
+                // 图文页上 video-desc / h1 都不存在（2026-10-14 实机验证），
+                // 标题只能从 document.title 里取，去掉抖音的固定后缀
+                if (!title && document.title) {
+                    title = document.title.replace(/\s*-\s*抖音\s*$/, '').trim();
+                }
+
+                // 作者
+                let author = '';
+                const links = document.querySelectorAll('a[href*="/user/MS4wLj"]');
+                for (const a of links) {
+                    const raw = (a.innerText || '').trim();
+                    if (!raw || raw.length > 60) continue;
+                    let name = raw;
+                    for (const mk of ['认证', '徽章', '官方', '品牌', '企业', '实力', '榜上有名', '精选']) {
+                        const i = name.indexOf(mk);
+                        if (i > 0) { name = name.slice(0, i); break; }
+                    }
+                    name = name.trim();
+                    if (name && name.length <= 30) { author = name; break; }
+                }
+
+                // sec_uid
+                let secUid = '';
+                for (const a of links) {
+                    const href = a.getAttribute('href') || '';
+                    const parts = href.split('/user/');
+                    if (parts.length >= 2) {
+                        const id = parts[1].split('?')[0].split('/')[0];
+                        if (id) { secUid = id; break; }
+                    }
+                }
+
+                // 发布日期
+                let pubDate = '';
+                const body = document.body.innerText || '';
+                const m = body.match(/发布时间\s*[:：]\s*(\d{4}-\d{2}-\d{2})/);
+                if (m) pubDate = m[1];
+
+                return { title, author, secUid, pubDate };
+            }""")
+
+            # 检测轮播项数。
+            #
+            # ⚠️ 必须和下面取图/取视频的 DOM 查询同一口径：都排除 clone。
+            #    抖音轮播通常开 loop 模式，swiper.slides.length 会包含前后
+            #    克隆项（N+2 或 N+4），拿它当循环上限的话，末尾几个 idx 会
+            #    超出「排除 clone 后的 DOM 列表」——静默 return null，
+            #    最后几张图就漏掉了。
+            slide_count = await page.evaluate(r"""() => {
+                const swiperEl = document.querySelector('.swiper, [class*="swiper-container"]');
+                if (swiperEl && swiperEl.swiper) {
+                    return Array.from(swiperEl.swiper.slides)
+                        .filter(s => !s.classList.contains('swiper-slide-clone')).length;
+                }
+                return document.querySelectorAll(
+                    '.dySwiperSlide:not(.swiper-slide-clone), .swiper-slide:not(.swiper-slide-clone)'
+                ).length;
+            }""")
+            logger.info(f"[ResolveNote] 检测到 {slide_count} 个轮播项（已排除 clone）")
+
+            # 切换每个 slide，收集图片和视频
+            all_img_urls: list[str] = []
+            motion_pairs: list[dict] = []
+            seen_imgs: set[str] = set()
+            seen_vids: set[str] = set()
+
+            for i in range(slide_count):
+                # 切换到第 i 个【真实】slide。
+                #
+                # ⚠️ 不能直接 slideTo(i)：loop 模式下 swiper 的索引里混着
+                #    克隆项，i 会指到克隆上，取到的就是重复/错位的图。
+                #    先定位到「排除 clone 后的第 i 个」真实元素，再回查它
+                #    在完整 slides 数组里的绝对下标交给 swiper。
+                await page.evaluate(r"""(idx) => {
+                    const swiperEl = document.querySelector('.swiper, [class*="swiper-container"]');
+                    if (swiperEl && swiperEl.swiper) {
+                        const all = Array.from(swiperEl.swiper.slides);
+                        const real = all.filter(s => !s.classList.contains('swiper-slide-clone'));
+                        const target = real[idx];
+                        if (!target) return;
+                        const abs = all.indexOf(target);
+                        swiperEl.swiper.slideTo(abs >= 0 ? abs : idx);
+                        return;
+                    }
+                    // 2026-10-14 实机：抖音图文页的 .dySwiperSlide 上根本没挂
+                    // swiper 对象（swiperEl 为 null 或 swiper 为 undefined），
+                    // 上面这段永远走不到。这时退而求其次，把目标 slide 滚进
+                    // 视口，至少让懒加载的 <img>/<video> 能加载出来。
+                    const slides = document.querySelectorAll(
+                        '.dySwiperSlide:not(.swiper-slide-clone), .swiper-slide:not(.swiper-slide-clone)'
+                    );
+                    const el = slides[idx];
+                    if (el && el.scrollIntoView) {
+                        el.scrollIntoView({block: 'center', inline: 'center'});
+                    }
+                }""", i)
+                await page.wait_for_timeout(800)
+
+                slide_data = await page.evaluate(r"""(idx) => {
+                    const slides = document.querySelectorAll(
+                        '.dySwiperSlide:not(.swiper-slide-clone), .swiper-slide:not(.swiper-slide-clone)'
+                    );
+                    if (idx >= slides.length) return null;
+                    const slide = slides[idx];
+
+                    // 取最大图片
+                    let bestImg = null;
+                    let bestSize = 0;
+                    for (const img of slide.querySelectorAll('img')) {
+                        const src = img.src || img.getAttribute('data-src') || '';
+                        const w = img.naturalWidth || img.width || 0;
+                        const h = img.naturalHeight || img.height || 0;
+                        if (src && !src.startsWith('data:') && src.includes('douyinpic')
+                                && w * h > bestSize && w >= 100 && h >= 100) {
+                            bestSize = w * h;
+                            bestImg = src;
+                        }
+                    }
+
+                    // 取视频（实况照片的 video 元素）
+                    let bestVid = null;
+                    for (const v of slide.querySelectorAll('video')) {
+                        const src = v.src || v.currentSrc || '';
+                        if (src && !src.includes('.mp3') && !src.includes('about:blank')) {
+                            bestVid = src;
+                            break;
+                        }
+                    }
+                    // 也检查 source 子元素
+                    if (!bestVid) {
+                        for (const v of slide.querySelectorAll('video source')) {
+                            const src = v.src || '';
+                            if (src && !src.includes('.mp3')) { bestVid = src; break; }
+                        }
+                    }
+
+                    return { img: bestImg, vid: bestVid };
+                }""", i)
+
+                if not slide_data:
+                    continue
+                img_url = slide_data.get("img") or ""
+                vid_url = slide_data.get("vid") or ""
+
+                if img_url and img_url not in seen_imgs:
+                    seen_imgs.add(img_url)
+                    all_img_urls.append(img_url)
+
+                if vid_url and vid_url not in seen_vids and img_url:
+                    seen_vids.add(vid_url)
+                    motion_pairs.append({"img": img_url, "video": vid_url})
+
+            result = {
+                "aweme_id": aweme_id,
+                "title": (meta.get("title") or f"douyin_{aweme_id}")[:300],
+                "author": (meta.get("author") or "")[:60],
+                "author_sec_uid": meta.get("secUid") or "",
+                "images": all_img_urls,
+                "motion_pairs": motion_pairs,
+                "publish_date": meta.get("pubDate") or "",
+            }
+            logger.info(
+                f"[ResolveNote] 作品 {aweme_id}: "
+                f"{len(all_img_urls)} 图, {len(motion_pairs)} 对实况"
+            )
+            return result
+
+        finally:
+            await page.close()
+
 
 # ----------------------------------------------------------------------
 # 工具函数

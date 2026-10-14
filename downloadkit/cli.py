@@ -188,8 +188,10 @@ def download(identifier: str):
 
 @main.command()
 @click.argument("input_text")
-@click.option("-o", "--output", default="./downloads", show_default=True, help="Output directory")
-def douyin(input_text: str, output: str):
+@click.option("-o", "--output", default=None,
+              help="输出根目录（产物落在 <目录>/{videos,images,animated}/；"
+                   "不指定则用设置里的下载分类目录）")
+def douyin(input_text: str, output: str | None):
     """Parse a Douyin link or share text and download watermark-free content.
 
     Supports video, image, and animated content.
@@ -239,7 +241,9 @@ def douyin(input_text: str, output: str):
     else:
         total_size = sum(p.stat().st_size for p in paths)
         human = f"{total_size / 1048576:.1f} MB" if total_size > 1048576 else f"{total_size / 1024:.1f} KB"
-        console.print(f"\n[bold green]Done![/bold green] Saved {len(paths)} files to [green]{output}[/green] ({human})")
+        # output 可能是 None（未指定 -o），此时用产物实际所在目录
+        dest = output if output else str(Path(paths[0]).parent)
+        console.print(f"\n[bold green]Done![/bold green] Saved {len(paths)} files to [green]{dest}[/green] ({human})")
         for i, p in enumerate(paths, 1):
             size = p.stat().st_size
             s = f"{size / 1024:.1f} KB" if size < 1048576 else f"{size / 1048576:.1f} MB"

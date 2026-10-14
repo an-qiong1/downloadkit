@@ -8,6 +8,8 @@
 ## [未发布]
 
 ### 修复
+- **`download_content` 的 `output_dir` 被静默忽略，CLI 的 `-o` 形同虚设**：该参数的 docstring 标着「已废弃，现在使用分类子目录」，但参数本身还在、且各分支一律改用 `get_download_subdir()`——调用方传什么都落空，实测连传三次都写到配置目录。改为新增 `_resolve_out_dir(category, output_dir)` 统一解析：`None` → 仍走配置的分类目录（**含 `download_dir_video` 等自定义子目录，历史行为 100% 不变**），指定 → 落 `output_dir/{videos,images,animated}/`。同步把 `server.py` 两处原本传 `get_download_dir()` 的调用改为不传（传了会绕过自定义分类目录），`fetch()` / `download_video()` 默认值改为 `None`，CLI `-o` 默认改 `None` 并修正 help 文案（原写着 `default: ./downloads` 却不生效）。实测：指定目录 5/5 落对位置且零泄漏、`None` 回到配置目录、重复调用不下第二份
+- **图文扩展名与实际内容不符（`.jpg` 装的是 WEBP）**：`resolve_note` 返回的 `file_ext` 写死 `jpg`，但抖音图文接口实际返回 WEBP（实测 5/5），于是文件名与魔数不一致——看图软件靠嗅探能开，按扩展名判断的工具会认错。落盘后按魔数校验，不符则**只改名不重编码**（不引入有损压缩、不依赖可选的 Pillow），支持 jpg/png/webp/mp4。配套修 `_existing_target`：候选名（`.jpg`）不存在时按同名 stem 找其它媒体扩展名，否则改过名的文件会在下次被认成「不存在」而重下出第二份；`tests/test_douyin_output_dir.py` 22 例覆盖
 - **断点续传跨源拼接（可能产出损坏音频）**：`_stream_download` 原先只要目标文件存在就带 `Range` 续传，但五级回退共用同一个文件名——前一源写了半截、后一源支持 206 就会从半截处接着写，两段不同音频被拼进同一个文件。改为记录「半截文件属于哪个源」，只有**同一个 URL** 才续传；换了源或来源不明（进程重启）一律丢弃重下（宁可多下一次，也不产出拼接坏文件）。同源续传与未知来源重下均有回归脚本验证
 - **取消/暂停被当成「这一级失败」**：`_stream_download` 的 `except Exception` 连 `CancelException` / `PauseException` 一起吞掉，用户点取消后引擎会继续试下一级源接着下。改为这两类异常先于通用捕获向上抛
 - **itzo 兜底源与 Step 1 完全同源，等于白跑一级**：itzo 固定请求 `type=netease`，返回的就是 `music.163.com/song/media/outer/url`，VIP 歌曲必然和 Step 1 一起吃 HTML。改为按优先级尝试 `("qq", "netease")`——`type=qq` 返回带 vkey 的真实 QQ 直链（独立源），netease 留作偶发网络失败时的二次机会
