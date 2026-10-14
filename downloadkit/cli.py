@@ -20,12 +20,14 @@ if _vendor.exists():
 import asyncio
 import json
 import logging
+from datetime import datetime
 
 import click
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+from rich.markup import escape
 from rich import print as rprint
 
 from .searcher import search_all
@@ -464,19 +466,28 @@ _STATE_GROUP = {
 _STATE_LABEL = {"all": "全部", "active": "进行中", "done": "已完成", "failed": "失败"}
 
 
-def _queue_api(method: str, path: str, body=None):
-    """调服务端队列 API，返回 (状态码, 数据)。
+def _queue_api(method: str, path: str, body=None, timeout: float = 30.0):
+    """调运行中服务的 API，返回 (状态码, 数据)。
+
+    queue 和 subscribe 两组命令共用这一层：它们要的东西（队列在服务进程
+    内存里、订阅要抓主页得用服务进程那份浏览器）CLI 直连模块都拿不到，
+    只能问正在跑的服务。名字沿用 _queue_api 是因为 P5-2 先落的它。
 
     连不上（服务没跑/端口不对）返回 (0, 中文提示)；非 2xx 时数据是
-    服务端的 {"detail": "..."}，由 _queue_fail 统一取出展示。
+    服务端的 {"detail": "..."} 或 {"ok": false, "error": "..."}，
+    由 _queue_fail 统一取出展示。
+
+    timeout 默认 30 秒够队列用；抓主页的检查命令（check/check-all）要
+    逐个开页面滚动，远超 30 秒，得由调用方传更长的值——否则服务端还在
+    正常干活，客户端先报超时了。
     """
     import httpx
     url = f"{_SERVER.rstrip('/')}{path}"
     try:
-        resp = httpx.request(method, url, json=body, timeout=30.0)
+        resp = httpx.request(method, url, json=body, timeout=timeout)
     except httpx.HTTPError as e:
         return 0, (f"连不上服务 {_SERVER}（{e.__class__.__name__}）。"
-                    "队列命令需要 DownloadKit 正在运行，换地址用 --server 指定。")
+                    "这个命令需要 DownloadKit 正在运行，换地址用 --server 指定。")
     try:
         return resp.status_code, resp.json()
     except ValueError:
@@ -484,9 +495,17 @@ def _queue_api(method: str, path: str, body=None):
 
 
 def _detail_of(data) -> str:
-    """从服务端响应里取出可读的错误描述（dict 优先取 detail，退化为 JSON）。"""
+    """从服务端响应里取出可读的错误描述，退化为整段 JSON。
+
+    服务端两种错误写法都得认：HTTPException 是 {"detail": "..."}，
+    而 401/429 那类业务状态（没登录、撞风控）是 {"ok": false, "error": "..."}。
+    只认 detail 的话，未登录会被原样吐成一坨 JSON。
+    """
     if isinstance(data, dict):
-        return data.get("detail") or json.dumps(data, ensure_ascii=False)
+        for key in ("detail", "error", "message"):
+            if data.get(key):
+                return str(data[key])
+        return json.dumps(data, ensure_ascii=False)
     return str(data)
 
 
@@ -711,6 +730,781 @@ def queue_open(task_id: str, path_: str | None):
         console.print(f"[dim]已把 {task_id} 移出队列列表[/dim]")
     elif code:  # 0 是网络错误（刚连上过，一般不会出现），409 是任务还在跑
         _queue_fail(code, data)
+
+
+# ==================================================================
+# 订阅管理（P5-3）
+# ==================================================================
+# 和 queue 同一批理由走 HTTP：订阅要抓主页，用的是服务进程里那份浏览器
+# （douyin._browser_instance），CLI 自己再起一份就是另一套登录态，还会跟
+# 轮询抢同一个 Chromium；检查完要入队，队列又是服务进程的内存态。所以
+# 整组命令一律问正在跑的服务，绝不直连模块。
+#
+# ⚠ check / check-all 会真抓抖音主页：串行、慢、且有风控。短链
+#   （v.douyin.com）限流实测约 1 分钟 1~2 次，能贴主页链接就贴主页链接。
+
+# 抓主页的调用（add / check / check-all）要开页面、滚动、逐个创作者串行跑，
+# 远超传输层默认的 30 秒——服务端还在正常干活，客户端先报超时了。
+_API_TIMEOUT_LONG = 600.0
+
+
+def _ago(ts) -> str:
+    """时间戳 → “3 分钟前”；空值或解析不出返回 '-'（= 还没检查过）。"""
+    if not ts:
+        return "-"
+    try:
+        dt = datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return str(ts)
+    s = (datetime.now() - dt).total_seconds()
+    if s < 0:
+        return "刚刚"
+    if s < 60:
+        return f"{int(s)} 秒前"
+    if s < 3600:
+        return f"{int(s // 60)} 分钟前"
+    if s < 86400:
+        return f"{int(s // 3600)} 小时前"
+    return f"{int(s // 86400)} 天前"
+
+
+_SCOPE_TOKENS = {
+    "only_new": "only_new", "new": "only_new",
+    "backfill_n": "backfill_n", "backfill": "backfill_n",
+    "all": "all",
+}
+
+
+def _map_scope(token: str) -> str | None:
+    """把命令行写的范围词翻成服务端认的取值；认不出返回 None。
+
+    接受 new / backfill 这种短写：只下新作品才是常用档，没谁天天敲
+    only_new。真正的取值校验仍在服务端（validate_scope），这里只做翻译。
+    """
+    return _SCOPE_TOKENS.get((token or "").strip().lower())
+
+
+def _scope_text(scope, param="") -> str:
+    """范围取值 → 一句人话（列表/确认提示共用）。"""
+    scope = (scope or "").strip()
+    if scope == "only_new":
+        return "只下新作品"
+    if scope == "backfill_n":
+        return f"新 + 往回补 {param or '?'} 个"
+    if scope == "all":
+        return "全部历史作品"
+    return scope or "-"
+
+
+def _fetch_creators(quiet: bool = False) -> list[dict] | None:
+    """GET /api/subscriptions；失败打印原因并返回 None。
+
+    quiet=True 给「失败了还会自己再报一次错」的场景用（比如 add 的前置查重），
+    免得同一次连不上吐两条重复提示。
+    """
+    code, data = _queue_api("GET", "/api/subscriptions")
+    if code != 200:
+        if not quiet:
+            _queue_fail(code, data)
+        return None
+    if not isinstance(data, dict):
+        console.print(f"[red]服务返回了看不懂的内容：{data}[/red]")
+        return None
+    return list(data.get("creators") or [])
+
+
+def _print_candidates(creators: list[dict], limit: int = 30):
+    """列出可选创作者，让用户能直接复制昵称（没匹配上时的兜底提示）。"""
+    if not creators:
+        console.print("[dim]（还没有任何订阅，先 subscribe add <主页链接>）[/dim]")
+        return
+    names = [(_c.get("nickname") or "").strip() or f"…{_c.get('sec_uid', '')[-8:]}"
+             for _c in creators[:limit]]
+    console.print(f"[dim]可用：{'、'.join(names)}" +
+                  (f"…（共 {len(creators)} 个）" if len(creators) > limit else "") +
+                  "[/dim]")
+
+
+def _resolve_creator(sel: str, creators: list[dict]) -> str | None:
+    """把用户输入（昵称或 sec_uid）解析成 sec_uid，认不出返回 None。
+
+    sec_uid 长得像 MS4wLjABAAAA…（40+ 字符），没人会背它——用户手上只有
+    昵称。所以按「昵称精确 → 唯一前缀 → 唯一子串」三层认；多义或没命中就
+    把候选列出来，绝不猜一个发出去。
+    """
+    sel = (sel or "").strip()
+    if not sel:
+        console.print("[red]请输入创作者昵称或 sec_uid[/red]")
+        return None
+
+    def nick(c):
+        return (c.get("nickname") or "").strip()
+
+    for pick in (
+        [c for c in creators if nick(c) == sel],
+        [c for c in creators if nick(c) and nick(c).startswith(sel)],
+        [c for c in creators if sel in nick(c)],
+    ):
+        if len(pick) == 1:
+            return pick[0].get("sec_uid")
+        if len(pick) > 1:
+            console.print(f"[red]{sel!r} 匹配到 {len(pick)} 个创作者，说得再具体点：[/red]")
+            for c in pick:
+                console.print(f"  [dim]{c.get('sec_uid')}[/dim]  {nick(c)}")
+            return None
+
+    # 昵称三层都没命中，试试它本身是不是 sec_uid（直接粘 ID 的用户）
+    if any(c.get("sec_uid") == sel for c in creators):
+        return sel
+
+    console.print(f"[red]没有匹配的创作者 {sel!r}[/red]")
+    _print_candidates(creators)
+    return None
+
+
+def _fail_browser(code: int, data) -> None:
+    """401/429 这类「抖音侧」状态给下一步动作，而不是把原文甩给用户。
+
+    服务端这两类是 JSONResponse({"ok": false, "error": ...})，不是
+    HTTPException 的 detail —— _detail_of 两种都认，这里再补行动建议。
+    """
+    if code == 401:
+        console.print(f"[red]{_detail_of(data)}[/red]")
+        console.print("[dim]→ 启动程序 → 设置 → 登录抖音，再重试。[/dim]")
+    elif code == 429:
+        console.print(f"[red]{_detail_of(data)}[/red]")
+        console.print("[dim]→ 短链限流很严（约 1 分钟 1~2 次）：改贴主页链接，或等几分钟再试。[/dim]")
+    else:
+        _queue_fail(code, data)
+
+
+def _confirm_all(action: str, yes: bool) -> bool:
+    """范围是「全部历史作品」时先确认——500 作品的创作者会一次全入队。"""
+    if yes:
+        return True
+    try:
+        click.confirm(
+            f"{action}用的是「全部历史作品」范围，可能一次入队成百上千个任务，继续？",
+            abort=True)
+    except click.Abort:
+        console.print("[yellow]已取消[/yellow]")
+        return False
+    return True
+
+
+@main.group()
+def subscribe():
+    """创作者订阅管理（需要 DownloadKit 正在运行，抓主页用它的浏览器）。
+
+    \b
+    Examples:
+      downloadkit subscribe add https://www.douyin.com/user/MS4wLj...
+      downloadkit subscribe list
+      downloadkit subscribe scope 某博主 backfill 5
+      downloadkit subscribe check 某博主
+      downloadkit subscribe check-all
+      downloadkit subscribe remove 某博主
+    """
+    pass
+
+
+@subscribe.command("list")
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def subscribe_list(as_json: bool):
+    """列出全部订阅的创作者 + 总览统计。"""
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    code, data = _queue_api("GET", "/api/subscriptions")
+    if code != 200:
+        if as_json:
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _queue_fail(code, data)
+        return
+
+    if not isinstance(data, dict):
+        _queue_fail(code, data)
+        return
+
+    creators = list(data.get("creators") or [])
+    if as_json:
+        click.echo(json.dumps(creators, ensure_ascii=False, indent=2))
+        return
+
+    if not creators:
+        console.print("[yellow]还没有订阅任何创作者[/yellow]")
+        console.print("[dim]先 subscribe add <主页链接>；短链限流严，优先贴主页链接。[/dim]")
+        return
+
+    table = Table(title=f"订阅创作者（{len(creators)} 个）",
+                  header_style="bold magenta")
+    table.add_column("昵称", max_width=16, no_wrap=True)
+    table.add_column("状态")
+    table.add_column("下载范围", max_width=16)
+    table.add_column("上次检查", style="dim")
+    table.add_column("作品", justify="right")
+
+    done: list[tuple[str, str]] = []
+    for c in creators:
+        name = ((c.get("nickname") or "").strip()
+                or f"…{str(c.get('sec_uid') or '')[-8:]}")
+        enabled = c.get("enabled", 1)
+        state = ("[green]启用[/green]" if enabled
+                 else "[yellow]已暂停[/yellow]")
+        table.add_row(
+            escape(name), state,
+            _scope_text(c.get("download_scope"), c.get("scope_param")),
+            _ago(c.get("last_checked")),
+            str(c.get("works_count", 0)),
+        )
+        res = (c.get("last_result") or "").strip()
+        if res:
+            done.append((name, res))
+    console.print(table)
+
+    if done:
+        # 状态句（可能很长）不进表格：塞进去会在 80 列终端里被折成两三行，
+        # 反而看不清谁是谁——和 queue list 把失败原因挪到表格外同一套理由。
+        console.print("[bold]上次结果[/bold]")
+        for name, res in done:
+            console.print(f"  [dim]{escape(name)}[/dim] → {res}")
+
+    stats = data.get("stats") or {}
+    console.print(
+        f"订阅 {stats.get('creators', 0)} 个"
+        f"（启用 {stats.get('enabled', 0)}）"
+        f" · 已发现作品 {stats.get('works_seen', 0)}")
+    if stats.get("db_path"):
+        console.print(f"[dim]订阅库: {stats['db_path']}[/dim]")
+
+
+@subscribe.command("add")
+@click.argument("url")
+@click.option("--no-profile", is_flag=True,
+              help="不抓主页昵称头像，只存 ID（省一次页面加载，昵称得自己补）")
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def subscribe_add(url: str, no_profile: bool, as_json: bool):
+    """订阅一个创作者。主页链接 / 短链 / sec_uid / 带文案的分享内容都行。
+
+    \b
+    ⚠ 短链（v.douyin.com）限流实测约 1 分钟 1~2 次，能贴主页链接就贴主页链接。
+      首次检查只建基线、一个都不下，之后才下载基线之后的新作品。
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    from .douyin_browser import extract_sec_uid
+
+    # 能本地认出 sec_uid（纯正则，不联网）就先查一次，避免把
+    # 「已经订阅过」当成新的成功报出去——服务端对重复订阅是原样返回记录，
+    # 光看返回分辨不出是新增还是已存在。
+    local_uid = extract_sec_uid((url or "").strip())
+    if local_uid:
+        known = _fetch_creators(quiet=True)
+        if known is not None and any(
+                c.get("sec_uid") == local_uid for c in known):
+            console.print("[yellow]这个创作者已经订阅过了[/yellow]（"
+                          "subscribe list 里就有，不会重复下老作品）")
+            return
+
+    code, data = _queue_api(
+        "POST", "/api/subscriptions",
+        {"url": url, "fetch_profile": not no_profile},
+        timeout=_API_TIMEOUT_LONG)
+    if code != 200:
+        if as_json:
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _fail_browser(code, data)
+        return
+
+    rec = (data.get("creator") or {}) if isinstance(data, dict) else {}
+    if as_json:
+        click.echo(json.dumps(rec, ensure_ascii=False, indent=2))
+        return
+
+    name = ((rec.get("nickname") or "").strip()
+            or f"…{str(rec.get('sec_uid') or '')[-8:]}")
+    console.print(f"[bold green]✓[/bold green] 已订阅 [green]{escape(name)}[/green]")
+    console.print(f"[dim]范围: {_scope_text(rec.get('download_scope'), rec.get('scope_param'))} · "
+                  "首检只建基线不下载[/dim]")
+
+
+@subscribe.command("remove")
+@click.argument("creator")
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def subscribe_remove(creator: str, as_json: bool):
+    """取消订阅一个创作者。
+
+    已发现的作品记录保留（seen_works 不清），所以取消后再加回来不会把
+    老作品重新下一遍。
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    creators = _fetch_creators()
+    if creators is None:
+        return
+    uid = _resolve_creator(creator, creators)
+    if not uid:
+        return
+
+    code, data = _queue_api("DELETE", f"/api/subscriptions/{uid}")
+    if code != 200:
+        if as_json:
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _queue_fail(code, data)
+        return
+
+    name = ((creator or "").strip()
+            if not creator.strip().startswith("MS4w") else f"…{uid[-8:]}")
+    if as_json:
+        click.echo(json.dumps({"ok": True, "sec_uid": uid}, ensure_ascii=False))
+        return
+    console.print(f"[bold green]✓[/bold green] 已取消订阅 [green]{escape(name)}[/green]"
+                  f" [dim]（发现过的作品记录仍在）[/dim]")
+
+
+# 订阅命令组的别名：queue 那组用 rm，两组写法统一省得记两套
+subscribe.add_command(subscribe_remove, name="rm")
+
+
+@subscribe.command("scope")
+@click.argument("creator")
+@click.argument("scope")
+@click.argument("n", required=False, type=int)
+@click.option("--yes", "-y", is_flag=True, help="跳过确认（范围 all 时用）")
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def subscribe_scope(creator: str, scope: str, n: int | None,
+                    yes: bool, as_json: bool):
+    """设置某创作者的下载范围，改完下次检查生效（不会立刻开任务）。
+
+    SCOPE 取 only_new（只下新作品）/ backfill_n（新作品 + 往回补 N 个）/
+    all（全部历史作品），也接受短写 new / backfill / all。
+
+    \b
+    Examples:
+      downloadkit subscribe scope 某博主 new
+      downloadkit subscribe scope 某博主 backfill 5
+      downloadkit subscribe scope 某博主 all --yes
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    mapped = _map_scope(scope)
+    if not mapped:
+        console.print(f"[red]下载范围只能是 only_new / backfill_n / all，收到 {scope!r}[/red]")
+        return
+
+    if mapped == "backfill_n":
+        if n is None:
+            console.print("[red]backfill_n 要给个数：subscribe scope 某博主 backfill 5[/red]")
+            return
+        if not (1 <= n <= 9999):
+            console.print("[red]往回补的个数要在 1-9999 之间[/red]")
+            return
+        param = str(n)
+    else:
+        if n is not None:
+            console.print(f"[red]{mapped} 不带个数，只有 backfill_n 才要 N[/red]")
+            return
+        param = ""
+
+    creators = _fetch_creators()
+    if creators is None:
+        return
+    uid = _resolve_creator(creator, creators)
+    if not uid:
+        return
+    if mapped == "all" and not _confirm_all("这个创作者", yes):
+        return
+
+    code, data = _queue_api("POST", f"/api/subscriptions/{uid}/scope",
+                            {"scope": mapped, "param": param})
+    if code != 200:
+        if as_json:
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _queue_fail(code, data)
+        return
+
+    rec = ((data.get("creator") or {}) if isinstance(data, dict) else {})
+    if as_json:
+        click.echo(json.dumps(rec, ensure_ascii=False, indent=2))
+        return
+    name = ((rec.get("nickname") or "").strip() or f"…{uid[-8:]}")
+    console.print(f"[bold green]✓[/bold green] {escape(name)} 的下载范围 → "
+                  f"[green]{_scope_text(rec.get('download_scope') or mapped, rec.get('scope_param') or param)}[/green]"
+                  f" [dim]（下次检查生效）[/dim]")
+
+
+@subscribe.command("check")
+@click.argument("creator")
+@click.option("--dry-run", is_flag=True,
+              help="只发现不入队（排查用；不标记已见，下次还会算作新作品）")
+@click.option("--max-new", type=int, default=3, show_default=True,
+              help="本次最多入队几个，0 = 不限")
+@click.option("--yes", "-y", is_flag=True, help="跳过确认（范围 all 时用）")
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def subscribe_check(creator: str, dry_run: bool, max_new: int,
+                    yes: bool, as_json: bool):
+    """检查单个创作者有没有新作品（真抓主页，串行慢，别连着敲）。
+
+    首次检查只建立基线：现有作品全部标记已见但一个都不下——订阅一个
+    500 视频的博主不该把 500 个全下下来。
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    creators = _fetch_creators()
+    if creators is None:
+        return
+    uid = _resolve_creator(creator, creators)
+    if not uid:
+        return
+
+    rec = next((c for c in creators if c.get("sec_uid") == uid), {}) or {}
+    if (rec.get("download_scope") or "") == "all" \
+            and not _confirm_all("这个创作者", yes):
+        return
+
+    if not as_json:
+        console.print("[dim]正在抓主页（串行、可能要几十秒）…[/dim]")
+
+    code, data = _queue_api(
+        "POST", f"/api/subscriptions/{uid}/check",
+        {"download": not dry_run, "max_new": max_new},
+        timeout=_API_TIMEOUT_LONG)
+    if code != 200:
+        if as_json:
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _fail_browser(code, data)
+        return
+
+    if not isinstance(data, dict):
+        _queue_fail(code, data)
+        return
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    name = ((data.get("nickname") or "").strip() or f"…{uid[-8:]}")
+    console.print(f"[bold green]✓[/bold green] {escape(name)}：{data.get('message') or '-'}")
+
+    extra = []
+    if data.get("fetched"):
+        extra.append(f"抓到 {data['fetched']} 个作品")
+    if data.get("drift_blocked"):
+        extra.append(f"水位线拦下 {data['drift_blocked']} 个老作品")
+    if data.get("pending"):
+        extra.append(f"还剩 {data['pending']} 个留到下次")
+    if data.get("backfill_left"):
+        extra.append(f"历史作品还剩 {data['backfill_left']} 待补")
+    if extra:
+        console.print(f"[dim]{' · '.join(extra)}[/dim]")
+    if data.get("queued"):
+        console.print("[dim]→ downloadkit queue list 看下载进度[/dim]")
+
+
+@subscribe.command("check-all")
+@click.option("--dry-run", is_flag=True,
+              help="只发现不入队（排查用）")
+@click.option("--max-new", type=int, default=3, show_default=True,
+              help="单轮最多入队几个，0 = 不限")
+@click.option("--scope", default=None, metavar="SCOPE",
+              help="本轮临时覆盖下载范围（不落库）：only_new/backfill_n/all，"
+                   "也接受 new/backfill")
+@click.option("--scope-param", "scope_param", type=int, default=None,
+              help="配合 --scope backfill_n 的 N")
+@click.option("--yes", "-y", is_flag=True, help="跳过确认（--scope all 时用）")
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def subscribe_check_all(dry_run: bool, max_new: int, scope: str | None,
+                        scope_param: int | None, yes: bool, as_json: bool):
+    """检查所有启用的订阅（串行抓主页，全部跑完才返回）。
+
+    ⚠ 比单个 check 慢得多，每个创作者都要开一次主页。抖音限流很严，
+      频繁跑会触发验证码中间页 —— 服务端撞到风控会自动中断整轮，
+      后面没轮到的创作者留到下一轮。
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    mapped = None
+    if scope is not None:
+        mapped = _map_scope(scope)
+        if not mapped:
+            console.print(f"[red]下载范围只能是 only_new / backfill_n / all，收到 {scope!r}[/red]")
+            return
+        if mapped == "backfill_n":
+            if scope_param is None:
+                console.print("[red]--scope backfill_n 要配 --scope-param N[/red]")
+                return
+            if not (1 <= scope_param <= 9999):
+                console.print("[red]往回补的个数要在 1-9999 之间[/red]")
+                return
+        elif scope_param is not None:
+            console.print(f"[red]{mapped} 不带个数，只有 backfill_n 才要 --scope-param[/red]")
+            return
+        if mapped == "all" and not _confirm_all("本轮", yes):
+            return
+
+    if not as_json:
+        console.print("[dim]正在逐个检查启用中的订阅（串行抓主页，可能要几分钟）…[/dim]")
+
+    code, data = _queue_api(
+        "POST", "/api/subscriptions/check-all",
+        {"download": not dry_run, "max_new": max_new,
+         "scope": mapped, "scope_param": str(scope_param or "")},
+        timeout=_API_TIMEOUT_LONG)
+    if code != 200:
+        if as_json:
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _fail_browser(code, data)
+        return
+
+    if not isinstance(data, dict):
+        _queue_fail(code, data)
+        return
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    # run_round 拿到锁后才发现的「跳过」和 check_all 内部的意外异常，
+    # 服务端都回 200 —— 得在这里分开说，别当成一轮跑完了报成功
+    if data.get("skipped"):
+        console.print(f"[yellow]本轮跳过："
+                      f"{data.get('message') or data.get('reason') or '（无说明）'}[/yellow]")
+        return
+    if data.get("error"):
+        console.print(f"[red]{escape(str(data['error']))}[/red]")
+        return
+
+    results = list(data.get("results") or [])
+    if not results:
+        console.print("[yellow]没有启用中的订阅[/yellow]（subscribe list 看看，或先 add）")
+        return
+
+    table = Table(title=f"检查结果（{len(results)} 个）", header_style="bold magenta")
+    table.add_column("昵称", max_width=16, no_wrap=True)
+    table.add_column("新作品", justify="right")
+    table.add_column("入队", justify="right")
+    table.add_column("结果", max_width=30)
+    for r in results:
+        name = ((r.get("nickname") or "").strip()
+                or f"…{str(r.get('sec_uid') or '')[-8:]}")
+        err = r.get("error")
+        if err:
+            row = (escape(name), "-", "-", f"[red]{escape(str(err))}[/red]")
+        else:
+            msg = r.get("message") or (
+                "已建立基线，存量不下载" if r.get("baselined") else "-")
+            row = (escape(name), str(r.get("new_count", 0)),
+                   str(r.get("queued", 0)), escape(str(msg)))
+        table.add_row(*row)
+    console.print(table)
+
+    console.print(
+        f"合计: 创作者 {data.get('total', 0)} · 新发现 {data.get('new_found', 0)}"
+        f" · 入队 {data.get('queued', 0)} · 失败 {data.get('errors', 0)}")
+    if data.get("queued"):
+        console.print("[dim]→ downloadkit queue list 看下载进度[/dim]")
+
+    # 中断标记要显式喊出来：rate_limited / needs_login 时「合计」行看着像
+    # 正常跑完，其实后面几个创作者根本没被检查到
+    if data.get("stopped_at"):
+        console.print(f"[dim]本轮中断于 {escape(str(data['stopped_at']))}，其后未检查[/dim]")
+    if data.get("rate_limited"):
+        console.print("[red]撞了风控 —— 等退避过去再跑，别连着敲[/red]")
+    if data.get("needs_login"):
+        console.print("[red]登录态失效 → 启动程序 → 设置 → 登录抖音，再重试[/red]")
+
+
+def _poller_options(fn):
+    """on / off / set 共用的轮询配置选项（按名字取值，顺序无关）。"""
+    for opt in (
+        click.option("--mode", type=click.Choice(["interval", "daily_at"]),
+                     default=None,
+                     help="调度模式：interval=按间隔 / daily_at=每天定点"),
+        click.option("--daily-at", "daily_at", default=None, metavar="HH:MM",
+                     help="每天几点检查（daily_at 模式），如 09:00"),
+        click.option("--interval", "interval", type=int, default=None,
+                     help="每 N 分钟一轮（越界会被服务端裁到合法区间）"),
+        click.option("--max-new", "max_new", type=int, default=None,
+                     help="单轮最多入队几个，0 = 不限"),
+        click.option("--jitter", "jitter", type=int, default=None,
+                     help="间隔抖动百分比（避免固定节奏撞风控），越界自动裁剪"),
+    ):
+        fn = opt(fn)
+    return fn
+
+
+def _poller_updates(mode: str | None, daily_at: str | None, interval: int | None,
+                    max_new: int | None, jitter: int | None) -> dict:
+    """把命令行选项翻成「只改这些字段」的请求体。
+
+    只给 --daily-at 就推断 daily_at 模式、只给 --interval 就推断 interval
+    模式 —— 用户敲「每天 9 点」的时候不想再被要求补一个 --mode。两个都给
+    才要求显式 --mode，因为此时猜哪个都可能猜错。
+    """
+    if mode is None and daily_at is not None and interval is not None:
+        raise click.UsageError(
+            "--daily-at 和 --interval 同时给了，请补一个 --mode 指定用哪种")
+
+    updates: dict = {}
+    if daily_at is not None:
+        updates["daily_at"] = daily_at
+    if interval is not None:
+        updates["interval_minutes"] = interval
+    if max_new is not None:
+        updates["max_new_per_check"] = max_new
+    if jitter is not None:
+        updates["jitter_percent"] = jitter
+
+    if mode is not None:
+        updates["mode"] = mode
+    elif daily_at is not None:
+        updates["mode"] = "daily_at"
+    elif interval is not None:
+        updates["mode"] = "interval"
+    return updates
+
+
+def _poller_show():
+    """把 /api/subscriptions/poller 的状态摊成几行人话。"""
+    code, data = _queue_api("GET", "/api/subscriptions/poller")
+    if code != 200:
+        _queue_fail(code, data)
+        return
+    if not isinstance(data, dict):
+        _queue_fail(code, data)
+        return
+
+    on = bool(data.get("enabled"))
+    lines = ["开关: " + ("[green]开启[/green]" if on else "[dim]关闭[/dim]")]
+
+    if data.get("mode") == "daily_at":
+        lines.append(f"模式: 每天 [bold]{data.get('daily_at') or '-'}[/bold] 检查")
+    else:
+        lines.append(f"模式: 每 [bold]{data.get('interval_minutes') or '-'}[/bold] 分钟一轮"
+                     f"（抖动 {data.get('jitter_percent', 0)}%）")
+
+    lines.append(f"单轮最多入队 {data.get('max_new_per_check', 0)} 个"
+                 f" · 启用中的订阅 {data.get('creators_enabled', 0)} 个")
+
+    nxt = data.get("next_run_at") or ""
+    if nxt:
+        lines.append(f"下次检查: {nxt}（{_ago(nxt)}）")
+    elif on:
+        lines.append("下次检查: 排期中（调度线程稍后会写进来）")
+    else:
+        lines.append("下次检查: 未排期（轮询已关闭）")
+
+    if data.get("running"):
+        lines.append("[yellow]有一轮检查正在跑[/yellow]")
+
+    bo = data.get("backoff_until") or ""
+    if bo:
+        # 退避要看的是「还剩多久」，不是「多久以前」——退避截止时间一定在未来，
+        # 拿 _ago（相对现在已过去多久）去算会得出「3 小时前」这种废话
+        try:
+            left_s = (datetime.strptime(str(bo)[:19], "%Y-%m-%d %H:%M:%S")
+                      - datetime.now()).total_seconds()
+        except ValueError:
+            left_s = -1
+        if left_s > 0:
+            lines.append(f"[red]风控退避中，至 {bo}"
+                         f"（还剩约 {max(1, int(left_s // 60))} 分钟）[/red]")
+        else:
+            lines.append(f"[dim]上一次退避已过期（原定 {bo}），可正常检查[/dim]")
+    if data.get("needs_login"):
+        lines.append("[red]登录态失效，需要重新扫码[/red]")
+
+    rounds = data.get("rounds") or 0
+    if rounds:
+        last = data.get("last_result") or {}
+        tail = (f"新 {last.get('new_found', 0)} · 入队 {last.get('queued', 0)}"
+                f" · 失败 {last.get('errors', 0)}") if last else "无"
+        lines.append(f"已跑 {rounds} 轮 · 上轮 {data.get('last_run_at') or '-'}: {tail}")
+        if last.get("rate_limited"):
+            lines.append("[red]上轮撞了风控[/red]")
+        if last.get("needs_login"):
+            lines.append("[red]上轮因未登录中断[/red]")
+    else:
+        lines.append("[dim]还没跑过任何一轮[/dim]")
+
+    console.print("\n".join(lines))
+
+
+def _poller_apply(body: dict, ok_msg: str) -> dict | None:
+    code, data = _queue_api("POST", "/api/subscriptions/poller", body)
+    if code != 200:
+        _queue_fail(code, data)
+        return None
+    console.print(f"[bold green]✓[/bold green] {ok_msg}")
+    return data if isinstance(data, dict) else {}
+
+
+@subscribe.group("poller", invoke_without_command=True)
+@click.pass_context
+def subscribe_poller(ctx):
+    """查看/启停自动轮询（后台按周期检查全部启用的订阅）。
+
+    \b
+    不带子命令 = 查看状态；子命令：
+      on    开启（可顺手带 --interval / --daily-at 等改配置）
+      off   关闭
+      set   只改配置，不动开关
+    """
+    if ctx.invoked_subcommand is None:
+        _poller_show()
+
+
+@subscribe_poller.command("on")
+@_poller_options
+def poller_on(mode, daily_at, interval, max_new, jitter):
+    """开启自动轮询（会清掉上次会话残留的风控退避）。"""
+    body = _poller_updates(mode, daily_at, interval, max_new, jitter)
+    body["enabled"] = True
+    data = _poller_apply(body, "自动轮询已开启")
+    if data:
+        _poller_show()
+
+
+@subscribe_poller.command("off")
+def poller_off():
+    """关闭自动轮询（不再自动检查，手动 check / check-all 不受影响）。"""
+    data = _poller_apply({"enabled": False}, "自动轮询已关闭")
+    if data:
+        _poller_show()
+
+
+@subscribe_poller.command("set")
+@_poller_options
+def poller_set(mode, daily_at, interval, max_new, jitter):
+    """只改轮询配置，不动开关。"""
+    body = _poller_updates(mode, daily_at, interval, max_new, jitter)
+    if not body:
+        raise click.UsageError(
+            "没给要改的项。可选 --mode / --daily-at / --interval / --max-new / --jitter")
+    data = _poller_apply(body, "轮询配置已更新")
+    if data:
+        _poller_show()
 
 
 def _fmt_duration(sec) -> str:
