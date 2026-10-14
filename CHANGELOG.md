@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 修复
+- **断点续传跨源拼接（可能产出损坏音频）**：`_stream_download` 原先只要目标文件存在就带 `Range` 续传，但五级回退共用同一个文件名——前一源写了半截、后一源支持 206 就会从半截处接着写，两段不同音频被拼进同一个文件。改为记录「半截文件属于哪个源」，只有**同一个 URL** 才续传；换了源或来源不明（进程重启）一律丢弃重下（宁可多下一次，也不产出拼接坏文件）。同源续传与未知来源重下均有回归脚本验证
+- **取消/暂停被当成「这一级失败」**：`_stream_download` 的 `except Exception` 连 `CancelException` / `PauseException` 一起吞掉，用户点取消后引擎会继续试下一级源接着下。改为这两类异常先于通用捕获向上抛
+- **itzo 兜底源与 Step 1 完全同源，等于白跑一级**：itzo 固定请求 `type=netease`，返回的就是 `music.163.com/song/media/outer/url`，VIP 歌曲必然和 Step 1 一起吃 HTML。改为按优先级尝试 `("qq", "netease")`——`type=qq` 返回带 vkey 的真实 QQ 直链（独立源），netease 留作偶发网络失败时的二次机会
+- **非 MP3 内容被写成 `.mp3`**：itzo 的 QQ 直链是 m4a，原先会原样落盘成 `.mp3`（文件名与内容不符、ID3 也打不进去）。落盘后按魔数校验，非 MP3 则用 ffmpeg 转码为 MP3；转不出来就丢弃并让位给下一级源（ffmpeg 缺失时同理）
+- **yt-dlp 兜底「下成功了却报失败」**：命令带 `--max-downloads 1`，yt-dlp 下载完成后以 rc=101（Aborting remaining downloads）退出，老逻辑要求 rc==0 才认，把完整落盘的音频报成 `All yt-dlp sources exhausted`。改为以产物文件是否本次新写出为准（大小 + mtime 指纹，避免误认上次中断的残留），退出码只用于报错信息；同时复用 `generic_video._yt_dlp_cmd()` 定位 yt-dlp（修掉 frozen 下可能 spawn 应用本体的隐患），并把原先写在 `return` 后面永远执行不到的 stderr 日志挪到会执行的位置
+- **歌曲宝（gequbao）全链路失效**：站点改版后搜索页去掉 `data-aid`、音乐页不再内嵌 mp3 直链，直链改由内联 `window.appData` 的 `play_id` 换取。已适配 `POST /member/common-play-url`（`id=play_id, purpose=play`），解析人机验证/次数用尽等业务码并优雅跳过；换到的酷我 CDN 直链**带 gequbao Referer 会 403**，链路依赖 `_stream_download` 只对 163 加 Referer 的现有行为（代码内已注明）。另修 GET 偶发 `Server disconnected` 导致的 ReadTimeout——改为有限重试并重开连接，去掉每次下载往工作目录写调试 HTML 的 `_dump_debug`
+- **咪咕（migu）源每次下载刷一条 ERROR**：旧搜索接口改版后 301 到 `/v5` SPA 壳，`resp.json()` 必然 `JSONDecodeError`。改为先按 content-type 判断非 JSON 响应，识别为该源已失效并返回 None（INFO 一条），让位给 yt-dlp；请求层异常同样兜住不再上抛
+
 ## [0.5.0] - 2026-10-04
 
 ### 新增

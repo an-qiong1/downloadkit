@@ -1,7 +1,8 @@
 ﻿"""Download engine -- tries itzo.cn, then gequbao, then migu, then yt-dlp."""
 
-import os, sys, asyncio
+import asyncio
 import logging
+import shutil
 from pathlib import Path
 import httpx
 from .platforms import PLATFORM_MAP
@@ -17,6 +18,12 @@ from .enricher import enrich_metadata
 from .tagger import write_tags
 
 logger = logging.getLogger(__name__)
+
+# 半截文件当前属于哪个源（filepath -> URL）。
+# 断点续传只在同一个源上安全：换了源还带 Range，后一源会从半截处接着写
+# （服务器回 206 时），结果是两段不同的音频被拼进同一个文件。来源不明的
+# 残留一律重下——宁可多下一次，也不产出拼接出来的坏文件。
+_partial_source: dict[str, str] = {}
 
 
 async def download_song(song: SongInfo, progress=None, task_id: str = None) -> Path | None:
@@ -97,21 +104,28 @@ async def _stream_download(url: str, filepath: Path, task_id: str = None) -> boo
             headers["Referer"] = "https://music.163.com/"
         headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         
-        # 断点续传：检查已下载的字节数
+        # 断点续传：只有这份半截文件确实是同一个源留下来的才续，
+        # 否则（换了源 / 来源不明）丢掉重下，避免两段不同音频被拼进一个文件
         downloaded_bytes = 0
         if filepath.exists():
-            downloaded_bytes = filepath.stat().st_size
+            if _partial_source.get(str(filepath)) == url:
+                downloaded_bytes = filepath.stat().st_size
             if downloaded_bytes > 0:
                 headers["Range"] = f"bytes={downloaded_bytes}-"
-                logger.info(f"[Resume] 从 {downloaded_bytes} 字节继续下载")
-        
+                logger.info(f"[Resume] 同源续传，从 {downloaded_bytes} 字节继续")
+            else:
+                logger.info("[Resume] 残留文件不是本源产物，丢弃后重新下载")
+                filepath.unlink(missing_ok=True)
+        _partial_source[str(filepath)] = url
+
         async with httpx.AsyncClient(timeout=120, follow_redirects=True, headers=headers) as client:
             async with client.stream("GET", url) as resp:
                 # 处理 Range 响应
                 if downloaded_bytes > 0 and resp.status_code == 416:
                     # 已经下载完成
                     logger.info("[Resume] 文件已下载完成")
-                    return True
+                    _partial_source.pop(str(filepath), None)
+                    return await _ensure_mp3(filepath)
                 
                 if resp.status_code == 206:
                     # 服务器支持 Range 请求，追加写入
@@ -127,6 +141,7 @@ async def _stream_download(url: str, filepath: Path, task_id: str = None) -> boo
                 # Verify it's actually audio, not HTML error page
                 ct = resp.headers.get("content-type", "")
                 if "text/html" in ct:
+                    # 没写入任何字节，半截文件（若有）仍属于同一源，保留以便续传
                     logger.warning("[DL error] Got HTML instead of audio (wrong Referer?)")
                     return False
                 
@@ -145,10 +160,70 @@ async def _stream_download(url: str, filepath: Path, task_id: str = None) -> boo
                                 downloaded_size=downloaded_bytes
                             )
         
+        # 产物扩展名固定 .mp3，必须保证内容真的是 MP3：itzo 的 QQ 源给的是
+        # m4a，这里转一道，避免"文件名写 mp3、里面装 AAC"（tagger 也打不进去）
+        if not await _ensure_mp3(filepath):
+            logger.warning("[DL error] 产物不是可接受的 MP3，丢弃")
+            filepath.unlink(missing_ok=True)
+            _partial_source.pop(str(filepath), None)
+            return False
+        _partial_source.pop(str(filepath), None)
         return True
+    except (PauseException, CancelException):
+        # 取消/暂停必须往上抛，否则会被当成"这一级失败"继续试下一级
+        raise
     except Exception as e:
         logger.error(f"[DL error] {type(e).__name__}: {e}")
         return False
+
+
+def _looks_like_mp3(path: Path) -> bool:
+    """按魔数判断是否 MP3（ID3 标签头或帧同步字）。"""
+    try:
+        with path.open("rb") as f:
+            head = f.read(3)
+    except OSError:
+        return False
+    if len(head) < 3:
+        return False
+    if head[:3] == b"ID3":
+        return True
+    return head[0] == 0xFF and (head[1] & 0xE0) == 0xE0
+
+
+async def _ensure_mp3(path: Path) -> bool:
+    """确保落盘的是 MP3；非 MP3（如 m4a）用 ffmpeg 转码。"""
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    if _looks_like_mp3(path):
+        return True
+    return await _transcode_to_mp3(path)
+
+
+async def _transcode_to_mp3(path: Path) -> bool:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        logger.warning("[DL] 未找到 ffmpeg，无法把非 MP3 音频转成 MP3")
+        return False
+    tmp = path.with_name(path.name + ".tmp.mp3")
+    # 剥掉原容器元数据，标签交给 tagger 统一写
+    cmd = [ffmpeg, "-y", "-i", str(path), "-vn", "-map_metadata", "-1",
+           "-codec:a", "libmp3lame", "-q:a", "0", str(tmp)]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    except Exception as e:
+        logger.warning(f"[DL] 转码失败: {type(e).__name__}: {e}")
+        tmp.unlink(missing_ok=True)
+        return False
+    if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+        tail = (stderr or b"").decode(errors="replace").strip()[-200:]
+        logger.warning(f"[DL] 转码失败 (rc={proc.returncode}): {tail}")
+        tmp.unlink(missing_ok=True)
+        return False
+    tmp.replace(path)
+    return True
 
 
 async def _get_download_url(song: SongInfo) -> str | None:
@@ -161,26 +236,50 @@ async def _get_download_url(song: SongInfo) -> str | None:
 
 
 async def _download_via_ytdlp(song: SongInfo, filepath: Path) -> Path:
-    scripts_dir = Path(sys.executable).parent
-    ytdlp = str(scripts_dir / "yt-dlp.exe")
-    if not os.path.exists(ytdlp): ytdlp = "yt-dlp"
+    from .generic_video import _yt_dlp_cmd
+
+    cmd_base = _yt_dlp_cmd()
+    if not cmd_base:
+        raise RuntimeError("yt-dlp 不可用：未找到独立 yt-dlp 且当前为打包环境")
     query = f"{song.title} {song.artist}"
     output_template = str(filepath.with_suffix("")) + ".%(ext)s"
+    errors: list[str] = []
+    # 跑之前先记下已有产物，成功必须是本次新写出来的（否则上次中断留下的
+    # 半截文件会被当成成功）
+    before = _artifact_state(filepath, song)
     for search_prefix in ["ytsearch1", "bilisearch1"]:
-        cmd = [ytdlp, "-f", "bestaudio", "--extract-audio", "--audio-format", "mp3",
+        cmd = [*cmd_base, "-f", "bestaudio", "--extract-audio", "--audio-format", "mp3",
                "--audio-quality", "0", "-o", output_template, "--no-playlist",
                "--max-downloads", "1", "--socket-timeout", "15",
                f"{search_prefix}:{query}"]
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await proc.communicate()
-        if proc.returncode == 0:
-            actual = filepath
-            if not actual.exists():
-                candidates = list(actual.parent.glob(sanitize_filename(f"{song.title} - {song.artist}.*")))
-                if candidates: actual = candidates[0]
+
+        # 成功与否只看产物，不看退出码：--max-downloads 1 命中后 yt-dlp 以
+        # 101 (Aborting remaining downloads) 退出，音频其实已完整落盘
+        # （2026-10-14 实测：rc=101 + 文件 7.26MiB 完好）。老逻辑要求
+        # rc==0，把下成功的歌报成 "All yt-dlp sources exhausted"。
+        actual, state = _artifact_state(filepath, song, return_path=True)
+        if actual and state != before and actual.stat().st_size > 0:
             return actual
-            logger.warning(f"[yt-dlp] {search_prefix}: {stderr.decode()[:200]}")
-    raise RuntimeError("All yt-dlp sources exhausted")
+
+        tail = (stderr or b"").decode(errors="replace").strip()[-300:]
+        errors.append(f"{search_prefix} rc={proc.returncode}: {tail}")
+        logger.warning(f"[yt-dlp] {search_prefix} 未产出文件 (rc={proc.returncode}): {tail[:200]}")
+    raise RuntimeError("All yt-dlp sources exhausted: " + " | ".join(errors))
+
+
+def _artifact_state(filepath: Path, song: SongInfo, return_path: bool = False):
+    """定位产物文件并返回 (路径, 状态指纹)；无产物时路径为 None。
+
+    指纹用 (大小, 修改时间) ，用来区分"本次新写"与"历史残留"。
+    """
+    actual = filepath if filepath.exists() else None
+    if actual is None:
+        candidates = list(filepath.parent.glob(sanitize_filename(f"{song.title} - {song.artist}.*")))
+        actual = candidates[0] if candidates else None
+    state = (actual.stat().st_size, actual.stat().st_mtime_ns) if actual else None
+    return (actual, state) if return_path else state
 
 
 async def download_batch(songs, progress=None):

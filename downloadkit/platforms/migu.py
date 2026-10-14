@@ -1,7 +1,17 @@
-"""咪咕音乐下载源 -- 搜索 API 并返回直链。"""
+"""咪咕音乐下载源 -- 搜索 API 并返回直链。
 
-import re
+2026-10-14 现状：``scr_search_tag`` 已于改版后 301 到 ``/v5`` SPA 壳，
+所有已知搜索接口（remoting/*、v5/api/*、app.c.migu.cn/*）一律返回 HTML
+或域名已不解析，拿不到 JSON。这里不再让 ``resp.json()`` 抛
+``JSONDecodeError`` 每首歌刷一条 ERROR，而是识别非 JSON 响应后直接返回
+None，把这一级让给后面的 yt-dlp。若将来接口恢复，下面的解析逻辑无需改动。
+"""
+
+import logging
+
 import httpx
+
+logger = logging.getLogger(__name__)
 
 MIGU_SEARCH = "https://m.music.migu.cn/migu/remoting/scr_search_tag"
 
@@ -12,7 +22,7 @@ def _clean_artist(artist: str) -> str:
 
 
 async def search_and_get_url(title: str, artist: str) -> str | None:
-    """搜索咪咕音乐并返回最佳匹配下载 URL。"""
+    """搜索咪咕音乐并返回最佳匹配下载 URL。取不到时返回 None。"""
     keyword = f"{title} {_clean_artist(artist)}"
     params = {
         "keyword": keyword,
@@ -25,9 +35,26 @@ async def search_and_get_url(title: str, artist: str) -> str | None:
         "Referer": "https://m.music.migu.cn/",
     }
 
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        resp = await client.get(MIGU_SEARCH, params=params, headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, trust_env=False) as client:
+            resp = await client.get(MIGU_SEARCH, params=params, headers=headers)
+    except Exception as e:  # noqa: BLE001 - 网络异常交给上层换源
+        logger.info(f"[migu] 请求失败，跳过该源: {type(e).__name__}: {e}")
+        return None
+
+    # 改版后这里会 301 到 /v5 并返回 SPA 壳，不是 JSON
+    if "json" not in resp.headers.get("content-type", "").lower() and not resp.text.lstrip()[:1] in "{[":
+        logger.info(
+            f"[migu] 搜索接口返回非 JSON (status={resp.status_code}, "
+            f"ct={resp.headers.get('content-type', '-')})，该源已失效，跳过"
+        )
+        return None
+
+    try:
         data = resp.json()
+    except Exception as e:  # noqa: BLE001
+        logger.info(f"[migu] 响应无法解析为 JSON，跳过该源: {e}")
+        return None
 
     songs = data.get("musics", [])
     if not songs:
