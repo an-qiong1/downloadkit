@@ -247,6 +247,37 @@ pytest tests/test_boundary.py -v
 
 ## 部署
 
+### 三套部署方案
+
+项目存在**三套并行的部署形态**，不要互相误判为「死代码」：
+
+| 方案 | 入口 | 前端 | 后端 | 依赖声明 |
+|---|---|---|---|---|
+| **Windows 桌面版** | `run.py` / `start.bat` | `downloadkit/static/`（手写 HTML/JS，约 8.7k 行） | `server.py`（64 条路由） | `pyproject.toml`（下限约束） |
+| **单容器 Docker** | `docker-compose.yml` → `Dockerfile` | 同上 | 同上 | 同上 |
+| **NAS 多容器 Docker** | `docker-compose.nas.yml` / `docker-compose.prod.yml` | `frontend/`（React + AntD） | `backend/`（FastAPI + Celery + Redis，20 条路由） | `backend/requirements.txt`（钉死版本） |
+
+历史由来：提交 `2106062`（2026-07-12）「合并 downloadkit（Windows 桌面版）和 media-fetch（NAS Docker 版）」，
+`backend/` + `frontend/` 即原 media-fetch 项目，`frontend/package.json` 的 name 仍是 `media-fetch-frontend`。
+
+**怎么判断一份代码属于哪套**：
+
+- 引用关系在 **`docker-compose*.yml` 的 `build:`** 里，不在 Python import 里 ——
+  全仓搜 `from backend` 一定是 0，这不代表它是死代码。
+- 依赖清单是**分开的**：Windows 版看 `pyproject.toml`，NAS 版看 `backend/requirements.txt`。
+  后者的 `sqlalchemy` / `celery` / `redis` / `pydantic-settings` 属于 NAS 专用，**故意不进** `pyproject.toml`。
+- `docker-compose.yml`（无后缀）是单容器版，跑的是 `server.py`，**与 `docker-compose.nas.yml` 不是一套**。
+
+**当前功能落差（2026-10-14 盘点）**：NAS 版长期落后于 Windows 版，改功能时若要 NAS 也生效，必须两边同步。
+
+| 能力 | Windows 版 | NAS 版 |
+|---|---|---|
+| 路由总数 | 64 | 20 |
+| 订阅 / 视频解析 / 队列 / 设置 / 书签嗅探 / 抖音登录 / 文件管理 / Cookies | 有 | **无** |
+| `douyin.py` | 2488 行 | 78 行（差 31.9x） |
+| `bilibili.py` / `youtube.py` / `collection` | 397 / 265 / 313 行 | 173 / 131 / 84 行 |
+| 测试覆盖 | 46 个测试文件 | **0** |
+
 ### 开发环境
 ```bash
 pip install -e ".[dev]"
@@ -257,6 +288,11 @@ python run.py
 ```bash
 pip install -e .
 python run.py --host 0.0.0.0 --port 8765
+```
+
+### NAS 多容器
+```bash
+docker compose -f docker-compose.nas.yml up -d --build
 ```
 
 ## 扩展指南
