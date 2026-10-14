@@ -7,6 +7,15 @@
 
 ## [未发布]
 
+### 新增
+- **CLI 视频命令 `parse` / `video`**（此前 CLI 只有音乐四命令，视频链路只能走 UI）：
+  - `downloadkit parse <url>`：解析不下载，覆盖抖音/B站/YouTube/小红书/通用网页（generic 兜底），显示标题/作者/时长/封面/可用格式。选项：`--json`（机器可读，管道友好）、`-e/--episodes`（展开选集，与 `/api/video/episodes` 同参）、`--referer`（generic 防盗链）、`--name`（命名提示 → suggested_name）
+  - `downloadkit video <url>`：解析+下载。选项：`-q best/1080/720/480/360`（YouTube/generic）、`-o` 输出根目录（抖音再建 videos/images/animated 分类子目录，其余平台直接落该目录）、`-e` 展开选集批量下载 + `-n 1,3 / 1-5 / a` 选集、`--referer`、`--name`
+  - 平台分发抽到新模块 `downloadkit/video_service.py`（`detect_platform` + `parse_url` + `download_parsed`），输出结构与 `/api/video/parse` 响应契约对齐；`server.py` 的本地 `detect_platform` 改为 import 自该模块（行为 100% 不变）。HTTP 路由层的平台分发保持不动——它耦合任务队列与下载历史，该区域零测试覆盖，重构收益不抵回归风险
+  - 顺带修正 `main()` docstring（原文谎称支持 Bilibili/YouTube/Xiaohongshu，实际此前无视频命令）
+- **修复（随 CLI 暴露）：INFO 日志污染 CLI stdout**——`downloadkit/logger.py` 在 import 时就给 `downloadkit` logger 挂了 stdout handler（INFO 级），server 服务端这样正合适，但 CLI 的 stdout 是给用户/管道看的：INFO 日志盖过 rich 界面，`--json` 时直接产出非法 JSON。CLI 启动时把该 logger 压到 WARNING（`--json` 模式压到 ERROR），并加 `-v/--verbose` 一键恢复详细日志
+  - 实测：离线测试场（本机 3 mp4 + http.server）覆盖直链解析/JSON 输出/选集展开/单集下载/批量下载，加抖音图文真实链接解析+下载，30/30 PASS；新增 `tests/test_cli_video.py` 43 例（平台分发/各平台输出结构/落点透传/选集选择/server-CLI 共用同一 detect_platform）
+
 ### 修复
 - **`download_content` 的 `output_dir` 被静默忽略，CLI 的 `-o` 形同虚设**：该参数的 docstring 标着「已废弃，现在使用分类子目录」，但参数本身还在、且各分支一律改用 `get_download_subdir()`——调用方传什么都落空，实测连传三次都写到配置目录。改为新增 `_resolve_out_dir(category, output_dir)` 统一解析：`None` → 仍走配置的分类目录（**含 `download_dir_video` 等自定义子目录，历史行为 100% 不变**），指定 → 落 `output_dir/{videos,images,animated}/`。同步把 `server.py` 两处原本传 `get_download_dir()` 的调用改为不传（传了会绕过自定义分类目录），`fetch()` / `download_video()` 默认值改为 `None`，CLI `-o` 默认改 `None` 并修正 help 文案（原写着 `default: ./downloads` 却不生效）。实测：指定目录 5/5 落对位置且零泄漏、`None` 回到配置目录、重复调用不下第二份
 - **图文扩展名与实际内容不符（`.jpg` 装的是 WEBP）**：`resolve_note` 返回的 `file_ext` 写死 `jpg`，但抖音图文接口实际返回 WEBP（实测 5/5），于是文件名与魔数不一致——看图软件靠嗅探能开，按扩展名判断的工具会认错。落盘后按魔数校验，不符则**只改名不重编码**（不引入有损压缩、不依赖可选的 Pillow），支持 jpg/png/webp/mp4。配套修 `_existing_target`：候选名（`.jpg`）不存在时按同名 stem 找其它媒体扩展名，否则改过名的文件会在下次被认成「不存在」而重下出第二份；`tests/test_douyin_output_dir.py` 22 例覆盖

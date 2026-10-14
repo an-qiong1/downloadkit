@@ -872,21 +872,10 @@ async def api_collections_refresh(collection_id: int):
 
 # --- Douyin endpoints ---
 # --- 统一视频解析接口 ---
-def detect_platform(url: str) -> str:
-    """检测链接平台"""
-    if 'douyin.com' in url or 'tiktok.com' in url:
-        return 'douyin'
-    elif 'bilibili.com' in url or 'b23.tv' in url:
-        return 'bilibili'
-    elif 'youtube.com' in url or 'youtu.be' in url:
-        return 'youtube'
-    elif 'xiaohongshu.com' in url or 'xhslink.com' in url:
-        return 'xiaohongshu'
-    elif is_http_url(url):
-        # 兜底：任何 http(s) 链接交给 generic（L0 直链 / L1 网页）
-        return 'generic'
-    else:
-        return None
+# detect_platform 原是本文件的本地函数；2026-10-14 抽到
+# downloadkit/video_service.py 供 CLI（cli.py 的 parse/video 命令）复用。
+# HTTP 路由层的平台分发逻辑仍留在本文件（耦合任务队列与下载历史）。
+from downloadkit.video_service import detect_platform
 
 
 # 慢接口耗时日志：解析/嗅探类请求从收到到响应的总时长。
