@@ -63,7 +63,10 @@ def run_async(coro):
 @click.version_option(version="0.4.1", prog_name="downloadkit")
 @click.option("-v", "--verbose", is_flag=True,
               help="显示详细日志（默认已压掉 INFO，保持界面干净）")
-def main(verbose: bool):
+@click.option("--server", default=None, envvar="DOWNLOADKIT_SERVER",
+              help="服务地址，queue 等远程命令用（默认 http://127.0.0.1:8765，"
+                   "也可用环境变量 DOWNLOADKIT_SERVER）")
+def main(verbose: bool, server: str | None):
     """downloadkit -- Multi-platform resource downloader.
 
     \b
@@ -71,8 +74,12 @@ def main(verbose: bool):
     Video:    parse（只解析）/ video（解析+下载，支持抖音、B站、YouTube、
               小红书、以及任意网页/直链的 generic 兜底）
     Douyin:   douyin（支持分享文本）
+    Queue:    queue（列任务/暂停/重试/移除，需服务在跑）
     """
     _quiet_logs(logging.INFO if verbose else logging.WARNING)
+    if server:
+        global _SERVER
+        _SERVER = server.rstrip("/")
 
 
 @main.command()
@@ -433,6 +440,277 @@ def video(url: str, output: str | None, quality: str, episodes: bool,
     if total > 1:
         console.print(f"\n[bold green]Done![/bold green] 成功 [green]{ok}[/green]，"
                       f"失败 [red]{failed}[/red]")
+
+
+# ────────────────────────────── 队列（连运行中的服务） ──────────────────────────────
+# 队列状态是服务进程的内存态（download_queue.active_tasks + server._downloads），
+# CLI 直连模块只会看到一份空队列，必须走 HTTP 读写正在运行的服务。
+
+_SERVER = "http://127.0.0.1:8765"
+
+_STATUS_LABEL = {
+    "pending": "等待中",
+    "downloading": "下载中",
+    "paused": "已暂停",
+    "completed": "已完成",
+    "failed": "失败",
+    "cancelled": "已取消",
+}
+_STATE_GROUP = {
+    "active": ("pending", "downloading", "paused"),
+    "done": ("completed",),
+    "failed": ("failed",),
+}
+_STATE_LABEL = {"all": "全部", "active": "进行中", "done": "已完成", "failed": "失败"}
+
+
+def _queue_api(method: str, path: str, body=None):
+    """调服务端队列 API，返回 (状态码, 数据)。
+
+    连不上（服务没跑/端口不对）返回 (0, 中文提示)；非 2xx 时数据是
+    服务端的 {"detail": "..."}，由 _queue_fail 统一取出展示。
+    """
+    import httpx
+    url = f"{_SERVER.rstrip('/')}{path}"
+    try:
+        resp = httpx.request(method, url, json=body, timeout=30.0)
+    except httpx.HTTPError as e:
+        return 0, (f"连不上服务 {_SERVER}（{e.__class__.__name__}）。"
+                    "队列命令需要 DownloadKit 正在运行，换地址用 --server 指定。")
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        return resp.status_code, resp.text
+
+
+def _detail_of(data) -> str:
+    """从服务端响应里取出可读的错误描述（dict 优先取 detail，退化为 JSON）。"""
+    if isinstance(data, dict):
+        return data.get("detail") or json.dumps(data, ensure_ascii=False)
+    return str(data)
+
+
+def _queue_fail(code: int, data) -> None:
+    if code == 0:
+        console.print(f"[red]{data}[/red]")  # 网络错误：data 是提示文本
+        return
+    console.print(f"[red]失败（HTTP {code}）: {_detail_of(data)}[/red]")
+
+
+def _task_progress(t: dict) -> str:
+    try:
+        return f"{float(t.get('progress') or 0) * 100:.0f}%"
+    except (TypeError, ValueError):
+        return "-"
+
+
+@main.group()
+def queue():
+    """下载队列管理（需要 DownloadKit 正在运行，直连它的 Web 服务）。
+
+    \b
+    Examples:
+      downloadkit queue list
+      downloadkit queue list failed --json
+      downloadkit queue retry-failed
+      downloadkit queue open <task_id>
+    """
+    pass
+
+
+@queue.command("list")
+@click.argument("state", default="all",
+                type=click.Choice(["all", "active", "done", "failed"]))
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def queue_list(state: str, as_json: bool):
+    """列出队列任务。
+
+    STATE 取 all（默认）/ active（等待中+下载中+已暂停）/ done（已完成）/
+    failed（失败）；已取消的任务只在 all 里出现。
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    code, data = _queue_api("GET", "/api/queue/status")
+    if code != 200:
+        if as_json:
+            # 管道侧也要结构化错误（含 HTTP 码），别只吐半截文本
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _queue_fail(code, data)
+        return
+
+    tasks = list(data.get("tasks") or []) if isinstance(data, dict) else []
+    if state != "all":
+        tasks = [t for t in tasks if t.get("status") in _STATE_GROUP[state]]
+
+    if as_json:
+        click.echo(json.dumps(tasks, ensure_ascii=False, indent=2))
+        return
+
+    if not tasks:
+        console.print(f"[yellow]没有{_STATE_LABEL[state]}的任务[/yellow]")
+        return
+
+    table = Table(title=f"下载队列 · {_STATE_LABEL[state]}（{len(tasks)} 条）",
+                  header_style="bold magenta")
+    # Task ID 必须 no_wrap 全长可见：截断了用户就没法把 id 复制给
+    # pause/retry/open 用（实测 80 列终端会把 40 字符 id 压没）。
+    # 错误列因此砍掉，失败原因挪到表格下方整行打印。
+    table.add_column("Task ID", style="dim", no_wrap=True)
+    table.add_column("标题", max_width=20)
+    table.add_column("状态")
+    table.add_column("进度", justify="right")
+
+    errors: list[tuple[str, str]] = []
+    for t in tasks:
+        st = t.get("status", "?")
+        label = _STATUS_LABEL.get(st, st)
+        if st == "failed":
+            label = f"[red]{label}[/red]"
+        elif st == "completed":
+            label = f"[green]{label}[/green]"
+        err = (t.get("error") or "").strip()
+        if st == "failed" and err:
+            errors.append((str(t.get("task_id", "")), err))
+        table.add_row(
+            str(t.get("task_id", "")),
+            (t.get("title") or t.get("filename") or ""),
+            label,
+            _task_progress(t),
+        )
+    console.print(table)
+
+    if errors:
+        console.print("[red]失败原因:[/red]")
+        for tid, err in errors:
+            console.print(f"  [dim]{tid}[/dim] → {err}")
+
+    if state == "all" and isinstance(data, dict):
+        console.print(
+            f"下载中 {data.get('downloading', 0)} · 等待 {data.get('pending', 0)}"
+            f" · 完成 {data.get('completed', 0)} · 失败 {data.get('failed', 0)}")
+
+
+def _queue_action(path: str, ok_msg: str) -> dict | None:
+    """POST 一个队列动作端点：成功打印确认，失败打印服务端 detail。"""
+    code, data = _queue_api("POST", path)
+    if code != 200:
+        _queue_fail(code, data)
+        return None
+    console.print(f"[bold green]✓[/bold green] {ok_msg}")
+    return data if isinstance(data, dict) else {}
+
+
+def _require_task(task_id: str) -> bool:
+    """pause/resume/cancel 前确认任务在队列里。
+
+    这三个端点是 fire-and-forget：DownloadQueue 只记标志位，任务不在也回 200，
+    于是「暂停一个不存在的任务」会报成功。先查一次队列，别给用户假成功。
+    """
+    code, data = _queue_api("GET", "/api/queue/status")
+    if code != 200:
+        _queue_fail(code, data)
+        return False
+    tasks = list((data.get("tasks") or [])) if isinstance(data, dict) else []
+    if any(t.get("task_id") == task_id for t in tasks):
+        return True
+    console.print(f"[red]队列里没有任务 {task_id}（用 queue list 看任务号）[/red]")
+    return False
+
+
+@queue.command("pause")
+@click.argument("task_id")
+def queue_pause(task_id: str):
+    """暂停一个任务（批量任务在条目边界生效）。"""
+    if _require_task(task_id):
+        _queue_action(f"/api/queue/{task_id}/pause", f"已暂停 {task_id}")
+
+
+@queue.command("resume")
+@click.argument("task_id")
+def queue_resume(task_id: str):
+    """恢复一个已暂停的任务。"""
+    if _require_task(task_id):
+        _queue_action(f"/api/queue/{task_id}/resume", f"已恢复 {task_id}")
+
+
+@queue.command("cancel")
+@click.argument("task_id")
+def queue_cancel(task_id: str):
+    """取消一个任务。"""
+    if _require_task(task_id):
+        _queue_action(f"/api/queue/{task_id}/cancel", f"已取消 {task_id}")
+
+
+@queue.command("retry")
+@click.argument("task_id")
+def queue_retry(task_id: str):
+    """重试一个失败任务（断点续传接着下，不清进度）。"""
+    data = _queue_action(f"/api/queue/{task_id}/retry", f"已重新入队 {task_id}")
+    if data and data.get("new_task_id"):
+        console.print(f"[dim]重新创建的任务号: {data['new_task_id']}[/dim]")
+
+
+@queue.command("retry-failed")
+def queue_retry_failed():
+    """一键重试队列里全部失败任务。"""
+    code, data = _queue_api("POST", "/api/queue/retry-failed")
+    if code != 200:
+        _queue_fail(code, data)
+        return
+    retried = data.get("retried", 0) if isinstance(data, dict) else 0
+    orphaned = data.get("orphaned", 0) if isinstance(data, dict) else 0
+    console.print(f"[bold green]✓[/bold green] 已重新入队 [green]{retried}[/green] 个失败任务")
+    if orphaned:
+        console.print(f"[yellow]{orphaned} 个失败记录已过期无法重试"
+                      f"（原任务已被清理出队列）[/yellow]")
+
+
+@queue.command("rm")
+@click.argument("task_id")
+def queue_rm(task_id: str):
+    """把已结束的任务移出列表（进行中/已暂停的任务会被服务端拒绝）。"""
+    _queue_action(f"/api/queue/{task_id}/dismiss", f"已移除 {task_id}")
+
+
+@queue.command("open")
+@click.argument("task_id")
+@click.option("--path", "path_", default=None,
+              help="直接给文件路径或裸文件名（不给则按任务记录的文件名在下载目录里找）")
+def queue_open(task_id: str, path_: str | None):
+    """打开任务产物文件，成功后把该任务移出列表（对齐界面「点完成行」）。"""
+    target = path_
+    if not target:
+        code, data = _queue_api("GET", "/api/queue/status")
+        if code != 200:
+            _queue_fail(code, data)
+            return
+        tasks = list((data.get("tasks") or [])) if isinstance(data, dict) else []
+        t = next((x for x in tasks if x.get("task_id") == task_id), None)
+        if t is None:
+            console.print(f"[red]队列里没有任务 {task_id}（用 queue list 看任务号）[/red]")
+            return
+        target = t.get("filename") or ""
+        if not target:
+            console.print(f"[red]任务 {task_id} 没记录文件名，用 --path 指定文件[/red]")
+            return
+
+    code, data = _queue_api("POST", "/api/open-file", {"path": target})
+    if code != 200:
+        _queue_fail(code, data)
+        return
+    opened = data.get("path") if isinstance(data, dict) else None
+    console.print(f"[bold green]✓[/bold green] 已打开 [green]{opened or target}[/green]")
+
+    # 打开成功才移除；失败留在列表里（对齐界面行为）
+    code, data = _queue_api("POST", f"/api/queue/{task_id}/dismiss")
+    if code == 200:
+        console.print(f"[dim]已把 {task_id} 移出队列列表[/dim]")
+    elif code:  # 0 是网络错误（刚连上过，一般不会出现），409 是任务还在跑
+        _queue_fail(code, data)
 
 
 def _fmt_duration(sec) -> str:

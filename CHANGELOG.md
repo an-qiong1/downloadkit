@@ -8,6 +8,11 @@
 ## [未发布]
 
 ### 新增
+- **CLI 队列命令 `queue`**（P5-2；此前队列只能在界面里操作）：`queue list [all|active|done|failed]` 列任务（`--json` 纯 stdout 管道友好）、`pause` / `resume` / `cancel` / `retry` 单任务操作、`retry-failed` 一键重试全部失败（`retried`/`orphaned` 转述）、`rm` 移出列表、`open` 打开产物文件并对齐界面「打开成功才移除」的行为
+  - 新增全局 `--server`（环境变量 `DOWNLOADKIT_SERVER`，默认 `http://127.0.0.1:8765`）
+  - **队列状态是服务进程的内存态**（`download_queue.active_tasks` + `server._downloads`），CLI 一律走 HTTP 读写正在运行的服务，不直连模块（直连只会看到空队列）
+  - 实测修掉三个坑：① rich 在 80 列终端会把 40 字符 Task ID 压没 → ID 列 `no_wrap` 全长可见、失败原因挪到表格下方整行显示；② `pause`/`resume`/`cancel` 服务端是 fire-and-forget（`DownloadQueue` 只记标志位，任务不存在也回 200）→ CLI 先查队列拦下不存在任务，不给假成功；③ 连不上服务给中文指引（`--server`）而不是裸 traceback
+  - `tests/test_cli_queue.py` 24 例；离线实测 22/22（真起服务 + 真实入队下载 + headless open-file），全量 660 passed
 - **CLI 视频命令 `parse` / `video`**（此前 CLI 只有音乐四命令，视频链路只能走 UI）：
   - `downloadkit parse <url>`：解析不下载，覆盖抖音/B站/YouTube/小红书/通用网页（generic 兜底），显示标题/作者/时长/封面/可用格式。选项：`--json`（机器可读，管道友好）、`-e/--episodes`（展开选集，与 `/api/video/episodes` 同参）、`--referer`（generic 防盗链）、`--name`（命名提示 → suggested_name）
   - `downloadkit video <url>`：解析+下载。选项：`-q best/1080/720/480/360`（YouTube/generic）、`-o` 输出根目录（抖音再建 videos/images/animated 分类子目录，其余平台直接落该目录）、`-e` 展开选集批量下载 + `-n 1,3 / 1-5 / a` 选集、`--referer`、`--name`

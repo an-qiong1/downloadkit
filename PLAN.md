@@ -34,6 +34,8 @@
 | 2026-10-14 | 抖音解析修复 `8963a57` | 图文分流（落地页校验返回 type_mismatch 改走 resolve_stream）、空结果不谎报、轮播计数排除 clone + slideTo 定位真实索引、标题加 document.title 兜底、slideTo 加 scrollIntoView 降级；落盘两个修复：`download_content(output_dir)` 从静默忽略改为真生效（None=配置目录行为不变，指定=output_dir/分类），图文扩展名按魔数对齐（.jpg 实为 WEBP → .webp）+ `_existing_target` 同 stem 兜底防重下。实机三类内容（视频/实况/图文）全过，`tests/test_douyin_note_routing.py` 6 例 + `tests/test_douyin_output_dir.py` 22 例，593 passed |
 | 2026-10-14 | 架构文档标注 `bb477ce` | ARCHITECTURE.md 补「三套部署方案」：Windows 桌面（server.py + static，64 路由）/ 单容器 Docker / NAS 多容器（backend+frontend，即 media-fetch，20 路由，落后无测试）；判别规则两条（引用在 docker-compose 的 build: 里不在 import 里；依赖清单 pyproject.toml 与 backend/requirements.txt 分两份），防再次误判 NAS 版为死代码 |
 | 2026-10-14 | CLI 视频命令 `0b7450a` | 新增 `parse`（--json / -e 选集 / --referer / --name）与 `video`（-q 画质 / -o 目录 / -e + -n 批量选集），覆盖抖音/B站/YouTube/小红书/generic 兜底；平台分发抽 `downloadkit/video_service.py`（detect_platform + parse_url + download_parsed），server 只换 import 不动路由分发（该区域零测试）；修 CLI 的 INFO 日志污染 stdout（--json 曾产非法 JSON）。`tests/test_cli_video.py` 43 例，实测 30/30，636 passed |
+| 2026-10-14 | 根目录整理 + README 重写 `69cb7f8` | 删运行/构建产物（两处 log、`__pycache__`、`.pytest_cache`、`egg-info`、`logs/`），根目录 37→32 项；README 全量重写：两套部署改三套并标注 NAS 落差、CLI 4→6 命令、补功能清单与 0.5.0/未发布日志摘要、修 prod compose 归属与 `python server.py` 无窗口跑法 |
+| 2026-10-14 | P5-2 队列 `queue` | 新增 `queue` 命令组（list/pause/resume/cancel/retry/retry-failed/rm/open）+ 全局 `--server`（env `DOWNLOADKIT_SERVER`）。队列是服务内存态，一律走 HTTP 不直连模块；`list` 三过滤 + `--json` 纯 stdout；Task ID 列 no_wrap 保证 80 列终端全长可见，失败原因挪表格下方不截断；pause/resume/cancel 先查队列拦下不存在任务（服务端这三端点 fire-and-forget 会假报成功）；`open` 对齐界面「点完成行」—— 打开成功才 dismiss。`tests/test_cli_queue.py` 24 例，离线实测 22/22（真起服务 + 真实入队下载），660 passed |
 
 ---
 
@@ -258,7 +260,12 @@
   - 顺手修：CLI 的 INFO 日志污染 stdout（`logger.py` 的 stdout handler 在 import 时就挂上，`--json` 会产出非法 JSON）→ CLI 压 WARNING、`--json` 压 ERROR、`-v` 恢复
   - 测试 `tests/test_cli_video.py` 43 例；实测 30/30（离线测试场脚本 `C:\我的仓库\工作空间\temp\cli_video_e2e.py` 可复跑作范式：本机 3 mp4 + http.server + subprocess 调 CLI）；pytest 636 passed
 
-- [ ] **P5-2 队列 `queue`**：列出进行中/已完成/失败、单任务重试/暂停/取消/移除、一键重试全部失败、打开文件（`/api/queue/*`、`/api/open-file`、`/api/queue/{id}/dismiss`）
+- [x] **P5-2 队列 `queue`**（2026-10-14 完成）
+  - `queue list [all|active|done|failed]`：列出任务，`--json` 纯 stdout 管道友好
+  - `queue pause/resume/cancel/retry <id>`、`queue rm <id>`（dismiss）、`queue retry-failed`、`queue open <id>`
+  - 全局 `--server`（env `DOWNLOADKIT_SERVER`，默认 8765）；队列是服务内存态，一律走 HTTP 不直连模块
+  - 三个坑：① Task ID 列必须 `no_wrap`（rich 80 列下会把 40 字符 id 压没，用户就复制不到 id）；② pause/resume/cancel 服务端 fire-and-forget 会假报成功 → CLI 先查队列拦下不存在任务；③ `open` 对齐界面行为，打开成功才 dismiss，失败留在列表
+  - `tests/test_cli_queue.py` 24 例；离线实测 22/22（真起服务 + 真实入队下载 + headless open-file），660 passed
 - [ ] **P5-3 订阅 `subscribe`**：`add/list/check/check-all/remove`、范围设置（only_new/backfill_n/all）、启停定时（`/api/subscriptions/*`）
 - [ ] **P5-4 文件管理 `files`**：`ls`（分类目录）、`rm`（安全路径校验）、`open`（`/api/files/*`）
 - [ ] **P5-5 嗅探与书签 `sniff` / `bookmarks`**：L2 浏览器嗅探、书签 HTML 导入批量解析（`/api/sniff`、`/api/bookmarks/parse`）

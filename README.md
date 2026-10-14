@@ -122,6 +122,7 @@ B站视频合并需要系统 `ffmpeg`。
 | `douyin <链接或分享文本>` | 抖音无水印下载，`-o` 输出根目录 |
 | `parse <链接>` | **只解析不下载**：抖音/B站/YouTube/小红书/任意网页，`--json` 机器可读、`-e` 展开选集、`--referer`、`--name` |
 | `video <链接>` | 解析 + 下载，`-q best/1080/720/480/360`、`-o` 输出目录、`-e` + `-n 1,3/1-5/a` 批量选集 |
+| `queue …` | 队列管理（需服务在跑）：`list [all/active/done/failed]`、`pause/resume/cancel/retry <id>`、`retry-failed`、`rm <id>`、`open <id>` |
 
 ```bash
 # 搜歌并直接下第 16 首
@@ -138,6 +139,15 @@ downloadkit video "https://www.douyin.com/video/xxx" -e -n 1,3
 ```
 
 CLI 输出默认压掉 INFO 日志保证管道干净，需要细节时加 `-v`。
+
+`queue` 命令读写的是**正在运行的服务**（队列是它的内存状态），所以要先起服务；
+地址默认 `http://127.0.0.1:8765`，换地址用全局 `--server` 或环境变量 `DOWNLOADKIT_SERVER`。
+
+```bash
+downloadkit queue list failed          # 看失败了哪些
+downloadkit queue retry-failed         # 一键重试全部失败
+downloadkit queue open <task_id>       # 打开产物文件并移出列表
+```
 
 ## 下载原理
 
