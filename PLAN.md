@@ -288,6 +288,7 @@
   - **退出码按组定语义**：这一组是探测器——`sniff` 没抓到流、书签导不进链接都算「没做成该做的事」→ 1（含连不上）；`queue`/`subscribe` 那两组是状态查询，查到空状态也算查成功 → 0。两组约定写进各自 docstring，不混用
   - 五个坑：① **流地址必须走 `click.echo` 不能走 `console.print`**——m3u8 动辄上百字符，rich 按 80 列会从中间切断，用户复制出来是断的（P5-2 Task ID 同一个坑，那次解法是 `no_wrap`，这里整行本身就比 80 宽，只能绕开 rich）；② 客户端超时必须给足 L2 预算余量（服务端裁到最多 60 秒，客户端退成默认 30 就白跑）→ `_API_TIMEOUT_SNIFF = 120`；③ `nav_failed`（死域名）和被 WAF 拦是两回事，混在一个提示里用户会对着打不开的地址反复重试；④ 书签解码必须 UTF-8 **真解不开**才退回 cp936（反过来读会静默变乱码却照样解析成功，最难查），`--json` 侧本地失败也要吐 `{"error": …}` 而不是走 stderr 的 `ClickException`；⑤ 实测真解析器不产出空标题链接（`<A HREF>` 不带文字会被略过），树渲染仍保留「标题空则回退 URL」的兜底
   - **离线实测用替身嗅探器**：挂在 `server.sniff_l2` 上（`api_sniff` 内是模块级查找，运行时改得到），于是真实 FastAPI 路由、真实 `is_http_url` 校验、真实 `timeout` 裁剪、真实 `result.to_dict()` 序列化全都照跑，只有浏览器那一步被换掉；替身还把**裁剪后的 timeout 记进文件**，用它断言 `-t 999` → 60、`-t 5` → 10。书签侧不换任何东西：真的把 Netscape HTML 写到磁盘、真的走服务端 `parse_bookmarks_html`，cp936 那条连解码链路一起验
+  - **真实 L2 链路另行单独验过**（不是因为跑不通才换替身）：`工作空间/temp/real_sniff_probe.py` 起本地 http.server 喂一个塞了 mp4/m3u8 的页面，直接调 `sniff_sync`（真 DrissionPage + 系统 Edge、真 headless）→ `ok=true, method=main, 2 条流`，6 秒，UA 是 `HeadlessChrome/155…Edg/155`，全程只有 127.0.0.1 请求、未触发有头回退（没弹窗）。E2E 换替身是为了可复现与速度
   - `tests/test_cli_sniff.py` 55 例；离线实测 56/56（替身嗅探、真实 400 三支全覆盖、服务未起先测），880 passed
 - [ ] **P5-6 设置 `settings`**：`get` / `set <key> <value>`、代理测试连接、Cookie 路径设置（`/api/settings/*`、`/api/proxy/test`）
 - [ ] **P5-7 收藏与历史 `collections` / `history`**（`/api/collections/*`、`/api/history/*`）
