@@ -1507,6 +1507,240 @@ def poller_set(mode, daily_at, interval, max_new, jitter):
         _poller_show()
 
 
+# ==================================================================
+# 文件管理（P5-4）
+# ==================================================================
+# 一样走 HTTP：下载根目录是服务端按配置算出来的（get_download_dir()，
+# 可能指向 NAS、也可能带自定义分类子目录），CLI 在本地猜一个路径很容易
+# 对不上；删除与打开还必须过服务端的 safe_delete_path —— `..` 遍历和越出
+# 下载目录由它统一挡成 403，CLI 不再自己实现一遍安全逻辑（两套校验各挡
+# 各的反而更容易漏）。
+
+_FILES_CAT = {"music": "音乐", "videos": "视频", "images": "图片",
+              "animated": "动图", "others": "其他"}
+
+
+def _fmt_size(n) -> str:
+    """字节 → 人类可读（B / KB / MB / GB / TB）。"""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "-"
+    if n < 0:
+        return "-"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def _file_time(ts) -> str:
+    """服务端给的 mtime 时间戳 → 年-月-日 时:分（解析不出给 '-'）。"""
+    try:
+        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "-"
+
+
+def _confirm_or_skip(prompt: str, yes: bool) -> bool:
+    """危险操作前确认；--yes 直接放行。返回 False 表示用户当场取消。
+
+    和订阅那边的 _confirm_all 分开：那个把「全部历史作品」的后果文案
+    写死在提示里了，删文件要的是另一套话。
+    """
+    if yes:
+        return True
+    try:
+        click.confirm(prompt, abort=True)
+    except click.Abort:
+        console.print("[yellow]已取消[/yellow]")
+        return False
+    return True
+
+
+@main.group()
+def files():
+    """下载文件管理（列出 / 删除 / 打开，走运行中服务的 /api/files/*）。
+
+    \b
+    Examples:
+      downloadkit files ls
+      downloadkit files ls videos
+      downloadkit files rm music/a.mp3 music/b.mp3
+      downloadkit files open videos/clip.mp4
+      downloadkit files open videos/clip.mp4 --dir
+    """
+    pass
+
+
+@files.command("ls")
+@click.argument("category", default="all",
+                type=click.Choice(["all", *_FILES_CAT]))
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def files_ls(category: str, as_json: bool):
+    """列出下载目录里的文件。
+
+    CATEGORY 可选 music（音乐）/ videos（视频）/ images（图片）/
+    animated（动图）/ others（其他，散在根目录的媒体文件），默认 all。
+    输出按修改时间倒序——命令行下最想先看到的永远是「最近下的那个」。
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    code, data = _queue_api("GET", "/api/files")
+    if code != 200:
+        if as_json:
+            # 管道侧也要结构化错误（含 HTTP 码），别只吐半截文本
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _queue_fail(code, data)
+        return
+
+    if not isinstance(data, dict):
+        _queue_fail(code, data)
+        return
+
+    rows = list(data.get("files") or [])
+    if category != "all":
+        rows = [f for f in rows if f.get("category") == category]
+
+    if as_json:
+        click.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+
+    if not rows:
+        if category == "all":
+            console.print("[yellow]下载目录里还没有文件[/yellow]")
+            console.print("[dim]先跑一个下载，或按分类看：files ls videos[/dim]")
+        else:
+            console.print(f"[yellow]{_FILES_CAT[category]}分类下没有文件[/yellow]")
+        return
+
+    rows.sort(key=lambda f: f.get("time") or 0, reverse=True)
+
+    table = Table(title=f"下载文件（{len(rows)} 个）",
+                  header_style="bold magenta")
+    table.add_column("分类", style="dim")
+    # 文件名要原样可复制（用户得拿它去 files rm / open），所以 no_wrap
+    # 不给 max_width——截断成「名…」就没法当参数用了
+    table.add_column("文件名", no_wrap=True)
+    table.add_column("大小", justify="right")
+    table.add_column("修改时间", justify="right")
+
+    total = 0
+    counts: dict[str, int] = {}
+    for f in rows:
+        cat = str(f.get("category") or "")
+        # 文件名是用户内容，可能自带方括号（rich 标记），必须 escape
+        table.add_row(
+            str(f.get("category_label") or _FILES_CAT.get(cat, cat)),
+            escape(str(f.get("name") or "")),
+            _fmt_size(f.get("size")),
+            _file_time(f.get("time")),
+        )
+        counts[cat] = counts.get(cat, 0) + 1
+        try:
+            total += int(f.get("size") or 0)
+        except (TypeError, ValueError):
+            pass
+
+    console.print(table)
+    parts = [f"{label} {counts[c]}"
+             for c, label in _FILES_CAT.items() if c in counts]
+    console.print(f"共 {len(rows)} 个 · {_fmt_size(total)} · "
+                  + " · ".join(parts))
+
+
+files.add_command(files_ls, name="list")
+
+
+@files.command("rm")
+@click.argument("paths", nargs=-1, required=True)
+@click.option("--yes", "-y", is_flag=True,
+              help="跳过确认（删了不可恢复，批量跑才用它）")
+def files_rm(paths: tuple, yes: bool):
+    """删除一个或多个文件。
+
+    PATH 用 files ls 列出的相对路径（如 music/a.mp3）——路径解析与安全
+    校验都在服务端：`..` 遍历、越出下载目录一律 403 拒绝。
+    """
+    paths = [str(p).strip() for p in paths if str(p).strip()]
+    if not paths:
+        raise click.UsageError("没给要删的文件。先用 files ls 看路径。")
+
+    # 危险操作：先把要删的东西摊开列清楚，别让用户对着一串参数猜
+    console.print("[yellow]将删除以下文件（不可恢复）：[/yellow]")
+    for p in paths:
+        console.print(f"  · {escape(p)}")
+    if not _confirm_or_skip(f"确认删除这 {len(paths)} 个文件", yes):
+        return
+
+    code, data = _queue_api("POST", "/api/files/batch-delete",
+                            {"files": paths})
+    if code != 200:
+        _queue_fail(code, data)
+        return
+    if not isinstance(data, dict):
+        _queue_fail(code, data)
+        return
+
+    deleted = list(data.get("deleted") or [])
+    errors = list(data.get("errors") or [])
+
+    for p in deleted:
+        console.print(f"[bold green]✓[/bold green] 已删除 [green]{escape(str(p))}[/green]")
+    # batch-delete 是「逐条记账」：单条失败不会让整个请求 403/500，
+    # 所以失败必须逐条列出来，否则用户以为全删了
+    for e in errors:
+        if isinstance(e, dict):
+            ep, er = str(e.get("path") or "?"), str(e.get("error") or "未知原因")
+        else:
+            ep, er = str(e), "未知原因"
+        console.print(f"[red]✗ 删不掉 {escape(ep)}：{er}[/red]")
+
+    if not deleted and not errors:
+        console.print("[red]服务端没回任何删除结果（什么也没删）[/red]")
+    else:
+        tail = (f" · [red]失败 {len(errors)} 个[/red]" if errors else "")
+        console.print(f"[dim]已删除 {len(deleted)} 个{tail}[/dim]")
+
+
+@files.command("open")
+@click.argument("path_")
+@click.option("--dir", "as_dir", is_flag=True,
+              help="打开文件所在目录，而不是文件本身")
+def files_open(path_: str, as_dir: bool):
+    """用系统默认程序打开下载目录内的文件（--dir 打开它所在的目录）。
+
+    只给裸文件名也行（服务端会在下载目录里递归找同名文件，同名取第一个）。
+    容器 / headless 环境下服务端弹不开程序，会回一条 NAS 上的路径，
+    这里照原样转述。
+    """
+    endpoint = "/api/open-dir" if as_dir else "/api/open-file"
+    code, data = _queue_api("POST", endpoint, {"path": path_})
+    if code != 200:
+        _queue_fail(code, data)
+        return
+    if not isinstance(data, dict):
+        _queue_fail(code, data)
+        return
+
+    target = str(data.get("path") or path_)
+    if data.get("status") == "headless":
+        # 容器里没法真弹开，服务端给的是「它在哪」——照说，别假装打开了
+        title = str(data.get("title") or "文件位置")
+        console.print(f"[bold green]✓[/bold green] {title}: "
+                      f"[green]{escape(target)}[/green]")
+        nas = str(data.get("nas_path") or data.get("smb_path") or "")
+        if nas:
+            console.print(f"[dim]{escape(nas)}[/dim]")
+    else:
+        console.print(f"[bold green]✓[/bold green] 已打开 [green]{escape(target)}[/green]")
+
+
 def _fmt_duration(sec) -> str:
     """秒数 → h:mm:ss / m:ss（无法解析返回 '-'）。"""
     try:
