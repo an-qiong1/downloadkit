@@ -30,10 +30,13 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.markup import escape
 from rich import print as rprint
 
+from urllib.parse import urlencode
+
 from .searcher import search_all
 from .playlist import parse_playlist
 from .downloader import download_song, download_batch
 from .bookmarks import flatten_bookmarks
+from .utils import DEFAULT_CONFIG
 from .douyin import fetch as douyin_fetch, fetch_content, parse_url, download_content, ContentType
 
 console = Console()
@@ -1761,13 +1764,15 @@ _API_TIMEOUT_SNIFF = 120.0
 _METHOD_LABEL = {"main": "主页面监听", "player": "播放器提升", "js": "JS Hook"}
 
 
-def _probe_api(path: str, body, *, as_json: bool, timeout: float = 30.0) -> dict:
-    """POST 服务端并统一处理失败：拿不到结果就以退出码 1 结束。
+def _probe_api(path: str, body, *, as_json: bool, timeout: float = 30.0,
+               method: str = "POST") -> dict:
+    """调服务端并统一处理失败：拿不到结果就以退出码 1 结束。
 
     --json 模式把错误也结构化到 stdout（管道侧不能只吐半截文本），
-    普通模式走 _queue_fail 打中文。
+    普通模式走 _queue_fail 打中文。method 默认 POST——settings 那组
+    有两个 GET 端点，传进来即可。
     """
-    code, data = _queue_api("POST", path, body, timeout=timeout)
+    code, data = _queue_api(method, path, body, timeout=timeout)
     if code == 200 and isinstance(data, dict):
         return data
     msg = f"HTTP {code}: {_detail_of(data)}" if code else str(data)
@@ -1972,6 +1977,316 @@ def bookmarks_import(file: str, as_urls: bool, limit: int, as_json: bool):
     if capped and links > shown:
         console.print(f"[dim]… 还有 {links - shown} 条没显示"
                       f"（--limit 0 看全部，--urls 只要链接）[/dim]")
+
+
+# ==================================================================
+# 设置（P5-6）
+# ==================================================================
+# 走 HTTP 的理由：配置文件在**服务进程**的 HOME 下
+# （~/.downloadkit/config.toml），CLI 自己写会写到另一份配置里去；而且
+# 有些项保存后是服务进程当场改内存的（history_max_records 保存时就
+# update_max_records），CLI 直接改文件只会弄出「文件改了、内存还是老值」
+# 的分裂。
+
+# 可写段就这三个：/api/settings/update 的请求模型（SettingsUpdateRequest）
+# 只声明了 general/proxy/cookie，传别的段服务端当没看见 —— 只传
+# subscription 时 config 为空，它照样回 {"status": "ok"}，那是假成功，
+# 必须本地拦下，不能让人以为设进去了。
+_UPDATABLE_SECTIONS = ("general", "proxy", "cookie")
+
+# 数值范围抄产品自己的限制，不自创规则：
+#   max_concurrent / history_max_records 是 index.html 里的 min/max；
+#   max_concurrent < 1 更是要命 —— 下次启动 DownloadQueue(0) 会造出
+#   asyncio.Semaphore(0)，所有下载一起卡死。
+_SETTING_BOUNDS = {
+    "general.max_concurrent": (1, 10),
+    "general.history_max_records": (100, 100000),
+}
+
+# proxy 三态（与 downloadkit/proxy.MODES 同源，那儿导入进来更省事）
+_PROXY_MODES = ("off", "system", "manual")
+
+
+def _setting_schema() -> dict:
+    """段名 → {键: 默认值}，当键表用，也当类型来源用。
+
+    proxy.mode 是界面三态（off/system/manual）落盘的字段，DEFAULT_CONFIG
+    里没有它（旧配置靠 resolve_mode 推导），但 settings.js 确实会存 ——
+    少了这一条，`set proxy.mode manual` 会被当未知键拒掉，而那恰恰是
+    最该能在命令行设的一个。
+    """
+    schema = {sec: dict(vals) for sec, vals in DEFAULT_CONFIG.items()}
+    schema.setdefault("proxy", {})["mode"] = "system"
+    return schema
+
+
+def _resolve_setting_key(key: str, schema: dict,
+                         extra: dict | None = None) -> tuple[str, str]:
+    """把用户给的键解析成 (段名, 键名)。
+
+    两层，和 P5-3 创作者解析一个套路：先按「段名.键名」精确匹配
+    （settings get 打出来的就是这个形状，照抄即可），再按裸键名找唯一归属；
+    多义（enabled 挂在 proxy / subscription 两段下）一律把候选列出来让人
+    补全，绝不替他猜一个写进去 —— 猜错了写的是别的开关。
+
+    extra 是配置里实际存在的键（settings get 会传）：配置文件里可能有键表
+    没登记的历史遗留键，全量列出来却没有单键可查，等于把那一项藏了一半。
+    set 不传 extra —— 它要在发出任何请求前就把参数判掉。
+    """
+    key = (key or "").strip()
+    if "." in key:
+        sec, _, name = key.partition(".")
+        if sec in schema and name in schema[sec]:
+            return sec, name
+        node = (extra or {}).get(sec)
+        if isinstance(node, dict) and name in node:
+            return sec, name
+        raise click.UsageError(
+            f"没有这个设置项：{key}。运行 `downloadkit settings get` 看全部键。")
+    # 裸键：命中的键名就是 key 本身，别去引用推导里不存在的变量
+    hits = [(sec, key) for sec, names in schema.items() if key in names]
+    for sec, node in (extra or {}).items():
+        if isinstance(node, dict) and key in node and (sec, key) not in hits:
+            hits.append((sec, key))
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise click.UsageError(
+            f"没有这个设置项：{key}。运行 `downloadkit settings get` 看全部键。")
+    secs = "、".join(sec for sec, _ in hits)
+    raise click.UsageError(
+        f"{key} 挂在多个段下（{secs}），写全成 段名.{key} 再来。")
+
+
+def _coerce_setting(sec: str, name: str, raw: str, default) -> object:
+    """按该键默认值的类型，把命令行上的一串字符转成配置值。
+
+    类型必须守住：int 字段写成字符串，下次读它的人 int() 直接炸；bool
+    字段更要命——`bool("false")` 是 True，写成字符串等于把开关悄悄反了。
+    """
+    key = f"{sec}.{name}"
+    if isinstance(default, bool):
+        v = (raw or "").strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off"):
+            return False
+        raise click.UsageError(
+            f"{key} 是开关，只能给 true / false（也认 on/off、yes/no、1/0），"
+            f"收到：{raw}")
+    if isinstance(default, int):
+        try:
+            val = int(str(raw).strip())
+        except (TypeError, ValueError):
+            raise click.UsageError(
+                f"{key} 是整数，收到：{raw}") from None
+        bounds = _SETTING_BOUNDS.get(key)
+        if bounds and not (bounds[0] <= val <= bounds[1]):
+            raise click.UsageError(
+                f"{key} 允许 {bounds[0]}~{bounds[1]}（与界面同一套限制），"
+                f"收到：{val}")
+        return val
+    v = (raw or "").strip()
+    if key == "proxy.mode":
+        # resolve_mode 只认三态，写别的值会被静默忽略 —— 那就是「设成功了
+        # 但根本没生效」，宁可当场报错
+        if v not in _PROXY_MODES:
+            raise click.UsageError(
+                "proxy.mode 三态：off（关闭）/ system（跟随系统）/ "
+                f"manual（手动），收到：{raw}")
+        return v
+    return raw
+
+
+def _setting_value(cfg: dict, sec: str, name: str, schema: dict):
+    """读一个键的当前值；proxy.mode 缺省时按服务端同一套推导回显。"""
+    node = cfg.get(sec) or {}
+    if name in node:
+        return node[name]
+    if f"{sec}.{name}" == "proxy.mode":
+        from .proxy import resolve_mode
+        return resolve_mode(node)
+    return (schema.get(sec) or {}).get(name)
+
+
+def _fmt_setting(v) -> str:
+    """配置值 → 一行文本。bool 要吐 true/false，正好是 set 认得的写法。"""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if v is None:
+        return ""
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, ensure_ascii=False)
+    return str(v)
+
+
+@main.group()
+def settings():
+    """查看与修改配置（读写运行中服务的 ~/.downloadkit/config.toml）。
+
+    \b
+    Examples:
+      downloadkit settings get
+      downloadkit settings get general.download_dir
+      downloadkit settings set general.max_concurrent 5
+      downloadkit settings proxy-test http://127.0.0.1:7890
+    """
+    pass
+
+
+@settings.command("get")
+@click.argument("key", required=False)
+@click.option("--json", "as_json", is_flag=True,
+              help="输出服务端原样返回（含 proxy_system；与键同给时以 --json 为准）")
+def settings_get(key, as_json):
+    """看当前配置；不给键就全部列出，给键只回值（管道友好）。
+
+    \b
+    Examples:
+      downloadkit settings get
+      downloadkit settings get general.download_dir
+      downloadkit settings get proxy.mode
+      downloadkit settings get --json | jq -r '.settings.general'
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    data = _probe_api("/api/settings/get", None, method="GET",
+                      as_json=as_json)
+    cfg = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+    schema = _setting_schema()
+
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    if key:
+        sec, name = _resolve_setting_key(key, schema, cfg)
+        # 走 click.echo 而不是 console.print：路径可能上百字符，
+        # rich 按 80 列折断了就不是原值了（和 sniff 的流地址同一个坑）
+        click.echo(_fmt_setting(_setting_value(cfg, sec, name, schema)))
+        return
+
+    rows = []
+    for sec, names in schema.items():
+        for name in names:
+            rows.append(f"{sec}.{name}")
+    # 配置里有、键表里没有的历史遗留键也得看见，不然等于藏起来了
+    for sec, node in cfg.items():
+        if not isinstance(node, dict):
+            continue
+        for name in node:
+            full = f"{sec}.{name}"
+            if full not in rows:
+                rows.append(full)
+    width = max((len(r) for r in rows), default=0)
+    derived_mode = "mode" not in (cfg.get("proxy") or {})
+    for full in rows:
+        sec, _, name = full.partition(".")
+        value = _fmt_setting(_setting_value(cfg, sec, name, schema))
+        note = ""
+        if full == "proxy.mode" and derived_mode:
+            note = "  # 未显式设置，按 enabled/地址推导"
+        click.echo(f"{full:<{width}} = {value}{note}")
+
+    sys_proxy = str(data.get("proxy_system") or "").strip()
+    console.print(f"[dim]系统代理探测："
+                  f"{escape(sys_proxy) if sys_proxy else '未检测到'}[/dim]")
+
+
+@settings.command("set")
+@click.argument("key")
+@click.argument("value")
+def settings_set(key, value):
+    """改一个设置项（键写成 段名.键名，值按该键的类型解析）。
+
+    只动这一个键，同段其它键原样保留（服务端按段合并、按键覆盖）。下载
+    目录类的键会先过服务端校验，校验不过就不写——目录不存在会被顺带建
+    出来，这点和界面一致。
+
+    \b
+    Examples:
+      downloadkit settings set general.max_concurrent 5
+      downloadkit settings set proxy.mode manual
+      downloadkit settings set proxy.global http://127.0.0.1:7890
+      downloadkit settings set cookie.douyin_path ""      # 置空
+    """
+    schema = _setting_schema()
+    sec, name = _resolve_setting_key(key, schema)
+
+    if sec not in _UPDATABLE_SECTIONS:
+        hint = ("轮询那几项走 `downloadkit subscribe poller on|off|set`。"
+                if sec == "subscription" else "")
+        raise click.UsageError(
+            f"{sec} 段不走 settings set（服务端 /api/settings/update 只收 "
+            f"{'、'.join(_UPDATABLE_SECTIONS)}），设了也不会保存。{hint}")
+
+    coerced = _coerce_setting(sec, name, value, schema[sec][name])
+
+    # 下载目录先问服务端：路径存在但不是目录、或根本建不出来，现在就报，
+    # 别等用户点下载才发现。校验会顺带把目录建出来（validate_download_dir
+    # 就是这么干的，界面走的也是同一个端点）
+    if name.startswith("download_dir"):
+        info = _probe_api(
+            f"/api/settings/download-dir-info?{urlencode({'path': coerced})}",
+            None, method="GET", as_json=False)
+        if not info.get("ok"):
+            _die_local(f"目录不可用，没有保存：{info.get('message') or '-'}",
+                       as_json=False)
+
+    data = _probe_api("/api/settings/update", {sec: {name: coerced}},
+                      as_json=False)
+    after = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+    stored = (after.get(sec) or {}).get(name)
+    if stored == coerced:
+        console.print(f"[bold green]✓[/bold green] {escape(f'{sec}.{name}')} = "
+                      f"[green]{escape(_fmt_setting(stored))}[/green]")
+    else:
+        # 不假装成功：服务端存的和提交的对不上，原样报出来
+        console.print(f"[yellow]已提交，但服务端存的是 "
+                      f"{escape(_fmt_setting(stored))}（提交值 "
+                      f"{escape(_fmt_setting(coerced))}）[/yellow]")
+
+
+@settings.command("proxy-test")
+@click.argument("proxy", required=False, default="")
+@click.option("--url", default="",
+              help="测试目标；留空用服务端内置目标（公网）。离线自测传 "
+                   "http://127.0.0.1:PORT/")
+@click.option("--json", "as_json", is_flag=True,
+              help="输出服务端原样返回")
+def settings_proxy_test(proxy, url, as_json):
+    """测代理（或直连）通不通、延迟多少。不给代理地址就是测直连。
+
+    服务端**永远回 200**——「代理不通」是测试结果不是服务故障，通不通放在
+    body 的 ok 里。所以退出码由这里的 ok 定：0 = 通，1 = 不通（含连不上
+    服务），和 sniff 那组的探测器语义一致。
+
+    \b
+    Examples:
+      downloadkit settings proxy-test                          # 测直连
+      downloadkit settings proxy-test http://127.0.0.1:7890
+      downloadkit settings proxy-test http://127.0.0.1:7890 \
+        --url http://127.0.0.1:1/                              # 离线造失败
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    data = _probe_api("/api/proxy/test",
+                      {"proxy": (proxy or "").strip(),
+                       "url": (url or "").strip()},
+                      as_json=as_json)
+    ok = bool(data.get("ok"))
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        sys.exit(0 if ok else 1)
+
+    msg = str(data.get("message") or "-")
+    if ok:
+        console.print(f"[bold green]✓[/bold green] {escape(msg)}")
+    else:
+        console.print(f"[bold red]✗[/bold red] {escape(msg)}")
+    sys.exit(0 if ok else 1)
 
 
 def _fmt_duration(sec) -> str:
