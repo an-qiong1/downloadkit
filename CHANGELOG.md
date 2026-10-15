@@ -8,6 +8,14 @@
 ## [未发布]
 
 ### 新增
+- **CLI 设置命令 `settings`**（P5-6；此前改配置只能在界面里点）：`get [键]` 看配置（不给键全量列出、给键只回值，`--json` 原样返回含系统代理探测）、`set <key> <值>` 改配置、`proxy-test [代理地址] [--url 目标]` 测代理或直连通不通（不给地址就是测直连）
+  - 「Cookie 路径设置」= `cookie.douyin_path` / `cookie.bilibili_path`，由通用 `set` 覆盖，不单独开命令
+  - 走 HTTP：配置文件在**服务进程**的 HOME 下，CLI 自己写会写到另一份配置里；而且有些项保存后是服务进程当场改内存的（`history_max_records` 保存时就 `update_max_records`），直连模块只会弄出「文件改了、内存还是老值」的分裂
+  - **`/api/settings/update` 只收 `general`/`proxy`/`cookie`**：传 `subscription` 时 `config` 为空，它照样回 `{"status": "ok"}` 却什么都没写 —— 假成功，本地拦下并指向 `subscribe poller on|off|set`
+  - **`set` 按该键默认值的类型解析**（bool 认 on/off/yes/no/1/0）：int 写成字符串下次读的人 `int()` 直接炸；bool 更要命——`bool("false")` 是 True，等于把开关悄悄反了。数值范围抄产品自己的限制（`index.html` 的 min/max），`max_concurrent < 1` 会让下次启动的 `asyncio.Semaphore(0)` 把所有下载卡死
+  - 实测修掉四个坑：① **`proxy.mode` 写非三态值会被 `resolve_mode` 静默忽略**（设了等于没设），必须收口当场报错——而它恰恰是命令行最该能设的一个（界面三态落盘字段，`DEFAULT_CONFIG` 里没有）；② **下载目录键先过服务端 `download-dir-info` 再落笔**，顺序反了就把配置指向用不了的路径；③ **回执读服务端返回的实际存值**而不是把自己刚发的再念一遍，对不上就不喊成功；④ 全量列出走 `click.echo`——键值是路径，rich 按 80 列折断了就不是原值（P5-5 流地址同一个坑）
+  - 退出码沿用 P5-5 的分组语义：`proxy-test` 是探测器（服务端**永远回 200**，通不通在 body 的 `ok` 里）→ 0 通 / 1 不通；键不存在、类型不对、范围越界是用法错误 → 2（走 stderr）
+  - `tests/test_cli_settings.py` 65 例（含「键表里每一项都得能设进去」的全键遍历，漏一项就是死键）；离线实测 67/67（配置**真落盘**：每步 `set` 后用 `tomllib` 读回 `config.toml` 比对，被拒的用例按字节数断言一个字节都没写；`proxy-test` 只打本地起的 HTTP 服务或没人监听的端口，全程 0 外网请求），全量 945 passed
 - **CLI 嗅探与书签 `sniff` / `bookmarks`**（P5-5；此前嗅探和书签导入只能在界面里做）：`sniff <url>` 真实浏览器深度嗅探（`-t/--timeout` L2 预算、`--json` 原样返回）、`bookmarks import <文件>` 导入浏览器导出的书签 HTML 并批量解析出全部链接（默认缩进树视图、`--urls` 去重一行一个管道友好、`-n/--limit` 截断、`--json`）
   - 走 HTTP：L2 嗅探用的是服务进程里那个 DrissionPage 浏览器单例（`_lock` 串行、headless/有头按站点在进程内记忆），CLI 自己再起一份就是两个浏览器抢资源，还会丢掉「这个站回退过有头」的进程内记忆
   - **退出码按组定语义**：这一组是探测器——没抓到流、导不进链接都是「没做成该做的事」→ 1（含连不上），脚本据此分支不必解析中文；与 `queue`/`subscribe` 那两组「状态查询查到空也算成功」的 0 不冲突，各自写进 docstring

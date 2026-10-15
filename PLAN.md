@@ -290,7 +290,17 @@
   - **离线实测用替身嗅探器**：挂在 `server.sniff_l2` 上（`api_sniff` 内是模块级查找，运行时改得到），于是真实 FastAPI 路由、真实 `is_http_url` 校验、真实 `timeout` 裁剪、真实 `result.to_dict()` 序列化全都照跑，只有浏览器那一步被换掉；替身还把**裁剪后的 timeout 记进文件**，用它断言 `-t 999` → 60、`-t 5` → 10。书签侧不换任何东西：真的把 Netscape HTML 写到磁盘、真的走服务端 `parse_bookmarks_html`，cp936 那条连解码链路一起验
   - **真实 L2 链路另行单独验过**（不是因为跑不通才换替身）：`工作空间/temp/real_sniff_probe.py` 起本地 http.server 喂一个塞了 mp4/m3u8 的页面，直接调 `sniff_sync`（真 DrissionPage + 系统 Edge、真 headless）→ `ok=true, method=main, 2 条流`，6 秒，UA 是 `HeadlessChrome/155…Edg/155`，全程只有 127.0.0.1 请求、未触发有头回退（没弹窗）。E2E 换替身是为了可复现与速度
   - `tests/test_cli_sniff.py` 55 例；离线实测 56/56（替身嗅探、真实 400 三支全覆盖、服务未起先测），880 passed
-- [ ] **P5-6 设置 `settings`**：`get` / `set <key> <value>`、代理测试连接、Cookie 路径设置（`/api/settings/*`、`/api/proxy/test`）
+- [x] **P5-6 设置 `settings`**（2026-10-15 完成）
+  - `get [键]`（不给键全量列出，给键只回值；`--json` 服务端原样返回）、`set <key> <value>`、`proxy-test [代理地址] [--url 目标]`
+  - **「Cookie 路径设置」= `cookie.douyin_path` / `cookie.bilibili_path`，由通用 `set` 覆盖**，不单独开命令
+  - 走 HTTP 的理由：配置文件在**服务进程**的 HOME 下（`~/.downloadkit/config.toml`），CLI 自己写会写到另一份配置里；而且有些项保存后是服务进程当场改内存的（`history_max_records` 保存时就 `update_max_records`），CLI 直接改文件只会弄出「文件改了、内存还是老值」的分裂
+  - **`/api/settings/update` 只收 `general`/`proxy`/`cookie` 三段**（`SettingsUpdateRequest` 就这三个字段）：传 `subscription` 时 `config` 为空，它照样回 `{"status": "ok"}` 却什么都没写 —— 假成功，必须本地拦下并指向 `subscribe poller on|off|set`
+  - **`set` 按该键默认值的类型解析**：int 字段写成字符串下次读的人 `int()` 直接炸；bool 字段更要命——`bool("false")` 是 True，写成字符串等于把开关悄悄反了（on/off/yes/no/1/0 都认）
+  - 数值范围**抄产品自己的限制，不自创**：`max_concurrent` / `history_max_records` 是 `index.html` 的 min/max；`max_concurrent < 1` 尤其要命 —— 下次启动 `DownloadQueue(0)` 造出 `asyncio.Semaphore(0)`，所有下载一起卡死
+  - `proxy.mode` 是界面三态（`off`/`system`/`manual`）落盘的字段，`DEFAULT_CONFIG` 里没有它（旧配置靠 `resolve_mode` 推导），但 `settings.js` 确实会存 —— 键表里补上它，否则 `set proxy.mode manual` 会被当未知键拒掉，而那恰恰是命令行最该能设的一个
+  - 四个坑：① **`proxy.mode` 写非三态值会被 `resolve_mode` 静默忽略**（设了等于没设），必须收口当场报错；② **下载目录键要先过服务端 `download-dir-info` 再落笔**，顺序反了就把配置指向了用不了的路径——该端点会顺带把目录建出来，和界面行为一致；③ **回执读服务端返回的实际存值**，不是把自己刚发的再念一遍，两边对不上就不喊成功；④ 全量列出走 `click.echo` 不走 `console.print`——键值是路径，rich 按 80 列折断了就不是原值（P5-5 流地址同一个坑）
+  - 退出码沿用 P5-5 定的分组语义：`proxy-test` 是探测器（服务端**永远回 200**，通不通放在 body 的 `ok` 里）→ 0 通 / 1 不通；键不存在、类型不对、范围越界是用法错误 → 2（走 stderr，与 `subscribe poller set` 一致）
+  - `tests/test_cli_settings.py` 65 例（含「键表里每一项都得能设进去」的全键遍历，漏一项就是死键）；离线实测 67/67（配置**真落盘**：每步 `set` 后用 `tomllib` 把 `config.toml` 读回来对，越界/被拒的用例按字节数断言一个字节都没写；`proxy-test` 全程只打本地起的 HTTP 服务或没人监听的端口，一次外网都没出），945 passed
 - [ ] **P5-7 收藏与历史 `collections` / `history`**（`/api/collections/*`、`/api/history/*`）
 - [ ] **P5-8 收尾**：`download` 命令补 `-o`、全命令 `--help` 中文化与 docstring 核对（不许再有「谎称支持」）、CLI 测试补齐、EXE 打包后 CLI 入口验证
 
