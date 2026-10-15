@@ -301,7 +301,18 @@
   - 四个坑：① **`proxy.mode` 写非三态值会被 `resolve_mode` 静默忽略**（设了等于没设），必须收口当场报错；② **下载目录键要先过服务端 `download-dir-info` 再落笔**，顺序反了就把配置指向了用不了的路径——该端点会顺带把目录建出来，和界面行为一致；③ **回执读服务端返回的实际存值**，不是把自己刚发的再念一遍，两边对不上就不喊成功；④ 全量列出走 `click.echo` 不走 `console.print`——键值是路径，rich 按 80 列折断了就不是原值（P5-5 流地址同一个坑）
   - 退出码沿用 P5-5 定的分组语义：`proxy-test` 是探测器（服务端**永远回 200**，通不通放在 body 的 `ok` 里）→ 0 通 / 1 不通；键不存在、类型不对、范围越界是用法错误 → 2（走 stderr，与 `subscribe poller set` 一致）
   - `tests/test_cli_settings.py` 65 例（含「键表里每一项都得能设进去」的全键遍历，漏一项就是死键）；离线实测 67/67（配置**真落盘**：每步 `set` 后用 `tomllib` 把 `config.toml` 读回来对，越界/被拒的用例按字节数断言一个字节都没写；`proxy-test` 全程只打本地起的 HTTP 服务或没人监听的端口，一次外网都没出），945 passed
-- [ ] **P5-7 收藏与历史 `collections` / `history`**（`/api/collections/*`、`/api/history/*`）
+- [ ] **P5-7 收藏与历史 `collections` / `history`** —— **收藏已完成，历史卡在服务端没有 API**
+  - [x] **收藏歌单 `collections`**（2026-10-15 完成）
+    - `list` / `show <ID> [-n]` / `add <链接> [-n 名称]` / `rename <ID> <名>` / `rm <ID...> [--yes]` / `refresh <ID...>`
+    - 走 HTTP 的理由：歌单缓存在**服务端**的 `~/.downloadkit/collections.db`，而且 `add` / `refresh` 都会真去解析歌单（网络 + 各平台适配器），CLI 自己再实现一遍就是两套解析逻辑，两边对不上时谁也说不清哪个是真的
+    - **退出码沿用 P5-2 那组「状态查询」的约定**：本组是状态查询与数据管理，「歌单不存在」「歌单解析失败」是**业务结果**而不是「没做成该做的事」，打完中文提示退出码仍是 0；只有用法错误（ID 不是整数、参数缺失）才是 2。和 sniff / bookmarks / proxy-test 那组探测器的「没抓到就 1」不混用，约定写进 `_coll_api` 的 docstring
+    - 三个坑：① **歌单 ID 直接拼进 `/api/collections/{id}`**，非数字会打到 FastAPI 匹配不上的路径回 404——用户会以为「歌单不存在」，其实是自己 ID 敲错了，本地拦下并把这两种情况分开说；② **`rm` 是逐个 DELETE**（服务端没有批量端点），所以先 `GET` 列表把 ID 换成「ID + 名称 + 链接」再确认，让人对着一个干巴巴的 ID 确认是逼他记错，全都不存在时连确认都不问；③ **`list` 的表格不放 URL**——网易云歌单链接动辄 60+ 字符，塞进去会把名称列挤没，而真正要复制给别的命令的是 ID（完整字段 `--json` 里都有）；歌单链接本身走 `click.echo` 不走 `console.print`（m3u8 那次的教训）
+    - **顺带修掉服务端两个真 bug**（`tests/test_collection_refresh.py` 11 例锁住）：`refresh_collection` 的 SELECT 少了 `auto_name` 却去读它 → 必然 `IndexError`，也就是说 `POST /api/collections/{id}/refresh` **从来就没工作过**；`_run_async` 的 `except RuntimeError` 罩住了整个 try 块，把解析器抛的 RuntimeError 当成「没有事件循环」再跑一次 `asyncio.run`，真报错被盖成 `asyncio.run() cannot be called from a running event loop`（实测 OLD/NEW 对比写进提交信息）
+    - **离线实测替身只挂一个点**：`downloadkit.collection.parse_playlist`。于是一整条真实链路照常跑——真 FastAPI 路由、真 URL 去重、真 SQLite 写入、真曲目缓存、真刷新时的「清空旧曲目再插新的」，只有网络解析那步是假的；改替身读的 JSON 就能让 refresh 真的把曲目数改掉
+    - `tests/test_cli_collections.py` 50 例；离线实测 64/64（建/删/改名/刷新都直接读 `collections.db` 对账，含级联删曲目、刷新前后用不同数据以证明替换是真的、真实用户库 mtime 未变），1006 passed
+  - [ ] **历史 `history`：服务端根本没有 `/api/history/*`**
+    - `downloadkit/history.py` 的 `DownloadHistory` 读/搜/删/清/计数能力齐全（`get_records` / `search_records` / `delete_record` / `clear_history` / `get_total_count`），但 `server.py` 只在下载完成时调 `add_record`，**一个读取端点都没暴露**；前端也没有历史 UI（`static/` 里搜不到 `/api/history`）
+    - 和 P5-5 的 `/api/bookmarks/parse` 不同：那个是 PLAN 写错了名字（实际是 `/api/bookmarks/import`，服务端有），这个是端点压根不存在——要做得先在 `server.py` 加路由，属服务端改动，超出「P5 = CLI 补齐」的范围，**待用户决定**是否补
 - [ ] **P5-8 收尾**：`download` 命令补 `-o`、全命令 `--help` 中文化与 docstring 核对（不许再有「谎称支持」）、CLI 测试补齐、EXE 打包后 CLI 入口验证
 
 **P5 验收（每步固定）**：`pytest tests -q` 全量通过 → CLI 实测（能离线就离线，涉及抖音注意短链限流约 1 分钟 1-2 次）→ 改动文件 UTF-8 校验 `U+FFFD` 计数 0 → 分次提交（中文提交信息走 `-F` 文件）。

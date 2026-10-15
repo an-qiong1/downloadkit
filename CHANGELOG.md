@@ -8,6 +8,15 @@
 ## [未发布]
 
 ### 新增
+- **CLI 收藏歌单命令 `collections`**（P5-7；此前收藏只能在界面里操作）：`list` 列全部歌单、`show <ID>` 看详情与缓存曲目（`-n` 截断）、`add <链接>` 收藏（`-n` 自定义名称）、`rename <ID> <名>` 改名、`rm <ID...>` 删除（摊开列出目标并确认，`--yes` 跳过）、`refresh <ID...>` 重新解析并替换缓存曲目
+  - 走 HTTP：歌单缓存在**服务端**的 `~/.downloadkit/collections.db`，而且 `add` / `refresh` 都会真去解析歌单（网络 + 各平台适配器），CLI 自己再实现一遍就是两套解析逻辑，两边对不上时谁也说不清哪个是真的
+  - **退出码沿用「状态查询」组的约定**：「歌单不存在」「歌单解析失败」是业务结果而不是「没做成该做的事」，打完提示退出码仍是 0；只有用法错误（ID 不是整数、参数缺失）才是 2。与 sniff / bookmarks / proxy-test 那组探测器的「没抓到就 1」不混用
+  - 实测处理三个点：① 歌单 ID 直接拼进 `/api/collections/{id}`，非数字会回 404 —— 用户以为「歌单不存在」其实是 ID 敲错了，本地拦下并分开说；② `rm` 逐个 DELETE（没有批量端点），先 GET 列表把 ID 换成「ID + 名称 + 链接」再确认，全都不存在时连确认都不问；③ `list` 表格不放 URL（60+ 字符会把名称列挤没，真正要复制的是 ID，完整字段 `--json` 都有），歌单链接本身走 `click.echo` 不走 `console.print`
+- **修复：歌单收藏模块两个真 bug**（此前整个仓库没有一处覆盖 `downloadkit/collection.py`，一直没人发现）
+  - `refresh_collection` 的 SELECT 少了 `auto_name` 却去读它 → 必然 `IndexError`，**`POST /api/collections/{id}/refresh` 从来就没工作过**，每次刷新都是 500
+  - `_run_async` 的 `except RuntimeError` 罩住了整个 try 块，把解析器抛的 RuntimeError 当成「没有事件循环」再跑一次 `asyncio.run`，真报错被盖成 `asyncio.run() cannot be called from a running event loop`（DrissionPage 一类浏览器驱动很爱抛 RuntimeError）。收窄 except 作用域，实测 OLD/NEW 对比：`OLD: asyncio.run() cannot be called from a running event loop` → `NEW: 真正的错误`
+  - `tests/test_collection_refresh.py` 11 例：刷新成功、清空旧曲目再插新的、`song_count` 同步、`auto_name` 开/关对名字的处理、解析失败保留旧缓存、`_run_async` 三种异常路径
+- **离线实测手法**：替身只挂 `downloadkit.collection.parse_playlist` 一个点，于是真 FastAPI 路由、真 URL 去重、真 SQLite 写入、真曲目缓存、真刷新逻辑全照跑，只有网络解析是假的；改替身读的 JSON 就能让 refresh 真的把曲目数改掉。`tests/test_cli_collections.py` 50 例；离线实测 64/64（建/删/改名/刷新都直接读 `collections.db` 对账，含级联删曲目、刷新前后用不同数据以证明替换是真的），全量 1006 passed
 - **CLI 设置命令 `settings`**（P5-6；此前改配置只能在界面里点）：`get [键]` 看配置（不给键全量列出、给键只回值，`--json` 原样返回含系统代理探测）、`set <key> <值>` 改配置、`proxy-test [代理地址] [--url 目标]` 测代理或直连通不通（不给地址就是测直连）
   - 「Cookie 路径设置」= `cookie.douyin_path` / `cookie.bilibili_path`，由通用 `set` 覆盖，不单独开命令
   - 走 HTTP：配置文件在**服务进程**的 HOME 下，CLI 自己写会写到另一份配置里；而且有些项保存后是服务进程当场改内存的（`history_max_records` 保存时就 `update_max_records`），直连模块只会弄出「文件改了、内存还是老值」的分裂
