@@ -281,7 +281,14 @@
   - 走 HTTP 的理由：下载根目录是服务端 `get_download_dir()` 算出来的（可能指向 NAS、可能带自定义分类子目录），CLI 本地猜一个路径很容易对不上；路径安全也必须由服务端 `safe_delete_path` 统一挡（`..` 遍历与越界 → 403），CLI 不重复实现一遍（两套校验各挡各的反而更容易漏）
   - 三个坑：① `batch-delete` 是**逐条记账**——单条失败整个请求仍回 200（逐条 `errors`），删失败必须逐条列出来，否则用户以为全删干净了；这和单文件 `DELETE /api/files/{path}` 直接抛 403 的行为不一样，E2E 实测确认过；② 文件名是用户内容，`坏[1].mp3` 不 escape 会被 rich 当标记吃掉，显示出来的名字就和真实文件名对不上；③ 容器 / headless 环境下 `open` 根本弹不开程序，服务端只回「文件在哪」，CLI 必须照原样转述而不是谎称「已打开」
   - `tests/test_cli_files.py` 60 例；离线实测 49/49（真铺 6 个媒体文件真删、收尾按磁盘实际清单比对、非媒体文件不被误删），825 passed
-- [ ] **P5-5 嗅探与书签 `sniff` / `bookmarks`**：L2 浏览器嗅探、书签 HTML 导入批量解析（`/api/sniff`、`/api/bookmarks/parse`）
+- [x] **P5-5 嗅探与书签 `sniff` / `bookmarks`**（2026-10-15 完成）
+  - `sniff <url>` 单条 L2 深度嗅探（`-t/--timeout` L2 预算、`--json` 服务端原样返回）、`bookmarks import <文件>` 导入书签 HTML 并批量解析（`--urls` 去重保序一行一个、`-n/--limit` 树视图截断、`--json`）
+  - **PLAN 原写的 `/api/bookmarks/parse` 不存在，实际端点是 `/api/bookmarks/import`**（FileReader 读全文后 JSON 提交，不走 multipart）；批量探测 `/api/bookmarks/probe` 属 P3，不在本条范围内，未实现
+  - 走 HTTP 的理由：L2 嗅探用的是**服务进程里那个 DrissionPage 浏览器单例**（`_lock` 串行、headless/有头按站点在进程内记忆），CLI 自己再起一份就是两个浏览器抢同一批资源，还会丢掉「这个站回退过有头」的进程内记忆
+  - **退出码按组定语义**：这一组是探测器——`sniff` 没抓到流、书签导不进链接都算「没做成该做的事」→ 1（含连不上）；`queue`/`subscribe` 那两组是状态查询，查到空状态也算查成功 → 0。两组约定写进各自 docstring，不混用
+  - 五个坑：① **流地址必须走 `click.echo` 不能走 `console.print`**——m3u8 动辄上百字符，rich 按 80 列会从中间切断，用户复制出来是断的（P5-2 Task ID 同一个坑，那次解法是 `no_wrap`，这里整行本身就比 80 宽，只能绕开 rich）；② 客户端超时必须给足 L2 预算余量（服务端裁到最多 60 秒，客户端退成默认 30 就白跑）→ `_API_TIMEOUT_SNIFF = 120`；③ `nav_failed`（死域名）和被 WAF 拦是两回事，混在一个提示里用户会对着打不开的地址反复重试；④ 书签解码必须 UTF-8 **真解不开**才退回 cp936（反过来读会静默变乱码却照样解析成功，最难查），`--json` 侧本地失败也要吐 `{"error": …}` 而不是走 stderr 的 `ClickException`；⑤ 实测真解析器不产出空标题链接（`<A HREF>` 不带文字会被略过），树渲染仍保留「标题空则回退 URL」的兜底
+  - **离线实测用替身嗅探器**：挂在 `server.sniff_l2` 上（`api_sniff` 内是模块级查找，运行时改得到），于是真实 FastAPI 路由、真实 `is_http_url` 校验、真实 `timeout` 裁剪、真实 `result.to_dict()` 序列化全都照跑，只有浏览器那一步被换掉；替身还把**裁剪后的 timeout 记进文件**，用它断言 `-t 999` → 60、`-t 5` → 10。书签侧不换任何东西：真的把 Netscape HTML 写到磁盘、真的走服务端 `parse_bookmarks_html`，cp936 那条连解码链路一起验
+  - `tests/test_cli_sniff.py` 55 例；离线实测 56/56（替身嗅探、真实 400 三支全覆盖、服务未起先测），880 passed
 - [ ] **P5-6 设置 `settings`**：`get` / `set <key> <value>`、代理测试连接、Cookie 路径设置（`/api/settings/*`、`/api/proxy/test`）
 - [ ] **P5-7 收藏与历史 `collections` / `history`**（`/api/collections/*`、`/api/history/*`）
 - [ ] **P5-8 收尾**：`download` 命令补 `-o`、全命令 `--help` 中文化与 docstring 核对（不许再有「谎称支持」）、CLI 测试补齐、EXE 打包后 CLI 入口验证
