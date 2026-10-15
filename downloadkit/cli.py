@@ -33,6 +33,7 @@ from rich import print as rprint
 from .searcher import search_all
 from .playlist import parse_playlist
 from .downloader import download_song, download_batch
+from .bookmarks import flatten_bookmarks
 from .douyin import fetch as douyin_fetch, fetch_content, parse_url, download_content, ContentType
 
 console = Console()
@@ -1739,6 +1740,238 @@ def files_open(path_: str, as_dir: bool):
             console.print(f"[dim]{escape(nas)}[/dim]")
     else:
         console.print(f"[bold green]✓[/bold green] 已打开 [green]{escape(target)}[/green]")
+
+
+# ==================================================================
+# 嗅探与书签（P5-5）
+# ==================================================================
+# 还是走 HTTP：L2 嗅探用的是服务进程里那个 DrissionPage 浏览器单例
+# （_lock 串行、headless/有头按站点在进程内记忆），CLI 自己再起一份就是
+# 两个浏览器抢同一批资源，还会丢掉「这个站回退过有头」的记忆。
+#
+# 退出码和 queue / subscribe 那两组不一样：那两组是「状态查询」，查到空
+# 状态也算查成功（0）；这一组是「探测器」——sniff 没抓到流、书签导不进
+# 链接，都意味着命令没做成它该做的事，给 1，脚本据此分支，不必解析中文。
+
+# L2 预算服务端会裁到 10~60 秒，但浏览器启动 + WAF 挑战 + 播放器提升
+# 都算在里面，客户端超时必须留足余量——服务端还在干活、客户端先报超时
+# 就白跑了（和订阅抓主页同一个坑）。
+_API_TIMEOUT_SNIFF = 120.0
+
+_METHOD_LABEL = {"main": "主页面监听", "player": "播放器提升", "js": "JS Hook"}
+
+
+def _probe_api(path: str, body, *, as_json: bool, timeout: float = 30.0) -> dict:
+    """POST 服务端并统一处理失败：拿不到结果就以退出码 1 结束。
+
+    --json 模式把错误也结构化到 stdout（管道侧不能只吐半截文本），
+    普通模式走 _queue_fail 打中文。
+    """
+    code, data = _queue_api("POST", path, body, timeout=timeout)
+    if code == 200 and isinstance(data, dict):
+        return data
+    msg = f"HTTP {code}: {_detail_of(data)}" if code else str(data)
+    if as_json:
+        click.echo(json.dumps({"error": msg}, ensure_ascii=False))
+    else:
+        _queue_fail(code, data)
+    sys.exit(1)
+
+
+def _die_local(msg: str, as_json: bool) -> None:
+    """本地失败的收尾：文件读不了、0 条链接这类压根没走到服务端的情况。
+
+    退出码同样是 1（和 _probe_api 一致），--json 侧照样吐 {"error": …}——
+    不能因为没 HTTP 码就换一种收尾方式，管道侧只认得「1 = 没做成」。
+    """
+    if as_json:
+        click.echo(json.dumps({"error": msg}, ensure_ascii=False))
+    else:
+        console.print(f"[red]{escape(msg)}[/red]")
+    sys.exit(1)
+
+
+@main.command()
+@click.argument("url")
+@click.option("--timeout", "-t", type=float, default=30.0,
+              help="L2 总预算秒数（服务端会裁到 10~60）")
+@click.option("--json", "as_json", is_flag=True,
+              help="输出 JSON（服务端原样返回，管道/脚本友好）")
+def sniff(url: str, timeout: float, as_json: bool):
+    """L2 浏览器深度嗅探：真实浏览器打开页面抓 m3u8 / mp4 流地址。
+
+    L0 直链、L1 静态解析都拿不到流时的最深层——过 WAF 挑战、监听网络、
+    跨域 iframe 播放器提升。每条流自带 referer/ua，可直接进下载接口。
+
+    退出码：0 = 命中至少一条流；1 = 没拿到（含连不上服务）。
+
+    \b
+    Examples:
+      downloadkit sniff "https://example.com/watch/123"
+      downloadkit sniff <url> --json | jq -r '.streams[].url'
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    data = _probe_api("/api/sniff", {"url": url, "timeout": timeout},
+                      as_json=as_json, timeout=_API_TIMEOUT_SNIFF)
+
+    streams = [s for s in (data.get("streams") or [])
+               if isinstance(s, dict) and (s.get("url") or "")]
+
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        sys.exit(0 if streams else 1)
+
+    if not streams:
+        why = (str(data.get("error") or "")).strip() or "页面未发现流地址"
+        console.print(f"[yellow]嗅探未命中：{escape(why)}[/yellow]")
+        # 导航失败（死域名）和被 WAF 拦是两回事，别让用户对着同一个提示
+        # 反复重试一个根本打不开的地址
+        if data.get("nav_failed"):
+            console.print("[dim]导航失败：这个地址本身打不开，换个源再试。[/dim]")
+        sys.exit(1)
+
+    method = _METHOD_LABEL.get(str(data.get("method") or ""),
+                                str(data.get("method") or "-"))
+    console.print(f"[bold green]✓[/bold green] 命中 {len(streams)} 条流 · "
+                  f"{method} · {data.get('elapsed', 0)}s")
+    title = (str(data.get("title") or "")).strip()
+    if title:
+        console.print(f"[dim]页面：{escape(title)}[/dim]")
+
+    # 流地址走 click.echo 而不是 console.print：m3u8/mp4 地址动辄上百字符，
+    # rich 按 80 列折行会把它从中间切断，用户就复制不全了。P5-2 的 Task ID
+    # 是同一个坑（那次解法是 no_wrap），这里整行本身就比 80 宽，只能绕开。
+    for i, s in enumerate(streams, 1):
+        click.echo(f"[{i}] {s.get('kind') or '-'}  {s['url']}")
+
+    referer = (str(data.get("referer") or "")).strip()
+    if referer:
+        click.echo(f"referer: {referer}")
+    player_url = (str(data.get("player_url") or "")).strip()
+    if player_url:
+        click.echo(f"player: {player_url}")
+
+
+@main.group()
+def bookmarks():
+    """浏览器书签导入（Netscape 格式 HTML，浏览器「导出书签」得到的那份）。
+
+    \b
+    Examples:
+      downloadkit bookmarks import bookmarks.html
+      downloadkit bookmarks import bookmarks.html --urls
+      downloadkit bookmarks import bookmarks.html --json | jq '.links'
+    """
+    pass
+
+
+def _read_bookmark_file(path: str) -> str:
+    """按浏览器导出的惯例读书签 HTML（UTF-8，可带 BOM）。
+
+    导出文件绝大多数是 UTF-8（浏览器 FileReader 也按 UTF-8 读）；万一在
+    中文 Windows 上被别的工具转过码，再退回 cp936。但必须**真解不开**才
+    退——把好好的 UTF-8 当 GBK 读会把标题读成乱码，还照样能解析成功，
+    那种静默损坏最难查。
+    """
+    raw = Path(path).read_bytes()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return raw.decode("cp936")
+    except UnicodeDecodeError as e:
+        # 抛 ValueError 而不是 click.ClickException：那个走 stderr，而这一组
+        # 的失败信息都在 stdout（--json 侧要的是能直接 parse 的 {"error": …}）
+        raise ValueError(
+            f"书签文件编码认不出（既不是 UTF-8 也解不开 cp936）：{e}") from e
+
+
+def _walk_bookmarks(nodes, depth: int = 0):
+    """深度优先展平书签树，产出 (depth, kind, name, url)。
+
+    用生成器而不是「先算完再截断」：书签动辄上千条，渲染到 limit 就该
+    直接停下，不必先把整棵树走完。
+    """
+    for n in nodes or ():
+        kind = str(n.get("type") or "")
+        if kind == "folder":
+            yield depth, "folder", str(n.get("name") or "未命名文件夹"), ""
+            yield from _walk_bookmarks(n.get("children") or (), depth + 1)
+        elif kind == "link":
+            url = str(n.get("url") or "").strip()
+            if url:
+                yield depth, "link", str(n.get("title") or "").strip(), url
+
+
+@bookmarks.command("import")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--urls", "as_urls", is_flag=True,
+              help="一行一个 URL（去重保序，管道/脚本友好）")
+@click.option("--limit", "-n", "limit", type=int, default=50,
+              help="树视图最多显示多少条链接（0 = 不限）")
+@click.option("--json", "as_json", is_flag=True,
+              help="输出服务端原样返回（与 --urls 同给时以 --json 为准）")
+def bookmarks_import(file: str, as_urls: bool, limit: int, as_json: bool):
+    """导入书签 HTML 并批量解析出全部链接。
+
+    服务端按 NETSCAPE-Bookmark 结构解析，返回树与统计（链接数 / 文件夹
+    数）。默认渲染成缩进树，--urls 只吐链接，--json 吐原始结构。
+
+    退出码：0 = 至少解析出一条链接；1 = 没解析到或读不了文件。
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    try:
+        text = _read_bookmark_file(file)
+    except OSError as e:
+        _die_local(f"读不了 {file}：{e}", as_json)
+    except ValueError as e:
+        _die_local(str(e), as_json)
+
+    data = _probe_api("/api/bookmarks/import", {"html": text}, as_json=as_json)
+
+    tree = list(data.get("tree") or [])
+    links = int(data.get("links") or 0)
+    folders = int(data.get("folders") or 0)
+
+    if links <= 0:
+        # 服务端 0 链接时本来就会 400，走到这说明它认了文件却没吐出链接，
+        # 同样是「没做成该做的事」
+        _die_local("书签里没有可用链接", as_json)
+
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    if as_urls:
+        # flatten_bookmarks 负责去重保序（首见标题为准），喂给下游工具前
+        # 去重是必要的——浏览器书签里同一条链接存三份是常事
+        for item in flatten_bookmarks(tree):
+            click.echo(item["url"])
+        return
+
+    console.print(f"[bold green]✓[/bold green] 导入成功：{links} 条链接 / "
+                  f"{folders} 个文件夹")
+    shown = 0
+    capped = False
+    for depth, kind, name, url in _walk_bookmarks(tree):
+        if limit and shown >= limit:
+            capped = True
+            break
+        pad = "  " * depth
+        if kind == "folder":
+            console.print(f"{pad}[cyan]{escape(name)}/[/cyan]")
+        else:
+            shown += 1
+            # 标题是网页内容，可能自带方括号（rich 标记），必须 escape
+            console.print(f"{pad}• {escape(name or url)}")
+    if capped and links > shown:
+        console.print(f"[dim]… 还有 {links - shown} 条没显示"
+                      f"（--limit 0 看全部，--urls 只要链接）[/dim]")
 
 
 def _fmt_duration(sec) -> str:
