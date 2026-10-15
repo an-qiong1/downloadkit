@@ -276,7 +276,11 @@
   - **离线实测用替身浏览器**：先试的「禁用 Chromium」方案不成立 —— `PLAYWRIGHT_BROWSERS_PATH` 指空目录只会让预热失败，代码会回退 `channel="msedge"` 启动系统 Edge（`douyin_browser.py:298`）。改为在 `import server` 之前把 `downloadkit.douyin._browser_instance`（1714 行的全局）换成替身对象，`get_browser()` 在 1736 行见非空直接返回，`DouyinBrowser.start()` 根本不会被调用，而 `check_creator` 全套逻辑（基线、水位线、去重、范围）照常跑；订阅库再用 `USERPROFILE`/`HOME` 重定向隔离
   - `check-all` 撞 `LoginRequired` 会 break：只记 1 条失败，`total` 仍是创作者总数（实测 2 创作者 = 「创作者 2 · 失败 1」+ `stopped_at`）
   - `tests/test_cli_subscribe.py` 101 例；离线实测 106/106（替身浏览器、全程 0 下载任务、真实订阅库 mtime 未变），765 passed
-- [ ] **P5-4 文件管理 `files`**：`ls`（分类目录）、`rm`（安全路径校验）、`open`（`/api/files/*`）
+- [x] **P5-4 文件管理 `files`**（2026-10-14 完成）
+  - `ls [music|videos|images|animated|others]`（默认 all，按 mtime 倒序；`ls` 另有 `list` 别名）、`rm <路径...>`（删前摊开列出目标并确认，`--yes` 跳过）、`open <路径>`（`--dir` 打开所在目录）
+  - 走 HTTP 的理由：下载根目录是服务端 `get_download_dir()` 算出来的（可能指向 NAS、可能带自定义分类子目录），CLI 本地猜一个路径很容易对不上；路径安全也必须由服务端 `safe_delete_path` 统一挡（`..` 遍历与越界 → 403），CLI 不重复实现一遍（两套校验各挡各的反而更容易漏）
+  - 三个坑：① `batch-delete` 是**逐条记账**——单条失败整个请求仍回 200（逐条 `errors`），删失败必须逐条列出来，否则用户以为全删干净了；这和单文件 `DELETE /api/files/{path}` 直接抛 403 的行为不一样，E2E 实测确认过；② 文件名是用户内容，`坏[1].mp3` 不 escape 会被 rich 当标记吃掉，显示出来的名字就和真实文件名对不上；③ 容器 / headless 环境下 `open` 根本弹不开程序，服务端只回「文件在哪」，CLI 必须照原样转述而不是谎称「已打开」
+  - `tests/test_cli_files.py` 60 例；离线实测 49/49（真铺 6 个媒体文件真删、收尾按磁盘实际清单比对、非媒体文件不被误删），825 passed
 - [ ] **P5-5 嗅探与书签 `sniff` / `bookmarks`**：L2 浏览器嗅探、书签 HTML 导入批量解析（`/api/sniff`、`/api/bookmarks/parse`）
 - [ ] **P5-6 设置 `settings`**：`get` / `set <key> <value>`、代理测试连接、Cookie 路径设置（`/api/settings/*`、`/api/proxy/test`）
 - [ ] **P5-7 收藏与历史 `collections` / `history`**（`/api/collections/*`、`/api/history/*`）

@@ -8,6 +8,10 @@
 ## [未发布]
 
 ### 新增
+- **CLI 文件管理命令 `files`**（P5-4；此前删文件只能在界面里点）：`ls [分类]` 列下载目录（分类 music / videos / images / animated / others，按修改时间倒序，`--json` 纯 stdout 管道友好）、`rm <路径...>` 删文件（删之前摊开列出目标并确认，`--yes` 跳过确认）、`open <路径>` 用系统默认程序打开（`--dir` 改为打开它所在的目录）
+  - 走 HTTP：下载根目录由服务端按配置算出（`get_download_dir()`，可能指向 NAS、也可能带自定义分类子目录），CLI 本地猜路径很容易对不上；路径安全同样交给服务端 `safe_delete_path` 统一拦，CLI 不重复实现一遍安全逻辑
+  - 实测修掉三个坑：① `batch-delete` 逐条记账——单条失败整个请求仍回 200（逐条 `errors`），所以删失败必须逐条列出来，否则用户以为全删干净了；② 文件名是用户内容，`坏[1].mp3` 不 escape 会被 rich 当标记吃掉，显示的名字就和真实文件名对不上；③ 容器 / headless 环境下 `open` 弹不开程序，服务端只回「文件在哪」，CLI 照原样转述而不是谎称「已打开」
+  - `tests/test_cli_files.py` 60 例；离线实测 49/49（真铺 6 个媒体文件真删 + 收尾按磁盘清单比对），全量 825 passed
 - **CLI 订阅命令 `subscribe`**（P5-3；此前订阅只能在界面里操作）：`add <链接|sec_uid>` 加订阅（默认抓主页拿昵称，`--no-profile` 跳过、`--scope`/`--backfill` 定范围）、`list` 列订阅 + 总览、`remove` / `rm` 取消、`scope` 改下载范围（`new` / `backfill N` / `all`）、`check <创作者>` 单查（`--dry-run` 只看不下载）、`check-all` 全查、`poller` 定时器（裸命令看状态，子命令 `on` / `off` / `set`）
   - 与 `queue` 命令组同源走 HTTP：浏览器实例和定时器轮次都活在服务进程里，CLI 不直连模块；连不上服务给「这个命令需要 DownloadKit 正在运行」+ `--server` 指引，而不是裸 traceback
   - **范围短写只做翻译不做校验**：`new`→`only_new`、`backfill`→`backfill_n`、`all`，真正的合法性由服务端 `validate_scope` 定夺；`backfill` 缺 N / 非 backfill 多给 N / 未知值一律本地拦截不发请求。范围改成 `all` 需确认（`--yes` 跳过），创作者已配 `all` 时 `check` 同样要确认
