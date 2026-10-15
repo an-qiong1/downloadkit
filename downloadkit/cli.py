@@ -2289,6 +2289,295 @@ def settings_proxy_test(proxy, url, as_json):
     sys.exit(0 if ok else 1)
 
 
+# ==================================================================
+# 收藏歌单（P5-7）
+# ==================================================================
+# 同样走 HTTP：歌单缓存在**服务端**的 ~/.downloadkit/collections.db 里，
+# 而且 add / refresh 都会真的去解析歌单（网络 + 各平台适配器），CLI 自己
+# 再实现一遍就是两套解析逻辑，两边对不上时谁也说不清哪个是真的。
+
+
+def _coll_id(raw) -> int:
+    """歌单 ID 必须是整数。
+
+    它直接拼进 /api/collections/{id}，非数字会打到 FastAPI 匹配不上的
+    路径上，回的是 404 Not Found —— 用户会以为「歌单不存在」，其实是自己
+    ID 敲错了，这两种情况得分开说。
+    """
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        raise click.UsageError(f"歌单 ID 必须是整数，收到：{raw}") from None
+
+
+def _coll_api(method: str, path: str, body=None, *, as_json: bool):
+    """这一组专用的请求层：失败打中文（或吐 JSON）后返回 None，**不改退出码**。
+
+    和 _probe_api 唯一的区别是失败后走不走 sys.exit：本组是状态查询与数据
+    管理，「歌单不存在」「歌单解析失败」是业务结果而不是「没做成该做的事」，
+    所以沿用 queue / subscribe / files 的约定——提示完 return，退出码仍是 0；
+    只有用法错误（ID 不是整数、参数缺失）才是 2。和 sniff / bookmarks /
+    proxy-test 那组探测器的「没抓到就 1」不混用。
+    """
+    code, data = _queue_api(method, path, body)
+    if code != 200:
+        if as_json:
+            click.echo(json.dumps(
+                {"error": f"HTTP {code}: {_detail_of(data)}" if code else str(data)},
+                ensure_ascii=False))
+        else:
+            _queue_fail(code, data)
+        return None
+    return data
+
+
+@main.group()
+def collections():
+    """收藏歌单管理（需要 DownloadKit 正在运行，歌单缓存在它那边）。
+
+    \b
+    Examples:
+      downloadkit collections list
+      downloadkit collections add https://music.163.com/#/playlist?id=xxx
+      downloadkit collections show 1
+      downloadkit collections rename 1 我的歌单
+      downloadkit collections refresh 1
+      downloadkit collections rm 1
+    """
+    pass
+
+
+@collections.command("list")
+@click.option("--json", "as_json", is_flag=True,
+              help="服务端原样返回（含 url 等全部字段）")
+def collections_list(as_json):
+    """列出全部收藏歌单（不含缓存曲目，要曲目用 show）。"""
+    if as_json:
+        _quiet_logs(logging.ERROR)
+    rows = _coll_api("GET", "/api/collections", as_json=as_json)
+    if rows is None:
+        return
+    if as_json:
+        click.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+    if not rows:
+        console.print("[dim]还没有收藏歌单。"
+                      "`downloadkit collections add <歌单链接>` 加一个。[/dim]")
+        return
+
+    # URL 不进表格：网易云歌单链接动辄 60+ 字符，塞进去会把名称列挤没，
+    # 而真正要复制给别的命令的是 ID；完整字段 --json 里都有
+    table = Table(title=f"收藏歌单 · 共 {len(rows)} 个")
+    table.add_column("ID", justify="right", no_wrap=True)
+    table.add_column("名称", overflow="fold")
+    table.add_column("平台", no_wrap=True)
+    table.add_column("曲目", justify="right", no_wrap=True)
+    table.add_column("最近刷新", no_wrap=True)
+    for c in rows:
+        table.add_row(
+            str(c.get("id", "-")),
+            escape(str(c.get("name") or "")),
+            escape(str(c.get("platform") or "-")),
+            str(c.get("song_count", 0)),
+            escape(str(c.get("refreshed_at") or c.get("created_at") or "-")),
+        )
+    console.print(table)
+
+
+@collections.command("show")
+@click.argument("id_", metavar="ID")
+@click.option("-n", "--limit", default=0,
+              help="最多显示几首曲目（0 = 全部）")
+@click.option("--json", "as_json", is_flag=True,
+              help="服务端原样返回")
+def collections_show(id_, limit, as_json):
+    """看一个收藏歌单的详情（含缓存的曲目列表）。
+
+    \b
+    Examples:
+      downloadkit collections show 1
+      downloadkit collections show 1 -n 10
+      downloadkit collections show 1 --json | jq '.tracks[].title'
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+    detail = _coll_api("GET", f"/api/collections/{_coll_id(id_)}",
+                       as_json=as_json)
+    if detail is None:
+        return
+    if as_json:
+        click.echo(json.dumps(detail, ensure_ascii=False, indent=2))
+        return
+
+    tracks = detail.get("tracks") if isinstance(detail.get("tracks"), list) else []
+    shown = tracks[:limit] if limit > 0 else tracks
+    # 标题/歌手都可能很长，先算宽度再决定要不要收进省略号
+    table = Table(title=(f"{escape(str(detail.get('name') or ''))} · "
+                         f"{len(tracks)} 首"))
+    table.add_column("#", justify="right", no_wrap=True)
+    table.add_column("标题", overflow="fold")
+    table.add_column("歌手", overflow="fold")
+    table.add_column("专辑", overflow="fold")
+    for i, t in enumerate(shown, 1):
+        table.add_row(
+            str(i),
+            escape(str(t.get("title") or "")),
+            escape(str(t.get("artist") or "")),
+            escape(str(t.get("album") or "")),
+        )
+    console.print(table)
+    if len(shown) < len(tracks):
+        console.print(f"[dim]只显示前 {len(shown)} 首，共 {len(tracks)} 首"
+                      f"（-n 0 看全部）[/dim]")
+
+    # 状态信息放表格下方：它们是给用户看的说明，不是曲目数据
+    console.print(f"[dim]ID {detail.get('id')} · 平台 "
+                  f"{escape(str(detail.get('platform') or '-'))} · "
+                  f"创建 {escape(str(detail.get('created_at') or '-'))} · "
+                  f"最近刷新 {escape(str(detail.get('refreshed_at') or '-'))}"
+                  f"[/dim]")
+    # 歌单链接走 click.echo：m3u8 那次的教训，长地址过 rich 会被折断
+    click.echo(str(detail.get("url") or ""))
+
+
+@collections.command("add")
+@click.argument("url")
+@click.option("-n", "--name", default="",
+              help="自定义名称（留空用歌单本身的名称）")
+@click.option("--json", "as_json", is_flag=True,
+              help="服务端原样返回")
+def collections_add(url, name, as_json):
+    """收藏一个歌单（会真的去解析链接，得等一会儿）。
+
+    \b
+    Examples:
+      downloadkit collections add https://music.163.com/#/playlist?id=xxx
+      downloadkit collections add https://y.qq.com/n/rye/playlist/detail/xxx \\
+        -n 睡前循环
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+    url = (url or "").strip()
+    if not url:
+        raise click.UsageError("没给歌单链接。")
+    data = _coll_api("POST", "/api/collections",
+                     {"url": url, "name": (name or "").strip()},
+                     as_json=as_json)
+    if data is None:
+        return
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    tracks = data.get("tracks") if isinstance(data.get("tracks"), list) else []
+    console.print(f"[bold green]✓[/bold green] 已收藏 "
+                  f"[green]{escape(str(data.get('name') or url))}[/green]"
+                  f"（ID {data.get('id')}，{len(tracks)} 首）")
+
+
+@collections.command("rename")
+@click.argument("id_", metavar="ID")
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True,
+              help="服务端原样返回")
+def collections_rename(id_, name, as_json):
+    """给收藏歌单改名。
+
+    \b
+    Examples:
+      downloadkit collections rename 1 睡前循环
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+    name = (name or "").strip()
+    if not name:
+        raise click.UsageError("新名称不能为空。")
+    data = _coll_api("PUT", f"/api/collections/{_coll_id(id_)}",
+                     {"name": name}, as_json=as_json)
+    if data is None:
+        return
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    console.print(f"[bold green]✓[/bold green] 已改名为 "
+                  f"[green]{escape(str(data.get('name') or name))}[/green]")
+
+
+@collections.command("rm")
+@click.argument("ids", nargs=-1, required=True, metavar="ID...")
+@click.option("--yes", is_flag=True, help="跳过确认")
+def collections_rm(ids, yes):
+    """删除收藏歌单（删之前摊开列出目标并确认，--yes 跳过）。
+
+    缓存的曲目会跟着一起删掉（服务端级联），收藏的歌单本身不受影响。
+
+    \b
+    Examples:
+      downloadkit collections rm 1
+      downloadkit collections rm 1 2 3 --yes
+    """
+    wanted = [_coll_id(x) for x in ids]
+    rows = _coll_api("GET", "/api/collections", as_json=False)
+    if rows is None:
+        return
+    by_id = {int(c["id"]): c for c in rows
+             if str(c.get("id", "")).isdigit()}
+    found = [i for i in dict.fromkeys(wanted) if i in by_id]
+    missing = [i for i in dict.fromkeys(wanted) if i not in by_id]
+
+    # 不存在的先说清楚，别和「删成功了」混在一起
+    for i in missing:
+        console.print(f"[yellow]收藏歌单不存在：{i}[/yellow]")
+    if not found:
+        return
+
+    # 摊开列出要删的东西再问——让人对着一个干巴巴的 ID 确认是逼他记错
+    for i in found:
+        c = by_id[i]
+        console.print(f"  [red]{i}[/red]  {escape(str(c.get('name') or ''))}"
+                      f"  [dim]{escape(str(c.get('url') or ''))}[/dim]")
+    if not _confirm_or_skip(f"确认删除这 {len(found)} 个收藏歌单？", yes):
+        return
+
+    ok = 0
+    for i in found:
+        if _coll_api("DELETE", f"/api/collections/{i}", as_json=False) is not None:
+            ok += 1
+    failed = len(found) - ok
+    console.print(f"[bold green]✓[/bold green] 已删除 {ok} 个"
+                  + (f"[yellow]，失败 {failed} 个[/yellow]" if failed else ""))
+
+
+@collections.command("refresh")
+@click.argument("ids", nargs=-1, required=True, metavar="ID...")
+@click.option("--json", "as_json", is_flag=True,
+              help="服务端原样返回")
+def collections_refresh(ids, as_json):
+    """重新解析歌单并替换缓存的曲目（逐个进行，每个都要走一次网络）。
+
+    刷新会用歌单最新的名字覆盖自动命名的歌单（手动改过名的不动）。
+
+    \b
+    Examples:
+      downloadkit collections refresh 1
+      downloadkit collections refresh 1 2 3
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+    for raw in ids:
+        i = _coll_id(raw)
+        data = _coll_api("POST", f"/api/collections/{i}/refresh",
+                         as_json=as_json)
+        if data is None:
+            continue                      # 这一个失败了，接着刷下一个
+        if as_json:
+            click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+            continue
+        coll = data.get("collection") if isinstance(data.get("collection"), dict) else {}
+        console.print(f"[bold green]✓[/bold green] #{i} "
+                      f"{escape(str(coll.get('name') or ''))}："
+                      f"{escape(str(data.get('message') or '刷新成功'))}")
+
+
 def _fmt_duration(sec) -> str:
     """秒数 → h:mm:ss / m:ss（无法解析返回 '-'）。"""
     try:
