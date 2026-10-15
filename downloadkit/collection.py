@@ -21,15 +21,22 @@ from .playlist import parse_playlist
 
 
 def _run_async(coro):
-    """安全地从同步代码中运行协程，兼容有无正在运行的事件循环两种场景。"""
+    """安全地从同步代码中运行协程，兼容有无正在运行的事件循环两种场景。
+
+    注意 except 的作用域只能罩住 get_running_loop()：如果连 pool.submit
+    一起罩住，工作线程里 asyncio.run 抛出的 RuntimeError 会被当成「没有
+    事件循环」再从主线程调一次 —— 那次必然撞上「cannot be called from a
+    running event loop」，把解析器真正的报错盖得严严实实（DrissionPage
+    一类浏览器驱动很爱抛 RuntimeError，实测踩到过）。
+    """
     try:
         asyncio.get_running_loop()
-        # 已有事件循环 → 在独立线程中运行
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result()
     except RuntimeError:
         # 没有事件循环 → 直接创建
         return asyncio.run(coro)
+    # 已有事件循环 → 在独立线程中运行
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 # ── 数据库路径 ──────────────────────────────────────────
 
@@ -269,9 +276,12 @@ def refresh_collection(collection_id: int) -> Optional[dict]:
     """
     conn = _get_db()
     with _db_lock:
+        # auto_name 必须一起 SELECT 出来：下面要用它决定「刷新时要不要用
+        # 歌单最新名字覆盖」，漏了它 row["auto_name"] 会 IndexError，
+        # 而这个端点此前从来没工作过——每次刷新都是 500
         row = conn.execute(
-            "SELECT id, name, url, platform FROM collections WHERE id = ?",
-            (collection_id,)
+            "SELECT id, name, url, platform, auto_name FROM collections "
+            "WHERE id = ?", (collection_id,)
         ).fetchone()
         if not row:
             return None
