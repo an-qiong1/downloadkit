@@ -121,6 +121,44 @@ try {
     }
 }
 
+# 3g. History endpoints (P5-7b)
+try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/history?limit=5&offset=0" -UseBasicParsing -TimeoutSec 5
+    Write-Host "  GET /api/history : $($r.StatusCode), $([math]::Min($r.Content.Length, 100)) bytes" -ForegroundColor Green
+} catch {
+    Write-Host "  GET /api/history : FAIL: $($_.Exception.Message)" -ForegroundColor Red
+}
+try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/history/count" -UseBasicParsing -TimeoutSec 5
+    Write-Host "  GET /api/history/count : $($r.StatusCode), $($r.Content)" -ForegroundColor Green
+} catch {
+    Write-Host "  GET /api/history/count : FAIL: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+# 3h. Collections endpoints (P5-7)
+try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/collections" -UseBasicParsing -TimeoutSec 5
+    Write-Host "  GET /api/collections : $($r.StatusCode), $([math]::Min($r.Content.Length, 100)) bytes" -ForegroundColor Green
+} catch {
+    Write-Host "  GET /api/collections : FAIL: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+# 3i. Bookmarks probe endpoint (P5-9)
+try {
+    $body = '{"items":[],"urls":[],"l2":false}'
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/bookmarks/probe" `
+        -Method POST -Body $body -ContentType "application/json" -UseBasicParsing -TimeoutSec 5
+    Write-Host "  POST /api/bookmarks/probe (empty) : $($r.StatusCode)" -ForegroundColor Yellow
+} catch {
+    $code = $null
+    try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+    if ($code -eq 400) {
+        Write-Host "  POST /api/bookmarks/probe (empty) : 400 expected (no URLs to probe)" -ForegroundColor Green
+    } else {
+        Write-Host "  POST /api/bookmarks/probe : FAIL($code): $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 # Cleanup
 Write-Host ""
 Write-Host "=== Cleanup ===" -ForegroundColor Cyan
