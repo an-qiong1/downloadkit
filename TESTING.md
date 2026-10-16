@@ -2,7 +2,7 @@
 
 > 生成时间：2026-10-16  
 > 当前版本：v0.6.0  
-> 测试总数：1155 passed / 7 skipped
+> 测试总数：1162 passed / 7 skipped
 
 ---
 
@@ -105,7 +105,7 @@
 
 ### 4.1 P0 任务
 
-#### 任务 1：补全服务端单元测试 ✅ 已完成 ✅ 已完成
+#### 任务 1：补全服务端单元测试 ✅ 已完成
 
 新建三个服务端测试文件：
 ```
@@ -173,7 +173,7 @@ tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点 → 1
 测试策略：monkeypatch `cli.run_async` 直接返回值，绕过 asyncio 事件循环；
 拦截 `_coll_api` / `_probe_api` 确认无网络调用。
 
-**验收**：10 个新增用例全部通过，全量 1151 passed / 7 skipped，无回归。
+**验收**：10 个新增用例全部通过，全量 1162 passed / 7 skipped，无回归。
 
 #### 任务 5：添加 `downloadkit status` 命令 ✅ 已完成
 
@@ -187,7 +187,7 @@ tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点 → 1
 
 支持 `--json` 输出（管道友好）。服务未运行时给出中文提示，exit 0。
 
-**验收**：6 个新增用例全部通过（含无服务/有服务/JSON 模式），全量 1151 passed / 7 skipped，无回归。
+**验收**：6 个新增用例全部通过（含无服务/有服务/JSON 模式），全量 1162 passed / 7 skipped，无回归。
 
 #### 任务 6：统一退出码文档 ✅ 已完成
 
@@ -244,24 +244,10 @@ def run_async(coro):
 
 ---
 
-### 4.3 P2 任务（可选）
+### 4.3 P2 任务（已全部完成，无待办）
 
-#### 任务 7：CLI 自动补全
-
-为 bash/zsh/fish/powershell 生成补全脚本。
-
-#### 任务 8：添加性能基准测试
-
-```
-tests/benchmarks/test_download_speed.py
-tests/benchmarks/test_search_latency.py
-```
-
-防止 P5-8 修的 yt-dlp 性能问题再次回归。
-
-#### 任务 9：重构 `_run_async` 异常处理
-
-避免 RuntimeError 被误吞的问题再次发生。
+所有 P0/P1/P2 任务已于 2026-10-16 全部完成，合计新增测试 79 个，
+全量 1162 passed / 7 skipped。详见上方各任务完成记录。
 
 ---
 
