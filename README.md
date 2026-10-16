@@ -186,7 +186,7 @@ server.py                 # Web 后端（FastAPI，64 条路由）
 run.py                    # 桌面启动（WebView2 窗口 + 托盘 + 单实例）
 backend/  frontend/       # NAS 多容器版（FastAPI+Celery+Redis / React+AntD）
 build/                    # 打包与验收脚本（build-release.ps1、test-exe-*）
-tests/                    # 测试用例（1006 passed / 6 skipped）
+tests/                    # 测试用例（1047 passed / 6 skipped）
 docs/                     # 使用说明（图文）、验证与优化报告
 PLAN.md                   # 当前开发计划与进度（交接文档）
 ARCHITECTURE.md           # 架构与三套部署形态判别
