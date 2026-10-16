@@ -26,9 +26,13 @@ logger = logging.getLogger(__name__)
 _partial_source: dict[str, str] = {}
 
 
-async def download_song(song: SongInfo, progress=None, task_id: str = None) -> Path | None:
+async def download_song(song: SongInfo, progress=None, task_id: str = None, output_dir: str | None = None) -> Path | None:
     filename = sanitize_filename(f"{song.title} - {song.artist}")
-    download_dir = get_download_subdir('music')
+    if output_dir:
+        download_dir = Path(output_dir)
+        download_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        download_dir = get_download_subdir('music')
     filepath = download_dir / f"{filename}.mp3"
 
     # 检查取消/暂停状态

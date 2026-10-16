@@ -18,6 +18,7 @@
   - `tests/test_collection_refresh.py` 11 例：刷新成功、清空旧曲目再插新的、`song_count` 同步、`auto_name` 开/关对名字的处理、解析失败保留旧缓存、`_run_async` 三种异常路径
 - **离线实测手法**：替身只挂 `downloadkit.collection.parse_playlist` 一个点，于是真 FastAPI 路由、真 URL 去重、真 SQLite 写入、真曲目缓存、真刷新逻辑全照跑，只有网络解析是假的；改替身读的 JSON 就能让 refresh 真的把曲目数改掉。`tests/test_cli_collections.py` 50 例；离线实测 64/64（建/删/改名/刷新都直接读 `collections.db` 对账，含级联删曲目、刷新前后用不同数据以证明替换是真的），全量 1006 passed
 - **CLI 下载历史命令 `history`**（P5-7b；此前历史只能看界面）：**先补服务端 5 个端点**——`GET /api/history?limit=&offset=` 列表、`POST /api/history/search?keyword=` 搜索（query 参数）、`DELETE /api/history/{id}` 删单条、`POST /api/history/clear` 清空、`GET /api/history/count` 计数；CLI 暴露 `list [-n] [-o]`、`search <关键词> [-n]`、`rm <ID...>`、`clear`、`count`；退出码沿用「状态查询」组的 0；两个坑：search 端点是 query 参数不是 JSON body、rm 判断 ID 存在性要 GET list 不能靠 count；`tests/test_cli_history.py` 29 例；离线实测 29/29
+- **P5-8 收尾**：`download` / `playlist` 命令补 `-o/--output` 输出目录选项，`downloader.download_song` 同步支持 `output_dir` 参数；全命令 `--help` 中文化（search/download/playlist/douyin 等命令此前混有大量英文 docstring 和提示文案）；新增 `tests/test_cli_music.py` 12 例覆盖 search（选曲/空结果/退出）、download（URL 校验/-o 传递）、playlist（下载/取消/空歌单），底层异步函数用协程替身替换不发起真实网络请求
 - **CLI 设置命令 `settings`**（P5-6；此前改配置只能在界面里点）：`get [键]` 看配置（不给键全量列出、给键只回值，`--json` 原样返回含系统代理探测）、`set <key> <值>` 改配置、`proxy-test [代理地址] [--url 目标]` 测代理或直连通不通（不给地址就是测直连）
   - 「Cookie 路径设置」= `cookie.douyin_path` / `cookie.bilibili_path`，由通用 `set` 覆盖，不单独开命令
   - 走 HTTP：配置文件在**服务进程**的 HOME 下，CLI 自己写会写到另一份配置里；而且有些项保存后是服务进程当场改内存的（`history_max_records` 保存时就 `update_max_records`），直连模块只会弄出「文件改了、内存还是老值」的分裂

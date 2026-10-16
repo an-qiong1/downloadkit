@@ -374,3 +374,4 @@ MIT License
 - ✨ CLI 新增队列 `queue`（P5-2）、订阅 `subscribe`（P5-3）、文件管理 `files`（P5-4）、资源嗅探与书签导入 `sniff` / `bookmarks`（P5-5）、设置 `settings`（P5-6）、收藏歌单 `collections`（P5-7）——此前这些只能在界面里做，现在 CLI 也能管
 - 🐛 歌单收藏模块修两个真 bug（P5-7 实测挖出）：`refresh_collection` 的 SELECT 少了 `auto_name` → 必挂 IndexError，**`POST /api/collections/{id}/refresh` 从来就没工作过**；`_run_async` 把解析器的 RuntimeError 换成 `asyncio.run() cannot be called from a running event loop`，DrissionPage 一抛错用户看到的全是驴唇不对马嘴的报错
 - ✨ 历史 `history` 部分已完成：先补服务端 5 个 `/api/history/*` 端点，再补 CLI `list/search/rm/clear/count`（P5-7b）
+- ✨ P5-8 收尾：`download` / `playlist` 命令补 `-o/--output`；全命令 `--help` 中文化；新增 `test_cli_music.py` 12 例

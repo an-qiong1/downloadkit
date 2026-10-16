@@ -317,7 +317,11 @@
     - **退出码沿用「状态查询」组的 0**：和 queue / subscribe / collections 一致
     - 两个坑：① **search 端点用 query 参数传 keyword，不是 JSON body**——服务端 `async def api_history_search(keyword: str)` 是 FastAPI query param，CLI 必须拼 `?keyword=xxx`；② **rm 判断 ID 是否存在的正确做法是 GET list 看实际 ID 集合**，不能用 `count` 做范围推断（count 只知总数不知具体 ID，ID 可以不连续）
     - `tests/test_cli_history.py` 29 例；离线实测 29/29（真起服务、服务端预置记录、真删真清空真搜索），1035 passed
-- [ ] **P5-8 收尾**：`download` 命令补 `-o`、全命令 `--help` 中文化与 docstring 核对（不许再有「谎称支持」）、CLI 测试补齐、EXE 打包后 CLI 入口验证
+- [x] **P5-8 收尾**（2026-10-16 完成）
+  - `download` 命令补 `-o/--output`（输出目录），同步修 `downloader.download_song` 支持 `output_dir` 参数；`playlist` 命令同样补 `-o`
+  - 全命令 `--help` 中文化：search / download / playlist / douyin 的 docstring、选项 help、控制台提示文案全部改成中文（此前混有大量英文如 "Search songs across multiple platforms"、"Downloading"、"Done!" 等）；`_download_selected` 增加 `output_dir` 参数并正确显示保存路径
+  - CLI 测试补齐：新增 `tests/test_cli_music.py` 12 例，覆盖 search（选曲/空结果/退出）、download（URL 校验/-o 传递）、playlist（下载/取消/空歌单），底层异步函数用协程替身替换，不发起真实网络请求
+  - 全量 pytest：**1047 passed / 6 skipped**
 
 **P5 验收（每步固定）**：`pytest tests -q` 全量通过 → CLI 实测（能离线就离线，涉及抖音注意短链限流约 1 分钟 1-2 次）→ 改动文件 UTF-8 校验 `U+FFFD` 计数 0 → 分次提交（中文提交信息走 `-F` 文件）。
 

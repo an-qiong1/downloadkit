@@ -37,7 +37,7 @@ from .searcher import search_all
 from .playlist import parse_playlist
 from .downloader import download_song, download_batch
 from .bookmarks import flatten_bookmarks
-from .utils import DEFAULT_CONFIG
+from .utils import DEFAULT_CONFIG, get_download_subdir
 from .douyin import fetch as douyin_fetch, fetch_content, parse_url, download_content, ContentType
 
 console = Console()
@@ -91,19 +91,19 @@ def main(verbose: bool, server: str | None):
 
 @main.command()
 @click.argument("keyword")
-@click.option("-n", "--count", default=20, show_default=True, help="Number of results")
-@click.option("-s", "--select", "sel", type=str, default=None, help="Select by number (e.g. 16 or 1,3,5 or 1-3)")
+@click.option("-n", "--count", default=20, show_default=True, help="返回条数（默认 20）")
+@click.option("-s", "--select", "sel", type=str, default=None, help="直接选曲：如 16 或 1,3,5 或 1-3，不交互")
 def search(keyword: str, count: int, sel: str):
-    """Search songs across multiple platforms."""
-    console.print(f"[bold]Searching:[/bold] [cyan]{keyword}[/cyan]")
+    """跨平台搜索歌曲（网易云 / QQ 音乐等）并选曲下载。"""
+    console.print(f"[bold]搜索中:[/bold] [cyan]{keyword}[/cyan]")
 
     songs = run_async(search_all(keyword, limit=count))
 
     if not songs:
-        console.print("[red]No songs found.[/red]")
+        console.print("[red]未找到歌曲。[/red]")
         return
 
-    table = Table(title=f"Results: {keyword}", show_header=True, header_style="bold magenta")
+    table = Table(title=f"搜索结果 · {keyword}", show_header=True, header_style="bold magenta")
     table.add_column("#", style="dim", width=4)
     table.add_column("Title", style="cyan", width=30)
     table.add_column("Artist", style="green", width=20)
@@ -125,7 +125,7 @@ def search(keyword: str, count: int, sel: str):
         selected = _parse_selection(sel, songs)
     else:
         choice = click.prompt(
-            "Enter number(s) to download (comma-separated, a=all, q=quit)",
+            "输入编号下载（逗号分隔，a=全部，q=退出）",
             default="q",
             show_default=False,
         )
@@ -134,17 +134,19 @@ def search(keyword: str, count: int, sel: str):
         selected = _parse_selection(choice, songs)
 
     if not selected:
-        console.print("[yellow]No songs selected.[/yellow]")
+        console.print("[yellow]没有选中歌曲。[/yellow]")
         return
 
-    _download_selected(selected)
+    _download_selected(selected, output_dir=None)
 
 
 @main.command()
 @click.argument("url")
-def playlist(url: str):
-    """Import a playlist and batch download (QQ Music / NetEase)."""
-    with console.status("[bold]Parsing playlist...[/bold]"):
+@click.option("-o", "--output", default=None,
+              help="输出根目录（不指定则用设置里的音乐下载目录）")
+def playlist(url: str, output: str | None):
+    """导入歌单并批量下载（QQ 音乐 / 网易云）。"""
+    with console.status("[bold]解析歌单中...[/bold]"):
         try:
             pl = run_async(parse_playlist(url))
         except ValueError as e:
@@ -155,17 +157,17 @@ def playlist(url: str):
         f"[bold cyan]{pl.name}[/bold cyan]\n"
         f"Platform: {pl.platform}  |  Tracks: {pl.song_count}\n"
         f"{pl.description[:100] if pl.description else ''}",
-        title="Playlist Info",
+        title="歌单信息",
     ))
 
     if not pl.songs:
-        console.print("[yellow]Playlist is empty.[/yellow]")
+        console.print("[yellow]歌单为空。[/yellow]")
         return
 
-    if not click.confirm("Download all songs?"):
+    if not click.confirm("下载全部歌曲？"):
         return
 
-    console.print(f"\n[bold]Downloading {len(pl.songs)} songs...[/bold]\n")
+    console.print(f"\n[bold]正在下载 {len(pl.songs)} 首歌曲...[/bold]\n")
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -174,28 +176,30 @@ def playlist(url: str):
         TextColumn("*"),
         TextColumn("{task.completed}/{task.total}"),
     ) as progress:
-        overall = progress.add_task("[cyan]Overall", total=len(pl.songs))
+        overall = progress.add_task("[cyan]总体进度", total=len(pl.songs))
         success, failed = 0, 0
         for i, song in enumerate(pl.songs):
             task = progress.add_task(f"[dim]{song.title[:30]}", total=100)
-            result = run_async(download_song(song, progress=None))
+            result = run_async(download_song(song, progress=None, output_dir=output))
             progress.update(task, completed=100, visible=False)
             progress.update(overall, advance=1,
-                          description=f"[cyan]Overall ({i+1}/{len(pl.songs)})")
+                          description=f"[cyan]总体进度 ({i+1}/{len(pl.songs)})")
             if result:
                 success += 1
             else:
                 failed += 1
 
-    console.print(f"\n[bold green]Done![/bold green] Success [green]{success}[/green], Failed [red]{failed}[/red]")
+    console.print(f"\n[bold green]完成！[/bold green] 成功 [green]{success}[/green] 首，失败 [red]{failed}[/red] 首")
 
 
 @main.command()
 @click.argument("identifier")
-def download(identifier: str):
-    """Download a song directly by URL or ID."""
+@click.option("-o", "--output", default=None,
+              help="输出目录（不指定则用设置里的音乐下载目录）")
+def download(identifier: str, output: str | None):
+    """按链接或 ID 直接下载一首歌。"""
     if "://" not in identifier:
-        console.print("[yellow]Please provide a song link or use the search command.[/yellow]")
+        console.print("[yellow]请提供歌曲链接，或使用 search 命令搜索。[/yellow]")
         return
 
     from .playlist import parse_playlist
@@ -204,19 +208,19 @@ def download(identifier: str):
         if len(pl.songs) == 1:
             song = pl.songs[0]
         else:
-            console.print(f"[yellow]This is a playlist ({len(pl.songs)} tracks), use the playlist command.[/yellow]")
+            console.print(f"[yellow]这是歌单（{len(pl.songs)} 首），请用 playlist 命令。[/yellow]")
             return
     except Exception:
-        console.print("[red]Unable to parse this link.[/red]")
+        console.print("[red]无法解析该链接。[/red]")
         return
 
-    console.print(f"[bold]Downloading:[/bold] {song.title} - {song.artist}")
-    with console.status("[bold]Downloading..."):
-        result = run_async(download_song(song))
+    console.print(f"[bold]正在下载:[/bold] {song.title} - {song.artist}")
+    with console.status("[bold]下载中..."):
+        result = run_async(download_song(song, progress=None, output_dir=output))
     if result:
-        console.print(f"[green]Saved to:[/green] {result}")
+        console.print(f"[green]已保存到:[/green] {result}")
     else:
-        console.print("[red]Download failed[/red]")
+        console.print("[red]下载失败[/red]")
 
 
 @main.command()
@@ -270,13 +274,13 @@ def douyin(input_text: str, output: str | None):
         path = paths[0]
         size = path.stat().st_size
         human = f"{size / 1048576:.1f} MB" if size > 1048576 else f"{size / 1024:.1f} KB"
-        console.print(f"\n[bold green]Done![/bold green] Saved to [green]{path}[/green] ({human})")
+        console.print(f"\n[bold green]完成！[/bold green] 已保存到 [green]{path}[/green] ({human})")
     else:
         total_size = sum(p.stat().st_size for p in paths)
         human = f"{total_size / 1048576:.1f} MB" if total_size > 1048576 else f"{total_size / 1024:.1f} KB"
         # output 可能是 None（未指定 -o），此时用产物实际所在目录
         dest = output if output else str(Path(paths[0]).parent)
-        console.print(f"\n[bold green]Done![/bold green] Saved {len(paths)} files to [green]{dest}[/green] ({human})")
+        console.print(f"\n[bold green]完成！[/bold green] 已保存 {len(paths)} 个文件到 [green]{dest}[/green] ({human})")
         for i, p in enumerate(paths, 1):
             size = p.stat().st_size
             s = f"{size / 1024:.1f} KB" if size < 1048576 else f"{size / 1048576:.1f} MB"
@@ -2956,18 +2960,18 @@ def _parse_selection(choice: str, songs: list) -> list:
     return selected
 
 
-def _download_selected(selected: list):
-    console.print(f"\n[bold]Downloading [cyan]{len(selected)}[/cyan] songs...[/bold]\n")
+def _download_selected(selected: list, output_dir: str | None = None):
+    console.print(f"\n[bold]正在下载 [cyan]{len(selected)}[/cyan] 首歌曲...[/bold]\n")
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
     ) as progress:
-        overall = progress.add_task("[cyan]Overall", total=len(selected))
+        overall = progress.add_task("[cyan]总体进度", total=len(selected))
         success, failed = 0, 0
         for song in selected:
             task = progress.add_task(f"[dim]{song.title[:30]}", total=100)
-            result = run_async(download_song(song, progress=None))
+            result = run_async(download_song(song, progress=None, output_dir=output_dir))
             progress.update(task, completed=100, visible=False)
             progress.update(overall, advance=1)
             if result:
@@ -2975,8 +2979,9 @@ def _download_selected(selected: list):
             else:
                 failed += 1
 
-    console.print(f"\n[bold green]Done![/bold green] Success [green]{success}[/green], Failed [red]{failed}[/red]")
-    console.print(f"Files saved in: [dim]./downloads/[/dim]")
+    console.print(f"\n[bold green]完成！[/bold green] 成功 [green]{success}[/green] 首，失败 [red]{failed}[/red] 首")
+    dest = output_dir or str(get_download_subdir('music'))
+    console.print(f"文件保存在：[dim]{dest}[/dim]")
 
 
 if __name__ == "__main__":
