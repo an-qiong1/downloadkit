@@ -2,7 +2,7 @@
 
 > 生成时间：2026-10-16  
 > 当前版本：v0.6.0  
-> 测试总数：1098 passed / 7 skipped
+> 测试总数：1119 passed / 7 skipped
 
 ---
 
@@ -12,10 +12,10 @@
 
 | 类型 | 数量 | 说明 |
 |------|------|------|
-| 单元测试 | ~590+ | pytest 用例（含 3 个新服务端测试文件） |
+| 单元测试 | ~610+ | pytest 用例（含 3 个新服务端测试文件 + douyin CLI 测试） |
 | 离线 E2E | ~150+ | 起真实服务 + 替身 |
 | EXE 冒烟 | 10 项 | 打包后接口验证 |
-| **总计** | **~750 项** | — |
+| **总计** | **~771 项** | — |
 
 ### 1.2 命令组覆盖情况
 
@@ -24,7 +24,7 @@
 | `search` | ✅ 5 例 | ❌ | ❌ | 基本覆盖 |
 | `download` | ✅ 3 例 | ❌ | ❌ | 基本覆盖 |
 | `playlist` | ✅ 3 例 | ❌ | ❌ | 基本覆盖 |
-| `douyin` | ❌ | ✅ | ❌ | **缺 CLI 测试** |
+| `douyin` | ✅ 21 例 | ✅ | ❌ | **覆盖良好** |
 | `parse` | ✅ 43 例 | ✅ 30 例 | ❌ | 覆盖良好 |
 | `video` | ✅ 43 例 | ✅ 30 例 | ❌ | 覆盖良好 |
 | `queue` | ✅ 24 例 | ✅ 22 例 | ❌ | 覆盖良好 |
@@ -105,7 +105,7 @@
 
 ### 4.1 P0 任务
 
-#### 任务 1：补全服务端单元测试 ✅ 已完成
+#### 任务 1：补全服务端单元测试 ✅ 已完成 ✅ 已完成
 
 新建三个服务端测试文件：
 ```
@@ -123,12 +123,24 @@ tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点 → 1
 
 **验收**：43 个新增用例全部通过，全量 1098 passed / 7 skipped，无回归。
 
-#### 任务 2：补全 douyin CLI 测试
+#### 任务 2：补全 douyin CLI 测试 ✅ 已完成
 
-创建 `tests/test_cli_douyin.py`，覆盖：
-- 参数校验（URL 格式、输出目录）
-- 输出格式（JSON、表格）
-- 异常处理（无链接、解析失败）
+新建 `tests/test_cli_douyin.py`（21 用例），覆盖：
+
+- `parse_url`：有效 URL（完整/短链/分享文本）→ 提取正确；非法输入 → None
+- CLI `douyin` 命令：
+  - 无链接 → 打印中文提示，exit 0
+  - fetch_content 抛 ValueError → 打印错误，exit 0
+  - download_content 抛 ValueError → 打印下载失败，exit 0
+  - 视频 / 图文 / 动图 三种内容类型的输出文案
+  - `-o` 输出目录正确传给 download_content
+  - 多图多文件时总大小和各文件明细
+  - `--help` 列出所有选项
+
+测试策略：monkeypatch `cli.fetch_content` / `cli.download_content` / `cli.parse_url`，
+不启动服务，不连网络。
+
+**验收**：21 个新增用例全部通过，全量 1119 passed / 7 skipped，无回归。
 
 #### 任务 3：增加集成测试
 
