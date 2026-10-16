@@ -2,7 +2,7 @@
 
 > 生成时间：2026-10-16  
 > 当前版本：v0.6.0  
-> 测试总数：1056 passed / 6 skipped
+> 测试总数：1098 passed / 7 skipped
 
 ---
 
@@ -12,10 +12,10 @@
 
 | 类型 | 数量 | 说明 |
 |------|------|------|
-| 单元测试 | ~550+ | pytest 用例 |
+| 单元测试 | ~590+ | pytest 用例（含 3 个新服务端测试文件） |
 | 离线 E2E | ~150+ | 起真实服务 + 替身 |
 | EXE 冒烟 | 10 项 | 打包后接口验证 |
-| **总计** | **~716 项** | — |
+| **总计** | **~750 项** | — |
 
 ### 1.2 命令组覆盖情况
 
@@ -32,10 +32,10 @@
 | `files` | ✅ 60 例 | ✅ 49 例 | ❌ | 覆盖良好 |
 | `sniff` | ✅ 55 例 | ✅ 56 例 | ❌ | 覆盖良好 |
 | `bookmarks import` | ✅ 部分 | ✅ | ❌ | 部分覆盖 |
-| `bookmarks probe` | ✅ 9 例 | ❌ | ❌ | **缺 E2E** |
+| `bookmarks probe` | ✅ 9 例 | ❌ | ✅ 10 例 | **覆盖良好** |
 | `settings` | ✅ 65 例 | ✅ 67 例 | ❌ | 覆盖良好 |
-| `collections` | ✅ 50 例 | ✅ 64 例 | ❌ | **缺服务端测试** |
-| `history` | ✅ 29 例 | ✅ 29 例 | ❌ | **缺服务端测试** |
+| `collections` | ✅ 50 例 | ✅ 64 例 | ✅ 13 例 | **覆盖良好** |
+| `history` | ✅ 29 例 | ✅ 29 例 | ✅ 15 例 | **覆盖良好** |
 
 ---
 
@@ -55,19 +55,19 @@
 | `/api/sniff` | test_cli_sniff.py | ✅ |
 | `/api/open-file` | test_open_file.py | ✅ |
 | `/api/open-dir` | test-exe.ps1 | ✅ |
+| `/api/history/*` | test_server_history.py | ✅ **新增** |
+| `/api/collections/*` | test_server_collections.py | ✅ **新增** |
+| `/api/bookmarks/probe/*` | test_server_bookmarks_probe.py | ✅ **新增** |
 
 ### 2.2 缺少服务端测试的端点
 
 | 端点 | 数量 | 建议优先级 |
 |------|------|-----------|
-| `/api/history/*` | 5 个 | **P0** - P5-7b 新增 |
-| `/api/collections/*` | 6 个 | **P0** - P5-7 新增 |
-| `/api/bookmarks/probe/*` | 3 个 | **P0** - P5-9 新增 |
 | `/api/cookies/*` | 3 个 | P1 |
 | `/api/video/episodes` | 1 个 | P2 |
 | `/api/debug/*` | 1 个 | P3 - 调试用 |
 
-**合计：18 个端点缺少服务端单元测试**
+**合计：5 个端点缺少服务端单元测试**（原 18 个，本次补 13 个）
 
 ---
 
@@ -85,8 +85,8 @@
 | `downloadkit/bookmarks.py` | test_bookmarks.py | 书签解析 |
 | `downloadkit/sniffer.py` | test_sniffer.py | 嗅探引擎 |
 | `downloadkit/episodes.py` | test_episodes.py | 选集展开 |
-| `downloadkit/history.py` | test_cli_history.py | 下载历史（缺服务端测试） |
-| `downloadkit/collection.py` | test_collection_refresh.py | 收藏歌单（缺服务端测试） |
+| `downloadkit/history.py` | test_cli_history.py + test_server_history.py | 下载历史 ✅ |
+| `downloadkit/collection.py` | test_collection_refresh.py + test_server_collections.py | 收藏歌单 ✅ |
 
 ### 3.2 缺少测试的模块
 
@@ -101,24 +101,27 @@
 
 ---
 
-## 四、建议的下个版本开发任务
+## 四、任务完成状态
 
-### 4.1 P0 任务（必须完成）
+### 4.1 P0 任务
 
-#### 任务 1：补全服务端单元测试
+#### 任务 1：补全服务端单元测试 ✅ 已完成
 
-创建以下测试文件：
+新建三个服务端测试文件：
 ```
-tests/test_server_history.py      # /api/history/* 5 个端点
-tests/test_server_collections.py  # /api/collections/* 6 个端点
-tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点
+tests/test_server_history.py      # /api/history/* 5 个端点 → 15 用例
+tests/test_server_collections.py  # /api/collections/* 6 个端点 → 13 用例
+tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点 → 15 用例
 ```
 
 每个文件覆盖：
 - 正常路径（200）
 - 参数校验（400）
 - 不存在资源（404）
-- 并发安全（如果有状态）
+- 路由顺序不冲突（防参数路由吃掉静态路由）
+- 边界：空数据、重复、非法输入
+
+**验收**：43 个新增用例全部通过，全量 1098 passed / 7 skipped，无回归。
 
 #### 任务 2：补全 douyin CLI 测试
 
