@@ -51,21 +51,35 @@ pytest -q
 downloadkit/
 ├── downloadkit/              # 主包
 │   ├── __init__.py          # 包初始化
-│   ├── cli.py               # CLI入口
-│   ├── server.py            # Web后端
+│   ├── cli.py               # CLI 入口（click + rich）
+│   ├── server.py            # Web 后端（FastAPI，64 条路由）
 │   ├── searcher.py          # 聚合搜索
 │   ├── downloader.py        # 下载引擎
+│   ├── video_service.py     # 视频平台分发共享层（server 与 CLI 共用）
 │   ├── playlist.py          # 歌单解析
+│   ├── collection.py        # 收藏歌单（SQLite 持久化）
 │   ├── download_queue.py    # 下载队列
-│   ├── history.py           # 下载历史
-│   ├── motion_photo.py      # 实况照片
+│   ├── subscription.py      # 创作者订阅数据模型
+│   ├── subscription_service.py  # 订阅业务（预览、单查、补下）
+│   ├── poller.py            # 定时检查（间隔/每天时刻 + 抖动 + 退避）
+│   ├── history.py           # 下载历史（SQLite）
+│   ├── bookmarks.py         # 书签导入与解析
+│   ├── sniffer.py           # 资源嗅探（L2 深度抓取）
+│   ├── episodes.py          # 播放页选集展开
+│   ├── stream_filter.py     # 选流过滤
+│   ├── tagger.py            # 音频标签写入
+│   ├── enricher.py          # 元数据补充
+│   ├── motion_photo.py      # 实况照片生成
+│   ├── file_manager.py      # 路径安全
+│   ├── proxy.py             # 代理三态与平台覆盖
+│   ├── browser_cookie.py    # 浏览器 Cookie
+│   ├── exceptions.py        # 自定义异常
 │   ├── utils.py             # 工具函数
 │   ├── logger.py            # 日志配置
-│   ├── file_manager.py      # 文件安全
-│   ├── proxy.py             # 代理配置
-│   ├── browser_cookie.py    # 浏览器Cookie
-│   ├── exceptions.py        # 自定义异常
-│   ├── platforms/           # 平台适配
+│   ├── douyin.py            # 抖音解析（API / 浏览器 / 图文 / 实况）
+│   ├── douyin_browser.py    # 抖音浏览器后端（扫码登录、订阅抓取）
+│   ├── douyin_third_party.py  # 抖音第三方解析
+│   ├── platforms/           # 音乐平台适配
 │   │   ├── __init__.py
 │   │   ├── base.py
 │   │   ├── netease.py
@@ -73,16 +87,30 @@ downloadkit/
 │   │   ├── itzo.py
 │   │   ├── gequbao.py
 │   │   └── migu.py
-│   └── static/              # Web前端
+│   ├── bilibili.py / youtube.py / xiaohongshu.py / generic_video.py  # 视频平台
+│   └── static/              # Web 前端（手写 HTML/CSS/JS，主线用）
 │       ├── index.html
 │       ├── css/
 │       ├── js/
 │       └── vendor/
-├── tests/                   # 测试用例
+├── tests/                   # 测试用例（1006 passed / 6 skipped）
+├── docs/                    # 使用说明、验证与优化报告
+├── build/                   # 打包与验收脚本（build-release.ps1、test-exe-*）
+├── backend/ frontend/       # NAS 多容器版（FastAPI+Celery+Redis / React+AntD）
 ├── run.py                   # 启动脚本
+├── server.py                # 桌面版 Web 后端入口
 ├── pyproject.toml           # 项目配置
+├── docker-compose.yml       # 单容器 Docker
+├── docker-compose.prod.yml  # 生产 Docker
+├── docker-compose.nas.yml   # NAS 多容器 Docker
+├── Dockerfile               # 容器镜像
+├── music-dl.cmd             # Windows 快捷启动
+├── start.bat                # Windows 启动脚本
+├── check_types.py           # 类型检查脚本
+├── PLAN.md                  # 当前开发计划与进度（交接文档）
+├── PLAN-资源嗅探批量下载.md  # 资源嗅探专项计划
 ├── README.md                # 项目说明
-├── ARCHITECTURE.md          # 架构文档
+├── ARCHITECTURE.md          # 架构与三套部署形态判别
 ├── CHANGELOG.md             # 更新日志
 └── DEVELOPMENT.md           # 开发指南
 ```
