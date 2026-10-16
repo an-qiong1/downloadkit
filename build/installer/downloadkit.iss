@@ -1,6 +1,6 @@
 [Setup]
 AppName=downloadkit
-AppVersion=0.5.0
+AppVersion=0.6.0
 AppPublisher=downloadkit
 AppPublisherURL=https://github.com/an-qiong1/downloadkit
 DefaultDirName={localappdata}\Programs\downloadkit

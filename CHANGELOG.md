@@ -5,7 +5,7 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.6.0] - 2026-10-16
 
 ### 新增
 - **CLI 收藏歌单命令 `collections`**（P5-7；此前收藏只能在界面里操作）：`list` 列全部歌单、`show <ID>` 看详情与缓存曲目（`-n` 截断）、`add <链接>` 收藏（`-n` 自定义名称）、`rename <ID> <名>` 改名、`rm <ID...>` 删除（摊开列出目标并确认，`--yes` 跳过）、`refresh <ID...>` 重新解析并替换缓存曲目
