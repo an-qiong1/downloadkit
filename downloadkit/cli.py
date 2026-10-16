@@ -144,7 +144,9 @@ def search(keyword: str, count: int, sel: str):
 @click.argument("url")
 @click.option("-o", "--output", default=None,
               help="输出根目录（不指定则用设置里的音乐下载目录）")
-def playlist(url: str, output: str | None):
+@click.option("--dry-run", is_flag=True,
+              help="只预览歌单内容，不实际下载")
+def playlist(url: str, output: str | None, dry_run: bool):
     """导入歌单并批量下载（QQ 音乐 / 网易云）。"""
     with console.status("[bold]解析歌单中...[/bold]"):
         try:
@@ -162,6 +164,12 @@ def playlist(url: str, output: str | None):
 
     if not pl.songs:
         console.print("[yellow]歌单为空。[/yellow]")
+        return
+
+    if dry_run:
+        console.print(f"\n[dark_orange]·dry-run：共 {len(pl.songs)} 首，以下曲目将被下载：[/dark_orange]")
+        for i, song in enumerate(pl.songs, 1):
+            console.print(f"  {i}. [cyan]{song.title}[/cyan] — [dim]{song.artist}[/dim]")
         return
 
     if not click.confirm("下载全部歌曲？"):
@@ -196,7 +204,9 @@ def playlist(url: str, output: str | None):
 @click.argument("identifier")
 @click.option("-o", "--output", default=None,
               help="输出目录（不指定则用设置里的音乐下载目录）")
-def download(identifier: str, output: str | None):
+@click.option("--dry-run", is_flag=True,
+              help="只预览歌曲信息，不实际下载")
+def download(identifier: str, output: str | None, dry_run: bool):
     """按链接或 ID 直接下载一首歌。"""
     if "://" not in identifier:
         console.print("[yellow]请提供歌曲链接，或使用 search 命令搜索。[/yellow]")
@@ -215,6 +225,9 @@ def download(identifier: str, output: str | None):
         return
 
     console.print(f"[bold]正在下载:[/bold] {song.title} - {song.artist}")
+    if dry_run:
+        console.print(f"[dim]·dry-run：跳过下载，仅预览「{song.title} - {song.artist}」[/dim]")
+        return
     with console.status("[bold]下载中..."):
         result = run_async(download_song(song, progress=None, output_dir=output))
     if result:
@@ -2019,7 +2032,9 @@ def bookmarks_import(file: str, as_urls: bool, limit: int, as_json: bool):
               help="最多显示几条命中结果（0 = 全部）")
 @click.option("--json", "as_json", is_flag=True,
               help="服务端原样返回（与 --urls 同给时以 --json 为准）")
-def bookmarks_probe(file, l2, as_urls, limit, as_json):
+@click.option("--dry-run", is_flag=True,
+              help="只列出要探测的链接，不实际启动探测")
+def bookmarks_probe(file, l2, as_urls, limit, as_json, dry_run):
     """从书签 HTML 提取链接并批量探测可用流（需要 DownloadKit 正在运行）。
 
     每个链接走三层降级：L0 直链判定（ms 级）→ L1 静态深挖（并发 4，3s/条）→
@@ -2031,8 +2046,9 @@ def bookmarks_probe(file, l2, as_urls, limit, as_json):
       downloadkit bookmarks probe bookmarks.html --urls
       downloadkit bookmarks probe bookmarks.html --json | jq '.results[]'
       downloadkit bookmarks probe bookmarks.html --no-l2   # 只跑 L0/L1
+      downloadkit bookmarks probe bookmarks.html --dry-run # 只看链接
     """
-    if as_json:
+    if as_json or dry_run:
         _quiet_logs(logging.ERROR)
 
     try:
@@ -2058,6 +2074,20 @@ def bookmarks_probe(file, l2, as_urls, limit, as_json):
     items = [item for item in items if is_http_url((item.get("url") or "").strip())]
     if not items:
         console.print("[yellow]书签里没有可探测的 HTTP 链接[/yellow]")
+        return
+
+    if dry_run:
+        if as_json:
+            click.echo(json.dumps(
+                {"dry_run": True, "total": len(items),
+                 "urls": [it["url"] for it in items]},
+                ensure_ascii=False, indent=2))
+            return
+        console.print(f"[dim]·dry-run：共 {len(items)} 条链接，不启动探测：[/dim]")
+        for it in items:
+            title = escape(str(it.get("title") or ""))
+            url = escape(it["url"])
+            console.print(f"  {url}" + (f"  [{title}]" if title else ""))
         return
 
     # 构建请求体：title 作为命名提示传过去
@@ -2627,7 +2657,9 @@ def collections_show(id_, limit, as_json):
               help="自定义名称（留空用歌单本身的名称）")
 @click.option("--json", "as_json", is_flag=True,
               help="服务端原样返回")
-def collections_add(url, name, as_json):
+@click.option("--dry-run", is_flag=True,
+              help="只预览歌单信息，不实际收藏")
+def collections_add(url, name, as_json, dry_run):
     """收藏一个歌单（会真的去解析链接，得等一会儿）。
 
     \b
@@ -2636,11 +2668,37 @@ def collections_add(url, name, as_json):
       downloadkit collections add https://y.qq.com/n/rye/playlist/detail/xxx \\
         -n 睡前循环
     """
-    if as_json:
+    if as_json or dry_run:
         _quiet_logs(logging.ERROR)
     url = (url or "").strip()
     if not url:
         raise click.UsageError("没给歌单链接。")
+
+    # dry-run：调 /api/collections 先拿解析结果，但不 POST 写入
+    if dry_run:
+        # 用 list 端点验证链接可解析不可行；直接试一次 POST 取 detail
+        # 但 POST 会写库，所以改用先 GET list 看是否重复、再手动解析
+        from .playlist import parse_playlist
+        try:
+            pl = run_async(parse_playlist(url))
+        except ValueError as e:
+            if as_json:
+                click.echo(json.dumps({"error": f"歌单解析失败: {e}"}, ensure_ascii=False))
+            else:
+                console.print(f"[red]歌单解析失败: {e}[/red]")
+            return
+        info = {"name": pl.name or name or "(未命名)",
+                "platform": pl.platform, "song_count": pl.song_count,
+                "url": url, "dry_run": True}
+        if as_json:
+            click.echo(json.dumps(info, ensure_ascii=False, indent=2))
+            return
+        console.print(f"[bold]预览收藏:[/bold] {escape(info['name'])} "
+                      f"（{info['platform']}，{info['song_count']} 首）")
+        console.print(f"  URL: [dim]{escape(url)}[/dim]")
+        console.print(f"[yellow]·dry-run：未实际收藏，加 --yes 执行。[/yellow]")
+        return
+
     data = _coll_api("POST", "/api/collections",
                      {"url": url, "name": (name or "").strip()},
                      as_json=as_json)
@@ -3158,6 +3216,101 @@ def _download_selected(selected: list, output_dir: str | None = None):
     console.print(f"\n[bold green]完成！[/bold green] 成功 [green]{success}[/green] 首，失败 [red]{failed}[/red] 首")
     dest = output_dir or str(get_download_subdir('music'))
     console.print(f"文件保存在：[dim]{dest}[/dim]")
+
+
+@main.command()
+@click.option("--json", "as_json", is_flag=True, help="输出 JSON（管道/脚本友好）")
+def status(as_json):
+    """显示当前全局状态概览：服务连通性、队列、收藏、历史与代理。
+
+    各字段含义：
+      server_up        — 能否连通正在运行的 DownloadKit 服务
+      queue_active     — 当前活跃下载（pending / downloading / paused）
+      queue_done       — 已完成数
+      queue_failed     — 失败数
+      subscriptions    — 订阅创作者数量
+      collections      — 收藏歌单数量
+      history_count    — 历史总条数
+      proxy_mode       — 当前代理模式（direct / system / manual）
+    """
+    from pathlib import Path
+
+    def _try_get(path, fallback=None):
+        code, data = _queue_api("GET", path)
+        if code != 200 or not isinstance(data, dict):
+            return fallback
+        return data
+
+    def _try_post(path, body=None, fallback=None):
+        code, data = _queue_api("POST", path, body)
+        if code != 200 or not isinstance(data, dict):
+            return fallback
+        return data
+
+    server_up = False
+    queue_info = None
+    subscriptions_count = None
+    collections_count = None
+    history_count = None
+    proxy_mode = None
+
+    # 1. 服务连通性
+    ok_code, ok_data = _queue_api("GET", "/api/settings/get")
+    server_up = ok_code == 200
+
+    if server_up:
+        # 2. 队列状态
+        queue_info = _try_get("/api/queue/status")
+
+        # 3. 订阅数量
+        sub_list = _try_get("/api/subscriptions")
+        if isinstance(sub_list, list):
+            subscriptions_count = len(sub_list)
+
+        # 4. 收藏数量
+        coll_list = _try_get("/api/collections")
+        if isinstance(coll_list, list):
+            collections_count = len(coll_list)
+
+        # 5. 历史数量
+        hist_count = _try_get("/api/history/count")
+        if isinstance(hist_count, dict):
+            history_count = hist_count.get("count", 0)
+
+        # 6. 代理模式
+        cfg = ok_data.get("settings", {}) if isinstance(ok_data, dict) else {}
+        proxy_cfg = cfg.get("proxy", {}) if isinstance(cfg, dict) else {}
+        proxy_mode = proxy_cfg.get("mode", "unknown")
+
+    if as_json:
+        result = {
+            "server_up": server_up,
+            "queue": queue_info,
+            "subscriptions_count": subscriptions_count,
+            "collections_count": collections_count,
+            "history_count": history_count,
+            "proxy_mode": proxy_mode,
+        }
+        click.echo(json.dumps(result, ensure_ascii=False))
+        return
+
+    if not server_up:
+        console.print("[red]服务未运行（无法连通）。请确认 DownloadKit 后端已启动。[/red]")
+        return
+
+    console.print("[bold]=== DownloadKit 状态 ===[/bold]")
+
+    q = queue_info or {}
+    active = q.get("pending", 0) + q.get("downloading", 0) + q.get("paused", 0)
+    done = q.get("completed", 0)
+    failed = q.get("failed", 0)
+    console.print(f"  服务：[green]运行中[/green]")
+    console.print(f"  队列 — 活跃 [cyan]{active}[/cyan]  完成 [green]{done}[/green]  失败 [red]{failed}[/red]")
+
+    console.print(f"  订阅创作者：[cyan]{subscriptions_count or 0}[/cyan] 位")
+    console.print(f"  收藏歌单：[cyan]{collections_count or 0}[/cyan] 个")
+    console.print(f"  历史下载记录：[cyan]{history_count or 0}[/cyan] 条")
+    console.print(f"  代理模式：[cyan]{proxy_mode or '未知'}[/cyan]")
 
 
 if __name__ == "__main__":

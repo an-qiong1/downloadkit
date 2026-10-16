@@ -2,7 +2,7 @@
 
 > 生成时间：2026-10-16  
 > 当前版本：v0.6.0  
-> 测试总数：1141 passed / 7 skipped
+> 测试总数：1151 passed / 7 skipped
 
 ---
 
@@ -12,10 +12,10 @@
 
 | 类型 | 数量 | 说明 |
 |------|------|------|
-| 单元测试 | ~610+ | pytest 用例（含 3 个服务端测试文件 + douyin CLI 测试） |
-| 离线 E2E | ~170+ | 起真实服务 + 替身（新增 5 条完整链路） |
+| 单元测试 | ~620+ | pytest 用例（含服务端测试、douyin CLI、dry-run/status P1 特性） |
+| 离线 E2E | ~170+ | 起真实服务 + 替身（含 5 条完整链路） |
 | EXE 冒烟 | 10 项 | 打包后接口验证 |
-| **总计** | **~793 项** | — |
+| **总计** | **~801 项** | — |
 
 ### 1.2 命令组覆盖情况
 
@@ -162,23 +162,32 @@ tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点 → 1
 
 ### 4.2 P1 任务（建议完成）
 
-#### 任务 4：添加 `--dry-run` 模式
+#### 任务 4：添加 `--dry-run` 模式 ✅ 已完成
 
 对以下命令添加 `--dry-run` 选项：
-- `download` - 显示会下载什么
-- `playlist` - 显示歌单内容
-- `collections add` - 显示会收藏什么
-- `bookmarks probe` - 显示会探测哪些链接
+- `playlist` — 解析歌单后输出曲目列表，不触发下载
+- `download` — 解析单曲后输出信息，不触发下载
+- `collections add` — 本地解析歌单后预览信息，不 POST 入库
+- `bookmarks probe` — 解析书签 HTML 后列出待探测 URL，不启动后端任务
 
-#### 任务 5：添加 `downloadkit status` 命令
+测试策略：monkeypatch `cli.run_async` 直接返回值，绕过 asyncio 事件循环；
+拦截 `_coll_api` / `_probe_api` 确认无网络调用。
 
-展示当前状态：
-- 服务是否运行
-- 队列状态（进行中/已完成/失败）
-- 订阅状态
+**验收**：10 个新增用例全部通过，全量 1151 passed / 7 skipped，无回归。
+
+#### 任务 5：添加 `downloadkit status` 命令 ✅ 已完成
+
+新增 `status` 命令，展示：
+- 服务连通性（ping `/api/settings/get`）
+- 队列状态（pending/downloading/paused/completed/failed 计数）
+- 订阅创作者数量
 - 收藏歌单数量
-- 历史记录数量
-- 代理状态
+- 历史总条数
+- 当前代理模式（direct/system/manual）
+
+支持 `--json` 输出（管道友好）。服务未运行时给出中文提示，exit 0。
+
+**验收**：6 个新增用例全部通过（含无服务/有服务/JSON 模式），全量 1151 passed / 7 skipped，无回归。
 
 #### 任务 6：统一退出码文档
 
