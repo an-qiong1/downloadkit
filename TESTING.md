@@ -2,7 +2,7 @@
 
 > 生成时间：2026-10-16  
 > 当前版本：v0.6.0  
-> 测试总数：1119 passed / 7 skipped
+> 测试总数：1141 passed / 7 skipped
 
 ---
 
@@ -12,10 +12,10 @@
 
 | 类型 | 数量 | 说明 |
 |------|------|------|
-| 单元测试 | ~610+ | pytest 用例（含 3 个新服务端测试文件 + douyin CLI 测试） |
-| 离线 E2E | ~150+ | 起真实服务 + 替身 |
+| 单元测试 | ~610+ | pytest 用例（含 3 个服务端测试文件 + douyin CLI 测试） |
+| 离线 E2E | ~170+ | 起真实服务 + 替身（新增 5 条完整链路） |
 | EXE 冒烟 | 10 项 | 打包后接口验证 |
-| **总计** | **~771 项** | — |
+| **总计** | **~793 项** | — |
 
 ### 1.2 命令组覆盖情况
 
@@ -142,12 +142,21 @@ tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点 → 1
 
 **验收**：21 个新增用例全部通过，全量 1119 passed / 7 skipped，无回归。
 
-#### 任务 3：增加集成测试
+#### 任务 3：增加集成测试 ✅ 已完成
 
-创建 `tests/test_e2e_full_flow.py`，覆盖：
-- 搜索 → 选曲 → 下载 → 队列查看
-- 歌单导入 → 收藏 → 刷新
-- 书签导入 → 探测 → 结果查看
+新建 `tests/test_e2e_full_flow.py`（22 用例），启真实 server 子进程（端口 8792），
+用 httpx 走 HTTP 验证 5 条链路：
+
+- 链路 1：书签导入 → 探测 → 结果查看（POST /api/bookmarks/import + POST/GET/POST probe）
+- 链路 2：收藏歌单 CRUD（GET list / POST create / GET show / DELETE，不触发网络解析）
+- 链路 3：下载历史 CRUD（CLEAR → COUNT → LIST → SEARCH → DELETE，含分页/参数校验）
+- 链路 4：队列状态查看（GET /api/queue/status，空队列也 200）
+- 链路 5：跨链路状态一致性（历史清空不影响收藏列表；探测不影响历史记录）
+
+测试策略：module 级 fixture 启停 server，asyncio.run 发异步请求，
+每条链路独立 class，端口与 test_server_entry.py（8791）不冲突。
+
+**验收**：22 个新增用例全部通过，全量 1141 passed / 7 skipped，无回归。
 
 ---
 
