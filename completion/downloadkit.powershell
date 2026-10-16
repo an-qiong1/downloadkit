@@ -1,0 +1,54 @@
+Register-ArgumentCompleter -Native -CommandName downloadkit -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    $prev_complete = $env:_DOWNLOADKIT_COMPLETE_POWERSHELL
+    $prev_words = $env:COMP_WORDS
+    $prev_cword = $env:COMP_CWORD
+
+    $env:_DOWNLOADKIT_COMPLETE_POWERSHELL = 'powershell_complete'
+    $env:COMP_WORDS = $commandAst.ToString()
+    if ($wordToComplete) {
+        $env:COMP_CWORD = $commandAst.CommandElements.Count - 1
+    } else {
+        $env:COMP_CWORD = $commandAst.CommandElements.Count
+    }
+
+    try {
+        $response = & downloadkit 2>$null
+    } finally {
+        $env:_DOWNLOADKIT_COMPLETE_POWERSHELL = $prev_complete
+        $env:COMP_WORDS = $prev_words
+        $env:COMP_CWORD = $prev_cword
+    }
+
+    if (-not $response) { return }
+
+    $prefix = "$wordToComplete*"
+    $lines = $response -split "`n"
+    for ($i = 0; $i + 2 -lt $lines.Count; $i += 3) {
+        $type = $lines[$i]
+        $value = $lines[$i + 1]
+        $descr = $lines[$i + 2]
+        if (-not $type) { continue }
+
+        if ($type -eq 'plain') {
+            $tip = if ($descr -and $descr -ne '_') { $descr } else { $value }
+            [System.Management.Automation.CompletionResult]::new(
+                $value, $value, 'ParameterValue', $tip)
+        } elseif ($type -eq 'dir') {
+            Get-ChildItem -Directory -Path $prefix -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    [System.Management.Automation.CompletionResult]::new(
+                        $_.FullName, $_.Name, 'ProviderContainer', $_.FullName)
+                }
+        } elseif ($type -eq 'file') {
+            Get-ChildItem -Path $prefix -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $kind = 'ProviderItem'
+                    if ($_.PSIsContainer) { $kind = 'ProviderContainer' }
+                    [System.Management.Automation.CompletionResult]::new(
+                        $_.FullName, $_.Name, $kind, $_.FullName)
+                }
+        }
+    }
+}

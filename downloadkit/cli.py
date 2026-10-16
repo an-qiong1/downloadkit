@@ -59,11 +59,25 @@ def _quiet_logs(level: int = logging.WARNING):
 
 
 def run_async(coro):
+    """安全地从同步代码中运行协程，兼容有无正在运行的事件循环两种场景。
+
+    注意「没有事件循环」的判断必须与 asyncio.run() 调用分开：如果连
+    asyncio.run() 一起罩在 except RuntimeError 里，工作线程（或线程池）
+    里协程实际抛出的 RuntimeError 会被当成「没有事件循环」再从主线程调
+    一次 —— 那次必然撞上「cannot be called from a running event loop」，
+    把解析器真正的报错盖得严严实实（DrissionPage 一类浏览器驱动很爱抛
+    RuntimeError，实测踩到过）。
+    参考 collection.py 的 _run_async，两者共用同一套模式。
+    """
     try:
-        return asyncio.run(coro)
+        asyncio.get_running_loop()
     except RuntimeError:
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(coro)
+        # 没有事件循环 → 直接创建
+        return asyncio.run(coro)
+    # 已有事件循环 → 在独立线程中运行
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 @click.group()

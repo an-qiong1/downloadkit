@@ -2,7 +2,7 @@
 
 > 生成时间：2026-10-16  
 > 当前版本：v0.6.0  
-> 测试总数：1151 passed / 7 skipped
+> 测试总数：1155 passed / 7 skipped
 
 ---
 
@@ -12,10 +12,10 @@
 
 | 类型 | 数量 | 说明 |
 |------|------|------|
-| 单元测试 | ~620+ | pytest 用例（含服务端测试、douyin CLI、dry-run/status P1 特性） |
+| 单元测试 | ~624+ | pytest 用例（含服务端测试、douyin CLI、dry-run/status P1 特性、性能基准） |
 | 离线 E2E | ~170+ | 起真实服务 + 替身（含 5 条完整链路） |
 | EXE 冒烟 | 10 项 | 打包后接口验证 |
-| **总计** | **~801 项** | — |
+| **总计** | **~805 项** | — |
 
 ### 1.2 命令组覆盖情况
 
@@ -189,12 +189,58 @@ tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点 → 1
 
 **验收**：6 个新增用例全部通过（含无服务/有服务/JSON 模式），全量 1151 passed / 7 skipped，无回归。
 
-#### 任务 6：统一退出码文档
+#### 任务 6：统一退出码文档 ✅ 已完成
 
-在 PLAN.md 或新建 `CONTRIBUTING.md` 中明确：
-- 探测器组（sniff/bookmarks/probe）→ exit 1
-- 状态查询组（queue/subscribe/files/collections/history）→ exit 0
-- 用法错误 → exit 2
+新建 `CONTRIBUTING.md`，明确三类退出码规则：
+
+| exit | 含义 | 适用命令组 |
+|------|------|-----------|
+| 0 | 成功 / 业务结果（空列表、歌单不存在等） | queue / subscribe / files / collections / history / search / parse / douyin / playlist / download |
+| 1 | 探测器没拿到结果 | sniff / bookmarks probe / settings proxy-test |
+| 2 | 用法错误（缺参数、格式错） | 所有命令，由 Click UsageError 统一处理 |
+
+附有与 server 端 HTTP 状态码的对照表及测试断言位置索引。
+
+#### 任务 7：CLI 自动补全 ✅ 已完成
+
+生成 `completion/` 目录下四套 shell 补全脚本：
+- `completion/downloadkit.bash` — Bash（3.x+）
+- `completion/downloadkit.zsh` — Zsh（via compdef）
+- `completion/downloadkit.fish` — Fish
+- `completion/downloadkit.powershell` — PowerShell（Register-ArgumentCompleter）
+
+安装方式见 `completion/README.md`。
+
+#### 任务 8：添加性能基准测试 ✅ 已完成
+
+新建 `tests/benchmarks/test_performance.py`（4 用例）：
+- `test_run_async_overhead_small` — run_async 单次开销 < 5ms
+- `test_run_async_overhead_repeated` — 10 次平均 < 5ms
+- `test_search_latency_under_10s` — 搜索最坏耗时 < 10s
+- `test_parse_latency_under_5s` — 解析最坏耗时 < 5s
+
+加上 `tests/benchmarks/README.md` 说明。
+
+#### 任务 9：重构 `_run_async` 异常处理 ✅ 已完成
+
+`cli.py` 的 `run_async()` 沿用 `collection.py` 已有的安全模式：
+
+```python
+def run_async(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+```
+
+关键点：`get_running_loop()` 的判断**与** `asyncio.run()` 调用分开，
+避免协程内部抛出的 RuntimeError 被误吞成「没有事件循环」再重试。
+`collection.py` 的 `_run_async` 已有同款实现，本修复使其与 cli 层对齐。
+已有测试 `test_collection_refresh.py::test_run_async_does_not_mask_runtime_error`
+继续通过，确认行为一致。
 
 ---
 
