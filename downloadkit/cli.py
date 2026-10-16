@@ -1993,10 +1993,186 @@ def bookmarks_import(file: str, as_urls: bool, limit: int, as_json: bool):
 # update_max_records），CLI 直接改文件只会弄出「文件改了、内存还是老值」
 # 的分裂。
 
-# 可写段就这三个：/api/settings/update 的请求模型（SettingsUpdateRequest）
-# 只声明了 general/proxy/cookie，传别的段服务端当没看见 —— 只传
-# subscription 时 config 为空，它照样回 {"status": "ok"}，那是假成功，
-# 必须本地拦下，不能让人以为设进去了。
+
+# ==================================================================
+# 书签批量探测（P5-9：bookmarks probe，P3 服务端已有端点，P5 补齐 CLI）
+# ==================================================================
+# 三个端点协同工作：
+#   POST /api/bookmarks/probe            → 启动 → 返回 {probe_id, total}
+#   GET  /api/bookmarks/probe/{id}       → 轮询进度与结果
+#   POST /api/bookmarks/probe/{id}/stop  → 停止（可选）
+# 服务端在独立线程里跑 L0 直链判定 / L1 静态深挖 / L2 浏览器嗅探，
+# CLI 只管发请求、轮询、渲染结果。退出码沿用「状态查询」组约定：
+# 连不上服务 → 0（打中文提示），业务结果（没抓到流）不算失败。
+
+
+@bookmarks.command("probe")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False),
+                metavar="文件")
+@click.option("--l2", is_flag=True, default=True,
+              help="启用 L2 浏览器深度嗅探（默认开；--no-l2 只跑 L0/L1 快速通道）")
+@click.option("--no-l2", "l2", flag_value=False,
+              help="关闭 L2 浏览器嗅探，只用 L0/L1 快速通道")
+@click.option("--urls", "as_urls", is_flag=True,
+              help="输出格式：一行一个 URL（去重保序，管道友好）")
+@click.option("-n", "--limit", "limit", type=int, default=0,
+              help="最多显示几条命中结果（0 = 全部）")
+@click.option("--json", "as_json", is_flag=True,
+              help="服务端原样返回（与 --urls 同给时以 --json 为准）")
+def bookmarks_probe(file, l2, as_urls, limit, as_json):
+    """从书签 HTML 提取链接并批量探测可用流（需要 DownloadKit 正在运行）。
+
+    每个链接走三层降级：L0 直链判定（ms 级）→ L1 静态深挖（并发 4，3s/条）→
+    L2 浏览器嗅探（串行，30s/条，过 WAF）。探测结果保留在服务端内存里直到重启。
+
+    \\b
+    Examples:
+      downloadkit bookmarks probe bookmarks.html
+      downloadkit bookmarks probe bookmarks.html --urls
+      downloadkit bookmarks probe bookmarks.html --json | jq '.results[]'
+      downloadkit bookmarks probe bookmarks.html --no-l2   # 只跑 L0/L1
+    """
+    if as_json:
+        _quiet_logs(logging.ERROR)
+
+    try:
+        text = _read_bookmark_file(file)
+    except OSError as e:
+        _die_local(f"读不了 {file}：{e}", as_json)
+        return
+    except ValueError as e:
+        _die_local(str(e), as_json)
+        return
+
+    # 本地解析书签，提取链接（不去重，让服务端去重；但 URL 过滤本地做更快）
+    from .bookmarks import parse_bookmarks_html, flatten_bookmarks
+    from .generic_video import is_http_url
+    try:
+        tree, stats = parse_bookmarks_html(text)
+    except ValueError as e:
+        _die_local(f"书签解析失败：{e}", as_json)
+        return
+
+    items = flatten_bookmarks(tree)
+    # 过滤非 HTTP 链接（本地快速过滤，省一次网络往返）
+    items = [item for item in items if is_http_url((item.get("url") or "").strip())]
+    if not items:
+        console.print("[yellow]书签里没有可探测的 HTTP 链接[/yellow]")
+        return
+
+    # 构建请求体：title 作为命名提示传过去
+    body = {"items": [
+        {"url": item["url"], "title": item.get("title") or "",
+         "folder": item.get("folder") or "", "referer": ""}
+        for item in items
+    ], "urls": [], "l2": l2}
+
+    if as_json:
+        code, data = _probe_api("POST", "/api/bookmarks/probe", body, as_json=True)
+        if code != 200 or not isinstance(data, dict):
+            _die_local(f"启动失败（HTTP {code}）", as_json)
+            return
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    # 启动探测任务
+    code, data = _probe_api("POST", "/api/bookmarks/probe", body, as_json=False)
+    if code != 200 or not isinstance(data, dict):
+        _die_local(f"启动失败（HTTP {code}）", as_json)
+        return
+
+    pid = data.get("probe_id")
+    total = data.get("total", len(items))
+    if not pid:
+        _die_local("服务端未返回 probe_id", as_json)
+        return
+
+    console.print(f"[bold]已启动探测[/bold] [dim]ID: {pid} · 共 {total} 条链接"
+                  f"{'（含 L2）' if l2 else '（仅 L0/L1）'}[/dim]")
+
+    # 轮询直到结束
+    import time
+    last_done = -1
+    last_hit = -1
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+    ) as progress:
+        task = progress.add_task("探测中...", total=total)
+        while True:
+            time.sleep(0.5)
+            code, data = _probe_api("GET", f"/api/bookmarks/probe/{pid}",
+                                    as_json=False)
+            if code != 200 or not isinstance(data, dict):
+                break
+            status = data.get("status", "running")
+            done = data.get("done", 0)
+            hit = data.get("hit", 0)
+            progress.update(task, completed=done)
+            if done != last_done or hit != last_hit:
+                last_done, last_hit = done, hit
+                console.print(f"  [dim]进度 {done}/{total} · 命中 {hit}[/dim]")
+            if status in ("done", "stopped", "failed"):
+                break
+
+    if as_urls:
+        # 一行一个 URL（去重保序，优先命中的）
+        seen = set()
+        results = (data or {}).get("results") or []
+        for r in results:
+            u = (r.get("url") or "").strip()
+            if u and u not in seen:
+                seen.add(u)
+                click.echo(u)
+        return
+
+    # 渲染结果表格
+    results = (data or {}).get("results") or []
+    if not results:
+        console.print("[yellow]没有探测结果（服务可能已重启，任务已清理）[/yellow]")
+        return
+
+    # 命中 / 未命中分开统计
+    hits = [r for r in results if r.get("status") == "hit"]
+    misses = [r for r in results if r.get("status") != "hit"]
+
+    console.print(f"\n[bold green]探测完成[/bold green]：命中 [green]{len(hits)}[/green]"
+                  f" 未命中 [red]{len(misses)}[/red]"
+                  f"  共 {len(results)} 条")
+
+    if hits:
+        shown = hits[:limit] if limit > 0 else hits
+        table = Table(title=f"命中 · 共 {len(hits)} 条（显示前 {len(shown)} 条）")
+        table.add_column("#", justify="right", no_wrap=True)
+        table.add_column("标题", overflow="fold")
+        table.add_column("层", no_wrap=True)
+        table.add_column("流数", justify="right", no_wrap=True)
+        table.add_column("耗时", justify="right", no_wrap=True)
+        for i, r in enumerate(shown, 1):
+            streams = r.get("streams") or []
+            table.add_row(
+                str(i),
+                escape(str(r.get("title") or r.get("url", "")[:40])),
+                escape(str(r.get("layer") or "-")),
+                str(len(streams)),
+                f"{r.get('elapsed', 0):.1f}s",
+            )
+        console.print(table)
+        if limit > 0 and len(hits) > limit:
+            console.print(f"[dim]只显示前 {limit} 条，共 {len(hits)} 条命中[/dim]")
+
+    if misses:
+        shown_miss = misses[:limit] if limit > 0 else misses
+        console.print(f"\n[yellow]未命中（前 {len(shown_miss)} 条）:[/yellow]")
+        for r in shown_miss:
+            url = (r.get("url") or "")[:60]
+            layer = r.get("layer") or "?"
+            err = (r.get("error") or "")[:50]
+            console.print(f"  [dim]{layer}[/dim]  {escape(url)}"
+                          + (f"  [red]{escape(err)}</red>" if err else ""))
+
+
 _UPDATABLE_SECTIONS = ("general", "proxy", "cookie")
 
 # 数值范围抄产品自己的限制，不自创规则：

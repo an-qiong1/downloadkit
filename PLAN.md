@@ -283,7 +283,7 @@
   - `tests/test_cli_files.py` 60 例；离线实测 49/49（真铺 6 个媒体文件真删、收尾按磁盘实际清单比对、非媒体文件不被误删），825 passed
 - [x] **P5-5 嗅探与书签 `sniff` / `bookmarks`**（2026-10-15 完成）
   - `sniff <url>` 单条 L2 深度嗅探（`-t/--timeout` L2 预算、`--json` 服务端原样返回）、`bookmarks import <文件>` 导入书签 HTML 并批量解析（`--urls` 去重保序一行一个、`-n/--limit` 树视图截断、`--json`）
-  - **PLAN 原写的 `/api/bookmarks/parse` 不存在，实际端点是 `/api/bookmarks/import`**（FileReader 读全文后 JSON 提交，不走 multipart）；批量探测 `/api/bookmarks/probe` 属 P3，不在本条范围内，未实现
+  - **PLAN 原写的 `/api/bookmarks/parse` 不存在，实际端点是 `/api/bookmarks/import`**（FileReader 读全文后 JSON 提交，不走 multipart）；批量探测 `/api/bookmarks/probe` 属 P3 服务端，CLI 在 P5-9 补齐
   - 走 HTTP 的理由：L2 嗅探用的是**服务进程里那个 DrissionPage 浏览器单例**（`_lock` 串行、headless/有头按站点在进程内记忆），CLI 自己再起一份就是两个浏览器抢同一批资源，还会丢掉「这个站回退过有头」的进程内记忆
   - **退出码按组定语义**：这一组是探测器——`sniff` 没抓到流、书签导不进链接都算「没做成该做的事」→ 1（含连不上）；`queue`/`subscribe` 那两组是状态查询，查到空状态也算查成功 → 0。两组约定写进各自 docstring，不混用
   - 五个坑：① **流地址必须走 `click.echo` 不能走 `console.print`**——m3u8 动辄上百字符，rich 按 80 列会从中间切断，用户复制出来是断的（P5-2 Task ID 同一个坑，那次解法是 `no_wrap`，这里整行本身就比 80 宽，只能绕开 rich）；② 客户端超时必须给足 L2 预算余量（服务端裁到最多 60 秒，客户端退成默认 30 就白跑）→ `_API_TIMEOUT_SNIFF = 120`；③ `nav_failed`（死域名）和被 WAF 拦是两回事，混在一个提示里用户会对着打不开的地址反复重试；④ 书签解码必须 UTF-8 **真解不开**才退回 cp936（反过来读会静默变乱码却照样解析成功，最难查），`--json` 侧本地失败也要吐 `{"error": …}` 而不是走 stderr 的 `ClickException`；⑤ 实测真解析器不产出空标题链接（`<A HREF>` 不带文字会被略过），树渲染仍保留「标题空则回退 URL」的兜底
@@ -321,7 +321,13 @@
   - `download` 命令补 `-o/--output`（输出目录），同步修 `downloader.download_song` 支持 `output_dir` 参数；`playlist` 命令同样补 `-o`
   - 全命令 `--help` 中文化：search / download / playlist / douyin 的 docstring、选项 help、控制台提示文案全部改成中文（此前混有大量英文如 "Search songs across multiple platforms"、"Downloading"、"Done!" 等）；`_download_selected` 增加 `output_dir` 参数并正确显示保存路径
   - CLI 测试补齐：新增 `tests/test_cli_music.py` 12 例，覆盖 search（选曲/空结果/退出）、download（URL 校验/-o 传递）、playlist（下载/取消/空歌单），底层异步函数用协程替身替换，不发起真实网络请求
-  - 全量 pytest：**1047 passed / 6 skipped**
+  - 全量 pytest：**1056 passed / 6 skipped**
+- [x] **P5-9 书签批量探测 `bookmarks probe`**（2026-10-16 完成）
+  - `bookmarks probe <文件> [--l2] [--no-l2] [--urls] [-n/--limit] [--json]`
+  - 走 HTTP：探测用的是**服务进程里那个 DrissionPage 浏览器单例**（L2 串行、WAF 重试、L1 并发 4），CLI 自己再起一份就是两个浏览器抢资源
+  - **退出码沿用「探测器」组约定**：连不上服务 → 1；业务结果（没抓到流、无 HTTP 链接）→ 0
+  - 命令行为：本地解析书签 HTML 提取链接 → POST 启动探测 → 轮询 GET 进度 → 展示命中/未命中表格（含层、流数、耗时）；`--urls` 一行一个管道友好，`--json` 服务端原样返回
+  - `tests/test_cli_bookmarks_probe.py` 9 例
 
 **P5 验收（每步固定）**：`pytest tests -q` 全量通过 → CLI 实测（能离线就离线，涉及抖音注意短链限流约 1 分钟 1-2 次）→ 改动文件 UTF-8 校验 `U+FFFD` 计数 0 → 分次提交（中文提交信息走 `-F` 文件）。
 
