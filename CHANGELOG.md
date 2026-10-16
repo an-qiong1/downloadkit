@@ -5,6 +5,20 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.7.0] - 2026-10-16
+
+### 新增
+- **补齐四块测试空白**（v0.6.0 遗留的 4 个测试任务 T1–T4，纯测试无功能改动）：
+  - **服务端 `/api/cookies/*` 单测**（`tests/test_server_cookies.py` 16 例）：`open-login` 平台 URL 分支与 `webbrowser.open` 异常兜底、`load-from-browser` 的文件/浏览器/读取失败三路径、`save` 落盘与参数校验；monkeypatch `webbrowser.open`（`webbrowser` 是函数内局部导入，只能在 `webbrowser` 模块上打）和 `pathlib.Path.home`（把保存路径引到临时目录，不污染真实 `~/.downloadkit/`）
+  - **平台适配器单元测试**（`tests/test_platforms.py` 45 例）：netease 解析函数 18 例 + 静态方法 6 例、qqmusic `match_url`/`extract_playlist_id` 4 例、migu `_clean_artist` 4 例、gequbao `_find_aid`/`_parse_app_data`/`_extract_download_url` 7 例、itzo 搜索匹配 5 例。**全部直连模块纯函数，不发网络请求**；测试按实际行为修正了三处先验（`_parse_song_item(None)` 返 None 而非抛异常、`_parse_year(0)` 返 0 而非 1970、gequbao 正则要求 `<a href="/music/NNN">` 格式）
+  - **search / download / playlist E2E**（`tests/test_e2e_full_flow.py` 扩 4 条链路 16 例）：真起 uvicorn 端口 8792 复用 module 级 fixture，验参数校验（缺字段 422、空值 400）与响应结构（`songs[]` 含 title/artist/platform/song_id、`task_id` 返回、未知任务 404、`song-info` 正确提取网易云与 QQ音乐的 song_id/platform）；离线环境对网络依赖路径做容忍（歌单解析 200 或 400 皆可）
+  - **书签导入服务端单测**（`tests/test_server_bookmarks_import.py` 13 例）：直连 `api_bookmarks_import` 路由，覆盖正常树结构与统计、空/纯空白/非书签 HTML/0 条 http 链接四个 400 分支、BOM 前缀剥离、丢 DOCTYPE 的工具导出、`javascript:`/`ftp:` 不计数、空标题 `<a>` 不计数、残缺 HTML 靠 `close()` flush 未闭合标签保留已解析部分
+- **版本号同步到 0.7.0**：4 处（`pyproject.toml` / `cli.py` `version_option` / 关于页 / `downloadkit.iss`），由 `tests/test_version_sync.py` 钉死
+
+### 测试
+- 全量 **1245 passed / 7 skipped**（1252 collected = 1214 单元/CLI + 38 离线 E2E），较 v0.6.0 的 1216 净增 29 例
+- `TESTING.md` 计数改为实测真数，并纠正 1.1 节历史虚高（原写 ~805，实际收集 1252）
+
 ## [0.6.0] - 2026-10-16
 
 ### 新增

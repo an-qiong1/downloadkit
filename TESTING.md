@@ -1,8 +1,8 @@
 # DownloadKit 测试覆盖报告
 
 > 生成时间：2026-10-16  
-> 当前版本：v0.6.0  
-> 测试总数：1162 passed / 7 skipped
+> 当前版本：v0.7.0  
+> 测试总数：1245 passed / 7 skipped
 
 ---
 
@@ -12,18 +12,18 @@
 
 | 类型 | 数量 | 说明 |
 |------|------|------|
-| 单元测试 | ~624+ | pytest 用例（含服务端测试、douyin CLI、dry-run/status P1 特性、性能基准） |
-| 离线 E2E | ~170+ | 起真实服务 + 替身（含 5 条完整链路） |
-| EXE 冒烟 | 10 项 | 打包后接口验证 |
-| **总计** | **~805 项** | — |
+| 单元 / CLI 测试 | 1214 | pytest 用例（服务端、douyin CLI、dry-run/status P1 特性、平台适配器、性能基准） |
+| 离线 E2E | 38 | `test_e2e_full_flow.py` 起真实 uvicorn 服务（9 条链路） |
+| EXE 冒烟 | 10 项 | 打包后接口验证（test-exe.ps1，不计入 pytest） |
+| **pytest 总计** | **1252** | 1245 passed / 7 skipped |
 
 ### 1.2 命令组覆盖情况
 
 | 命令组 | CLI 测试 | E2E | 服务端测试 | 状态 |
 |--------|---------|-----|-----------|------|
-| `search` | ✅ 5 例 | ❌ | ❌ | 基本覆盖 |
-| `download` | ✅ 3 例 | ❌ | ❌ | 基本覆盖 |
-| `playlist` | ✅ 3 例 | ❌ | ❌ | 基本覆盖 |
+| `search` | ✅ 5 例 | ✅ 4 例 | ❌ | 覆盖良好 |
+| `download` | ✅ 3 例 | ✅ 4 例 | ❌ | 覆盖良好 |
+| `playlist` | ✅ 3 例 | ✅ 4 例 | ❌ | 覆盖良好 |
 | `douyin` | ✅ 21 例 | ✅ | ❌ | **覆盖良好** |
 | `parse` | ✅ 43 例 | ✅ 30 例 | ❌ | 覆盖良好 |
 | `video` | ✅ 43 例 | ✅ 30 例 | ❌ | 覆盖良好 |
@@ -51,23 +51,23 @@
 | `/api/queue/*` | test_cli_queue.py | ✅ |
 | `/api/subscriptions/*` | test_cli_subscribe.py | ✅ |
 | `/api/settings/*` | test_cli_settings.py | ✅ |
-| `/api/bookmarks/import` | test_cli_bookmarks.py | ✅ |
+| `/api/bookmarks/import` | test_server_bookmarks_import.py | ✅ **T4 新增** |
 | `/api/sniff` | test_cli_sniff.py | ✅ |
 | `/api/open-file` | test_open_file.py | ✅ |
 | `/api/open-dir` | test-exe.ps1 | ✅ |
 | `/api/history/*` | test_server_history.py | ✅ **新增** |
 | `/api/collections/*` | test_server_collections.py | ✅ **新增** |
 | `/api/bookmarks/probe/*` | test_server_bookmarks_probe.py | ✅ **新增** |
+| `/api/cookies/*` | test_server_cookies.py | ✅ **T1 新增** |
 
 ### 2.2 缺少服务端测试的端点
 
 | 端点 | 数量 | 建议优先级 |
 |------|------|-----------|
-| `/api/cookies/*` | 3 个 | P1 |
 | `/api/video/episodes` | 1 个 | P2 |
 | `/api/debug/*` | 1 个 | P3 - 调试用 |
 
-**合计：5 个端点缺少服务端单元测试**（原 18 个，本次补 13 个）
+**合计：2 个端点缺少服务端单元测试**（原 5 个欠账已全部补齐：history / collections / probe / cookies / bookmarks import）
 
 ---
 
@@ -92,7 +92,7 @@
 
 | 模块 | 优先级 | 说明 |
 |------|--------|------|
-| `downloadkit/platforms/*.py` | P1 | 音乐平台适配器（netease/qqmusic/migu/gequbao/itzo） |
+| `downloadkit/platforms/*.py` | test_platforms.py | ✅ **T2 新增** |
 | `downloadkit/bilibili.py` | P2 | B站下载 |
 | `downloadkit/youtube.py` | P2 | YouTube 下载 |
 | `downloadkit/xiaohongshu.py` | P2 | 小红书下载 |
@@ -122,6 +122,56 @@ tests/test_server_bookmarks_probe.py  # /api/bookmarks/probe/* 3 个端点 → 1
 - 边界：空数据、重复、非法输入
 
 **验收**：43 个新增用例全部通过，全量 1098 passed / 7 skipped，无回归。
+
+#### 任务 5（T1）：补全 cookies 服务端测试 ✅ 已完成
+
+新建 	ests/test_server_cookies.py（16 用例），覆盖 3 个端点：
+
+- GET /api/cookies/open-login：有效平台（douyin/bilibili）返回 URL；非法平台 400；webbrowser 异常时降级返回 URL
+- POST /api/cookies/load-from-browser：正常读取（douyin/bilibili）；空 Cookie 返回 ok=False；不支持平台（xhs/youtube）返回错误提示；浏览器读取异常返回 error 字段
+- POST /api/cookies/save：空 Cookie 400；非法平台 400；自定义路径写文件；默认路径写文件；save_to_config 同步更新 config.toml；写入失败 500
+
+测试策略：直接 import route 函数，monkeypatch webbrowser.open / downloadkit.browser_cookie 模块，不启动真实服务，不依赖系统浏览器。
+
+**验收**：16 个新增用例全部通过，全量 1178 passed / 7 skipped，无回归。
+
+#### 任务 6（T2）：补齐 platforms 适配器单元测试 ✅ 已完成
+
+新建 `tests/test_platforms.py`（45 用例），覆盖 5 个模块的纯逻辑部分：
+
+- **netease 解析函数**（18 例）：`_parse_song_item` 新旧格式兼容、缺失字段、异常路径；`_extract_artists` / `_extract_album` / `_get_cover_url` / `_get_album_name` / `_get_artist_name` / `_parse_year`
+- **netease 静态方法**（6 例）：`match_url` 正确/错误 URL；`extract_playlist_id` 查询参数与路径两种格式，非法 URL 抛 ValueError
+- **qqmusic 静态方法**（4 例）：`match_url`；`extract_playlist_id` 三种路径格式（playlist/playlistDetail/taoge）
+- **migu 辅助函数**（4 例）：`_clean_artist` 单/多歌手、空格处理
+- **gequbao 辅助函数**（7 例）：`_find_aid` 正则匹配；`_parse_app_data` JSON 解析；`_extract_download_url` MP3 直链提取
+- **itzo 搜索逻辑**（5 例）：title+artist 精确匹配、title 模糊匹配、无匹配兜底、协议升级、空列表
+
+测试策略：直接导入模块函数，不发起网络请求，用 fixture 提供模拟数据。
+
+**验收**：45 个新增用例全部通过，全量 1216 passed / 7 skipped，无回归。
+
+#### 任务 7（T3）：补齐 search / download / playlist E2E ✅ 已完成
+
+在 `tests/test_e2e_full_flow.py` 中追加 4 条链路（16 用例），复用 module 级真实服务（端口 8792）：
+
+- **链路 6 TestSearchFlow**（4 例）：缺 keyword → 422；空 keyword → 200 + songs 结构；返回歌曲含 title/artist/platform/song_id 字段；count 限制结果条数
+- **链路 7 TestDownloadFlow**（4 例）：缺字段 → 422；提交 → 返回 task_id；提交后查状态不 404；未知 task_id → 404
+- **链路 8 TestPlaylistFlow**（4 例）：缺 url → 422；空 url → 400；无法识别的 URL → 400；合法网易云歌单 URL → 200 或 400（离线容忍）
+- **链路 9 TestSongInfoFlow**（4 例）：缺 url → 422；未识别 URL → 400；网易云 URL 正确提取 song_id=123456/platform=netease；QQ音乐 URL 正确提取 song_id/platform=qqmusic
+
+**验收**：16 个新增用例全部通过，全量无回归。
+
+#### 任务 8（T4）：补书签导入服务端单测 ✅ 已完成
+
+新建 `tests/test_server_bookmarks_import.py`（13 用例），直接 import `api_bookmarks_import` 路由函数，无网络：
+
+- **正常路径**（4 例）：返回 tree/links/folders；树节点类型与字段（type/title/url/name/children）；重复 URL 不去重（links 计数含重复）；add_date 保留
+- **400 路径**（4 例）：空字符串 / 纯空白 → "文件为空"；非书签 HTML（无 NETSCAPE 结构）→ "不是浏览器导出的书签文件"；结构合法但 0 条 http 链接 → "未解析到任何书签链接"
+- **边界**（5 例）：BOM 前缀剥离；丢 DOCTYPE 的工具导出仍解析；javascript:/ftp: 不计数；空标题 <a> 不计数；残缺 HTML 保留已解析部分（close() flush 未闭合 <a>，计 2 条）
+
+CLI/E2E 联动已有覆盖（test_cli_sniff.py 8 例 + E2E 链路 1），本次只补服务端单测。
+
+**验收**：13 个新增用例全部通过，全量 1245 passed / 7 skipped，无回归。
 
 #### 任务 2：补全 douyin CLI 测试 ✅ 已完成
 

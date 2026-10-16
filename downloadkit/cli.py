@@ -81,7 +81,7 @@ def run_async(coro):
 
 
 @click.group()
-@click.version_option(version="0.6.0", prog_name="downloadkit")
+@click.version_option(version="0.7.0", prog_name="downloadkit")
 @click.option("-v", "--verbose", is_flag=True,
               help="显示详细日志（默认已压掉 INFO，保持界面干净）")
 @click.option("--server", default=None, envvar="DOWNLOADKIT_SERVER",

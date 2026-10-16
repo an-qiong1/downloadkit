@@ -332,4 +332,164 @@ class TestCrossFlowConsistency:
 
         # history count 应不变
         r_after = await get("/api/history/count")
-        assert r_after.json()["count"] == count_before
+        count_after = r_after.json()["count"]
+        assert count_after == count_before
+
+
+# ============================ 链路 6：search ============================
+
+class TestSearchFlow:
+    """搜索链路（离线环境：验证参数校验与响应结构，不验内容）。"""
+
+    @pytest.mark.asyncio
+    async def test_search_missing_keyword_raises_400(self):
+        r = await get("/api/search")
+        assert r.status_code == 422  # FastAPI 缺 query 参数
+
+    @pytest.mark.asyncio
+    async def test_search_empty_keyword_returns_structure(self):
+        """空关键词返回 songs 结构（可能为空列表）。"""
+        r = await get("/api/search?keyword=&count=5")
+        assert r.status_code == 200
+        body = r.json()
+        assert "songs" in body
+        assert isinstance(body["songs"], list)
+
+    @pytest.mark.asyncio
+    async def test_search_returns_song_structure(self):
+        """返回的歌曲对象含 title/artist/platform/song_id 字段。"""
+        r = await get("/api/search?keyword=test&count=3")
+        assert r.status_code == 200
+        songs = r.json()["songs"]
+        for s in songs:
+            assert "title" in s
+            assert "artist" in s
+            assert "platform" in s
+            assert "song_id" in s
+
+    @pytest.mark.asyncio
+    async def test_search_count_limits_results(self):
+        r = await get("/api/search?keyword=test&count=1")
+        assert r.status_code == 200
+        songs = r.json()["songs"]
+        assert len(songs) <= 1
+
+
+# ============================ 链路 7：download ============================
+
+class TestDownloadFlow:
+    """下载链路（离线环境：验证任务创建与状态查询）。"""
+
+    @pytest.mark.asyncio
+    async def test_download_missing_fields_raises_422(self):
+        r = await post("/api/download", json={})
+        assert r.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_download_creates_task_and_returns_id(self):
+        """提交下载请求 → 返回 task_id。"""
+        r = await post("/api/download", json={
+            "title": "测试歌曲",
+            "artist": "测试歌手",
+            "platform": "netease",
+            "song_id": "99999",
+        })
+        assert r.status_code == 200, f"download 失败: {r.text}"
+        body = r.json()
+        assert "task_id" in body
+        assert body["task_id"]
+
+    @pytest.mark.asyncio
+    async def test_download_status_after_submit(self):
+        """提交后查询状态 → 不会 404。"""
+        r = await post("/api/download", json={
+            "title": "状态测试",
+            "artist": "歌手",
+            "platform": "netease",
+            "song_id": "88888",
+        })
+        task_id = r.json()["task_id"]
+
+        r2 = await get(f"/api/download/{task_id}")
+        assert r2.status_code == 200
+        body = r2.json()
+        assert "status" in body
+
+    @pytest.mark.asyncio
+    async def test_download_status_unknown_id_raises_404(self):
+        r = await get("/api/download/nonexistent_task_xyz")
+        assert r.status_code == 404
+
+
+# ============================ 链路 8：playlist ============================
+
+class TestPlaylistFlow:
+    """歌单解析链路（离线环境：验证参数校验与错误处理）。"""
+
+    @pytest.mark.asyncio
+    async def test_playlist_missing_url_raises_422(self):
+        r = await post("/api/playlist", json={})
+        assert r.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_playlist_empty_url_raises_400(self):
+        r = await post("/api/playlist", json={"url": ""})
+        assert r.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_playlist_invalid_url_raises_400(self):
+        """无法识别的 URL 格式 → 400。"""
+        r = await post("/api/playlist", json={"url": "not-a-url"})
+        assert r.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_playlist_returns_structure_or_error(self):
+        """合法格式 URL 返回 songs 结构或错误信息。"""
+        r = await post("/api/playlist", json={
+            "url": "https://music.163.com/#/playlist?id=12345",
+        })
+        # 离线环境可能 400（网络失败）或 200（结构正确）
+        if r.status_code == 200:
+            body = r.json()
+            assert "name" in body
+            assert "songs" in body
+        else:
+            assert r.status_code == 400
+
+
+# ============================ 链路 9：song-info ============================
+
+class TestSongInfoFlow:
+    """单曲解析链路。"""
+
+    @pytest.mark.asyncio
+    async def test_song_info_missing_url_raises_422(self):
+        r = await post("/api/song-info", json={})
+        assert r.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_song_info_unrecognized_url_raises_400(self):
+        r = await post("/api/song-info", json={"url": "https://example.com/unknown"})
+        assert r.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_song_info_netease_url(self):
+        """网易云 URL 能正确提取 song_id。"""
+        r = await post("/api/song-info", json={
+            "url": "https://music.163.com/#/song?id=123456",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["song"]["song_id"] == "123456"
+        assert body["song"]["platform"] == "netease"
+
+    @pytest.mark.asyncio
+    async def test_song_info_qqmusic_url(self):
+        """QQ音乐 URL 能正确提取 song_id。"""
+        r = await post("/api/song-info", json={
+            "url": "https://y.qq.com/n/ryqq/songDetail/003abc123",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["song"]["song_id"] == "003abc123"
+        assert body["song"]["platform"] == "qqmusic"
