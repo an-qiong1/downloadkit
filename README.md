@@ -114,8 +114,6 @@ B站视频合并需要系统 `ffmpeg`。
 
 入口：`downloadkit`（`pip install -e .` 后）或 `python -m downloadkit.cli`，Windows 下也可用根目录的 `music-dl.cmd`。
 
-| 命令 | 作用 |
-|------|------|
 | `search <关键词>` | 跨平台搜歌并选曲下载，`-n` 条数、`-s 16 / 1,3 / 1-3` 非交互直选 |
 | `playlist <歌单链接>` | 歌单解析 + 批量下载（QQ音乐 / 网易云） |
 | `download <歌曲链接>` | 按链接直接下单曲 |
@@ -123,6 +121,12 @@ B站视频合并需要系统 `ffmpeg`。
 | `parse <链接>` | **只解析不下载**：抖音/B站/YouTube/小红书/任意网页，`--json` 机器可读、`-e` 展开选集、`--referer`、`--name` |
 | `video <链接>` | 解析 + 下载，`-q best/1080/720/480/360`、`-o` 输出目录、`-e` + `-n 1,3/1-5/a` 批量选集 |
 | `queue …` | 队列管理（需服务在跑）：`list [all/active/done/failed]`、`pause/resume/cancel/retry <id>`、`retry-failed`、`rm <id>`、`open <id>` |
+| `subscribe …` | 订阅管理（需服务在跑）：`list`、`add <sec_uid> [-n 名称]`、`rm <creator>`、`scope <creator> [all|history|digg]`、`poller on|off|set <mode>` |
+| `files …` | 文件管理（需服务在跑）：`ls [目录]`、`rm <路径...>`、`open <路径>` |
+| `sniff <url>` | 资源嗅探（真实浏览器深度抓取），`-t/--timeout L2 预算`、`--json` |
+| `bookmarks import <文件>` | 导入浏览器书签 HTML，批量解析出全部可下载链接，`--urls` 去重一行一个管道友好、`-n/--limit` 截断 |
+| `settings get [键]` | 设置管理（需服务在跑）：不跟键全量列出、跟键只回值；`set <key> <值>` 改配置；`proxy-test [代理地址] [--url 目标]` 测代理或直连通不通 |
+| `collections …` | 收藏歌单管理（需服务在跑）：`list`、`show <ID> [-n 曲目数]`、`add <链接> [-n 名称]`、`rename <ID> <名>`、`rm <ID...>`、`refresh <ID...>` |
 
 ```bash
 # 搜歌并直接下第 16 首
@@ -140,8 +144,7 @@ downloadkit video "https://www.douyin.com/video/xxx" -e -n 1,3
 
 CLI 输出默认压掉 INFO 日志保证管道干净，需要细节时加 `-v`。
 
-`queue` 命令读写的是**正在运行的服务**（队列是它的内存状态），所以要先起服务；
-地址默认 `http://127.0.0.1:8765`，换地址用全局 `--server` 或环境变量 `DOWNLOADKIT_SERVER`。
+`queue` / `subscribe` / `files` / `sniff` / `bookmarks` / `settings` / `collections` 这些命令读写的是**正在运行的服务**（队列/订阅/收藏都在它的内存或 SQLite 里，浏览器的 cookie 更是进程内单例），所以要先起服务；地址默认 `http://127.0.0.1:8765`，换地址用全局 `--server` 或环境变量 `DOWNLOADKIT_SERVER`。
 
 ```bash
 downloadkit queue list failed          # 看失败了哪些
@@ -183,7 +186,7 @@ server.py                 # Web 后端（FastAPI，64 条路由）
 run.py                    # 桌面启动（WebView2 窗口 + 托盘 + 单实例）
 backend/  frontend/       # NAS 多容器版（FastAPI+Celery+Redis / React+AntD）
 build/                    # 打包与验收脚本（build-release.ps1、test-exe-*）
-tests/                    # 测试用例（636 passed / 6 skipped）
+tests/                    # 测试用例（1006 passed / 6 skipped）
 docs/                     # 使用说明（图文）、验证与优化报告
 PLAN.md                   # 当前开发计划与进度（交接文档）
 ARCHITECTURE.md           # 架构与三套部署形态判别
@@ -246,7 +249,7 @@ allow_origins = ["http://127.0.0.1:8765", "http://localhost:8765"]
 ## 测试
 
 ```bash
-# 全量（当前 636 passed / 6 skipped）
+# 全量（当前 1006 passed / 6 skipped）
 $env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m pytest tests -q
 
 # 指定用例
@@ -366,8 +369,8 @@ MIT License
 - ✅ 代理三态与平台覆盖 + 测试连接、队列一键重试全部失败、设置导出/导入、解答页搜索、托盘快捷项
 - 🐛 修复打包版解析超 2 分钟 + 弹「已在运行」（frozen 下误 spawn 应用本体当 yt-dlp）
 
-### 未发布（2026-10-14 开发中）
+### 未发布（2026-10-16 开发中）
 
-- ✨ CLI 新增 `parse` / `video` 视频命令，平台分发抽共享层 `video_service.py`
-- 🐛 音乐下载五级回退修复（yt-dlp 成功误判、跨源拼接坏文件、gequbao 改版、itzo 独立源）
-- 🐛 抖音解析修复（图文分流、轮播计数、落盘目录生效、图文扩展名按魔数对齐）
+- ✨ CLI 新增队列 `queue`（P5-2）、订阅 `subscribe`（P5-3）、文件管理 `files`（P5-4）、资源嗅探与书签导入 `sniff` / `bookmarks`（P5-5）、设置 `settings`（P5-6）、收藏歌单 `collections`（P5-7）——此前这些只能在界面里做，现在 CLI 也能管
+- 🐛 歌单收藏模块修两个真 bug（P5-7 实测挖出）：`refresh_collection` 的 SELECT 少了 `auto_name` → 必挂 IndexError，**`POST /api/collections/{id}/refresh` 从来就没工作过**；`_run_async` 把解析器的 RuntimeError 换成 `asyncio.run() cannot be called from a running event loop`，DrissionPage 一抛错用户看到的全是驴唇不对马嘴的报错
+- ✨ 历史 `history` 部分待服务端补 `/api/history/*` 端点后补齐 CLI（当前 `DownloadHistory` 读/搜/删/清/计数能力齐全，只是 server.py 一个读取路由都没暴露）

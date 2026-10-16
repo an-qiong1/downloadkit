@@ -85,10 +85,16 @@ DownloadKit 是一个多平台资源下载工具，采用前后端分离架构�
   - `app.js**: 初始化和侧边栏
 
 #### CLI
-- `cli.py`: 命令行入口
-  - `search`: 搜索歌曲
-  - `playlist`: 歌单下载
-  - `douyin`: 抖音下载
+- `cli.py`: 命令行入口（click + rich）
+  - `search` / `playlist` / `download` / `douyin`：音乐与视频下载
+  - `parse` / `video`：视频平台解析 + 下载（抽共享层 `video_service.py`）
+  - `queue …`：队列管理（走 HTTP，服务在跑）
+  - `subscribe …`：订阅管理（走 HTTP，服务在跑）
+  - `files …`：文件管理（走 HTTP，服务在跑）
+  - `sniff <url>`：真实浏览器深度资源嗅探（L2）
+  - `bookmarks import <文件>`：批量导入书签 HTML 并解析出链接
+  - `settings get/set/proxy-test`：设置读取、写入、代理连通性测试（走 HTTP）
+  - `collections …`：收藏歌单 CRUD（走 HTTP，服务端缓存在 `~/.downloadkit/collections.db`）
 
 ### 服务层
 
@@ -118,8 +124,9 @@ DownloadKit 是一个多平台资源下载工具，采用前后端分离架构�
 - 暂停/恢复/取消
 
 #### history.py
-- SQLite持久化存储
-- 搜索和清理功能
+- SQLite 持久化存储下载记录
+- `DownloadHistory` 模块提供 `get_records` / `search_records` / `delete_record` / `clear_history` / `get_total_count` 等读写能力
+- **注意**：HTTP 层（`server.py`）目前只调 `add_record` 写入，**没有暴露任何读取端点**，前端也没有历史 UI；CLI 同样没有 `history` 命令（见 PLAN.md P5-7 历史部分）
 
 #### motion_photo.py
 - Google Motion Photo生成
