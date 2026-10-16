@@ -20,6 +20,7 @@ if _vendor.exists():
 import asyncio
 import json
 import logging
+import urllib.parse
 from datetime import datetime
 
 import click
@@ -2576,6 +2577,234 @@ def collections_refresh(ids, as_json):
         console.print(f"[bold green]✓[/bold green] #{i} "
                       f"{escape(str(coll.get('name') or ''))}："
                       f"{escape(str(data.get('message') or '刷新成功'))}")
+
+
+
+
+# ==================================================================
+# 下载历史（P5-7b）
+# ==================================================================
+# 历史缓存在**服务端**的 ~/.downloadkit/history.db，CLI 不直连——进程隔离时读
+# 的是另一份文件，不隔离时两个进程共享同一 SQLite 也可能锁库。统一走 HTTP。
+# 退出码沿用 P5-2 那组「状态查询」的约定：查到空也算查成功 -> 0；只有用法错误是 2。
+
+
+def _hist_api(method: str, path: str, body=None):
+    """这一组专用的请求层：失败打中文并返回 None，不改退出码。"""
+    code, data = _queue_api(method, path, body)
+    if code != 200:
+        _queue_fail(code, data)
+    return data
+
+
+@main.group()
+def history():
+    """下载历史（需 DownloadKit 正在运行，缓存在它的 SQLite 里）。
+
+    \b
+    Examples:
+      downloadkit history list
+      downloadkit history search 晴天
+      downloadkit history rm 1
+      downloadkit history clear --yes
+      downloadkit history count
+    """
+    pass
+
+
+@history.command("list")
+@click.option("-n", "--limit", default=20, show_default=True,
+              help="最多显示几条（默认 20）")
+@click.option("-o", "--offset", default=0, show_default=True,
+              help="从第几条开始（默认从头）")
+@click.option("--json", "as_json", is_flag=True,
+              help="服务端原样返回（含 url/file_path 等全部字段）")
+def history_list(limit, offset, as_json):
+    """列出下载历史（默认最近 20 条，分页查看用 -o）。"""
+    if as_json:
+        _quiet_logs(logging.ERROR)
+    rows = _hist_api("GET", f"/api/history?limit={limit}&offset={offset}",
+                     body=None)
+    if rows is None:
+        return
+    if not isinstance(rows, list):
+        if as_json:
+            click.echo(json.dumps({"error": f"服务端返回非列表"}, ensure_ascii=False))
+        else:
+            console.print("[red]服务端返回格式异常[/red]")
+        return
+    if as_json:
+        click.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+    if not rows:
+        console.print("[dim]还没有下载记录。下载一首歌或视频后这里会有内容。[/dim]")
+        return
+
+    table = Table(title=f"下载历史 · 共 {len(rows)} 条")
+    table.add_column("ID", justify="right", no_wrap=True)
+    table.add_column("时间", no_wrap=True)
+    table.add_column("标题", overflow="fold")
+    table.add_column("作者", no_wrap=True)
+    table.add_column("大小", justify="right", no_wrap=True)
+    for r in rows:
+        ts = r.get("downloaded_at") or "-"
+        size = _hist_size(r.get("file_size") or 0)
+        table.add_row(
+            str(r.get("id", "-")),
+            escape(str(ts)),
+            escape(str(r.get("title") or "")),
+            escape(str(r.get("author") or "")),
+            size,
+        )
+    console.print(table)
+    # 文件路径走 click.echo：长路径过 rich 会被折断，用户可能需要复制路径
+    for r in rows:
+        fp = r.get("file_path")
+        if fp and str(fp).strip():
+            click.echo(f"  [{r.get('id')}] {fp}")
+
+
+@history.command("search")
+@click.argument("keyword")
+@click.option("-n", "--limit", default=20, show_default=True,
+              help="最多返回几条")
+@click.option("--json", "as_json", is_flag=True,
+              help="服务端原样返回")
+def history_search(keyword, limit, as_json):
+    """按标题或作者搜索下载历史。"""
+    if as_json:
+        _quiet_logs(logging.ERROR)
+    kw = (keyword or "").strip()
+    if not kw:
+        raise click.UsageError("搜索关键词不能为空。")
+    rows = _hist_api("POST", f"/api/history/search?keyword={urllib.parse.quote(kw)}",
+                     body=None)
+    if rows is None:
+        return
+    if not isinstance(rows, list):
+        if as_json:
+            click.echo(json.dumps({"error": "服务端返回非列表"}, ensure_ascii=False))
+        else:
+            console.print("[red]服务端返回格式异常[/red]")
+        return
+    if as_json:
+        click.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+    if not rows:
+        console.print(f"[dim]没有找到和「{escape(kw)}」相关的记录。[/dim]")
+        return
+
+    table = Table(title=f"搜索结果 · {escape(kw)} · 共 {len(rows)} 条")
+    table.add_column("ID", justify="right", no_wrap=True)
+    table.add_column("时间", no_wrap=True)
+    table.add_column("标题", overflow="fold")
+    table.add_column("作者", no_wrap=True)
+    table.add_column("大小", justify="right", no_wrap=True)
+    for r in rows:
+        ts = r.get("downloaded_at") or "-"
+        size = _hist_size(r.get("file_size") or 0)
+        table.add_row(
+            str(r.get("id", "-")),
+            escape(str(ts)),
+            escape(str(r.get("title") or "")),
+            escape(str(r.get("author") or "")),
+            size,
+        )
+    console.print(table)
+    for r in rows:
+        fp = r.get("file_path")
+        if fp and str(fp).strip():
+            click.echo(f"  [{r.get('id')}] {fp}")
+
+
+@history.command("rm")
+@click.argument("ids", nargs=-1, required=True, metavar="ID...")
+@click.option("--yes", is_flag=True, help="跳过确认")
+def history_rm(ids, yes):
+    """删除一条或多条下载历史（删之前摊开列出目标并确认，--yes 跳过）。"""
+    wanted = []
+    for raw in ids:
+        try:
+            wanted.append(int(str(raw).strip()))
+        except (TypeError, ValueError):
+            raise click.UsageError(f"ID 必须是整数，收到：{raw}") from None
+
+    # 先 GET list 确认哪些 ID 真实存在——count 只知总数，不知道具体 ID
+    all_records = _hist_api("GET", "/api/history?limit=10000&offset=0")
+    if all_records is None:
+        return
+    if not isinstance(all_records, list):
+        console.print("[red]服务端返回格式异常[/red]")
+        return
+    existing_ids = {r.get("id") for r in all_records if isinstance(r, dict)}
+    known = [i for i in dict.fromkeys(wanted) if i in existing_ids]
+    unknown = [i for i in dict.fromkeys(wanted) if i not in existing_ids]
+
+    if unknown:
+        for i in unknown:
+            console.print(f"[yellow]记录不存在：{i}[/yellow]")
+
+    if not known:
+        return
+
+    # 摊开列出要删的——让人对着一个干巴巴的 ID 确认是逼他记错
+    # 由于服务端不返回单条详情，只能打印 ID
+    console.print(f"要删除的记录 ID：{', '.join(str(i) for i in known)}")
+    if not _confirm_or_skip(f"确认删除这 {len(known)} 条记录？", yes):
+        return
+
+    ok = 0
+    for i in known:
+        data = _hist_api("DELETE", f"/api/history/{i}")
+        if data is not None:
+            ok += 1
+    failed = len(known) - ok
+    console.print(f"[bold green]✓[/bold green] 已删除 {ok} 条"
+                  + (f"[yellow]，失败 {failed} 条[/yellow]" if failed else ""))
+
+
+@history.command("clear")
+@click.option("--yes", is_flag=True, help="跳过确认")
+def history_clear(yes):
+    """清空全部下载历史（危险操作，要求二次确认）。"""
+    count = _hist_api("GET", "/api/history/count")
+    if count is None:
+        return
+    n = count.get("count", 0) if isinstance(count, dict) else 0
+    console.print(f"当前历史共有 [bold]{n}[/bold] 条记录，删除后不可恢复。")
+    if not _confirm_or_skip("确认清空全部下载历史？", yes):
+        return
+    data = _hist_api("POST", "/api/history/clear")
+    if data is None:
+        return
+    console.print(f"[bold green]✓[/bold green] 已清空，共删除 {n} 条记录")
+
+
+@history.command("count")
+@click.option("--json", "as_json", is_flag=True, help="服务端原样返回")
+def history_count(as_json):
+    """显示当前下载历史总条数。"""
+    if as_json:
+        _quiet_logs(logging.ERROR)
+    data = _hist_api("GET", "/api/history/count", body=None)
+    if data is None:
+        return
+    if as_json:
+        click.echo(json.dumps(data, ensure_ascii=False))
+        return
+    n = data.get("count", 0) if isinstance(data, dict) else 0
+    console.print(f"下载历史共 [bold]{n}[/bold] 条")
+
+
+def _hist_size(size_bytes: int) -> str:
+    """文件大小 -> 人类可读字符串。"""
+    if not size_bytes:
+        return "-"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f}{unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f}PB"
 
 
 def _fmt_duration(sec) -> str:

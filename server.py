@@ -2526,6 +2526,51 @@ async def api_cookies_save(req: CookieSaveRequest):
     return {"ok": True, "path": str(save_path), "message": f"已保存 {len(req.cookie_string)} 字符到 {save_path}"}
 
 
+# ==================================================================
+# 下载历史（P5-7b）
+# ==================================================================
+# history.db 在**服务端**的 ~/.downloadkit/ 下，CLI 不能直连——进程隔离时读
+# 的是另一份文件，不隔离时两个进程共享同一 SQLite 也可能锁库。统一走 HTTP。
+
+
+@app.get("/api/history")
+async def api_history_list(limit: int = 50, offset: int = 0):
+    """列出下载历史（分页）"""
+    if limit < 0 or offset < 0:
+        raise HTTPException(400, "limit 和 offset 必须是非负整数")
+    records = download_history.get_records(limit=int(limit), offset=int(offset))
+    return [r.__dict__ for r in records]
+
+
+@app.post("/api/history/search")
+async def api_history_search(keyword: str):
+    """按标题或作者搜索下载历史"""
+    if not keyword or not keyword.strip():
+        raise HTTPException(400, "keyword 不能为空")
+    records = download_history.search_records(keyword=keyword.strip())
+    return [r.__dict__ for r in records]
+
+
+@app.delete("/api/history/{record_id}")
+async def api_history_delete(record_id: int):
+    """删除一条下载记录"""
+    download_history.delete_record(record_id=int(record_id))
+    return {"status": "deleted"}
+
+
+@app.post("/api/history/clear")
+async def api_history_clear():
+    """清空全部下载历史"""
+    download_history.clear_history()
+    return {"status": "cleared"}
+
+
+@app.get("/api/history/count")
+async def api_history_count():
+    """获取历史总条数"""
+    return {"count": download_history.get_total_count()}
+
+
 @app.post("/api/settings/update")
 async def api_settings_update(req: SettingsUpdateRequest):
     """更新配置，只更新传入的字段"""
