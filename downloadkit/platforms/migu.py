@@ -1,10 +1,25 @@
 """咪咕音乐下载源 -- 搜索 API 并返回直链。
 
-2026-10-14 现状：``scr_search_tag`` 已于改版后 301 到 ``/v5`` SPA 壳，
-所有已知搜索接口（remoting/*、v5/api/*、app.c.migu.cn/*）一律返回 HTML
-或域名已不解析，拿不到 JSON。这里不再让 ``resp.json()`` 抛
-``JSONDecodeError`` 每首歌刷一条 ERROR，而是识别非 JSON 响应后直接返回
-None，把这一级让给后面的 yt-dlp。若将来接口恢复，下面的解析逻辑无需改动。
+现状（2026-10-17 复测，结论：该源仍不可用）
+------------------------------------------
+**搜索**：本模块用的 ``m.music.migu.cn/migu/remoting/scr_search_tag`` 确实已死，
+一律返回 1602 字节的 SPA 壳 HTML，不是 JSON（与交接文档一致）。
+但复测发现搜索**另有可用接口**：``pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/
+search_all.do``（参数 ``text/pageNo/pageSize/isCorrect/isCopyright/
+searchSwitch``）返回真 JSON，实测《晴天 周杰伦》拿到 20 条完整结果（含
+copyrightId、rateFormats 等）。
+
+**直链**：拿不到。所有 ``listen-url`` 变体（MIGUM2.0/MIGUM3.0 ×
+pd.musicapp / app.c.nf / music.migu / m.music，外加 channel/toneFlag 组合）
+一律返回 ``{"code":"299996","info":"路由请求不支持"}``，需要 App 侧签名，
+无公开参数可解。搜索结果里的 ``rateFormats`` 只给 format/size/price，不含 URL。
+
+**因此本模块保持返回 None**：只有搜索、没有直链，对下载链没有价值，
+不接新接口（避免引入"能搜到但必然下不动"的死代码）。
+若将来直链接口恢复，可接 ``pd.musicapp`` 搜索 + ``listen-url``。
+
+这里不再让 ``resp.json()`` 抛 ``JSONDecodeError`` 每首歌刷一条 ERROR，
+而是识别非 JSON 响应后直接返回 None，把这一级让给后面的 yt-dlp。
 """
 
 import logging
@@ -14,6 +29,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 MIGU_SEARCH = "https://m.music.migu.cn/migu/remoting/scr_search_tag"
+# 2026-10-17 复测：搜索可用的新接口（直链仍拿不到，暂未接入，见模块 docstring）
+MIGU_SEARCH_PD = "https://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/search_all.do"
 
 
 def _clean_artist(artist: str) -> str:
@@ -78,6 +95,8 @@ async def search_and_get_url(title: str, artist: str) -> str | None:
         return None
 
     # Extract download URL
+    # 注意：rateFormats 项里**没有** url 字段（只有 format/size/price），
+    # 所以这段在当前接口下必然取不到值 —— 保留以兼容旧响应结构。
     rate_list = best.get("rateFormats", []) or best.get("newRateFormats", [])
     if rate_list:
         # Prefer highest quality: flac > 320k > 128k

@@ -1,9 +1,20 @@
 """酷我音乐下载源 -- http://www.kuwo.cn/
 
-搜索接口：http://search.kuwo.cn/r.s （JSON 格式，字段含 DC_TARGETID）
-直链获取：尝试官方 convert_url2 接口 + 第三方 API 回退（lxmusic / nxinxz）
+搜索接口：http://search.kuwo.cn/r.s
+  注意：该接口返回的是**单引号伪 JSON**（`{'abslist':[{'SONGNAME':'...'}]}`），
+  不是合法 JSON —— `json.loads` 必然失败。2026-10-17 实测：4110 个单引号、
+  0 个双引号。此前只走 json + 逐行 `key=value` 兜底，而响应里根本没有 `=`，
+  于是解析恒返回 0 条 → 搜索级永远 miss（交接文档记的"搜索可用"不成立）。
+  现在用 ast.literal_eval 解析 Python 字面量，json 与逐行解析仍保留兜底。
+
+直链获取（2026-10-17 实测排序）：
+  1. antiserver anti.s —— 实测可用，返回纯文本直链，落盘为真 MP3（魔数 49443304）
+  2. 官方 mobi.s       —— 实测 404，已失效，保留仅作探测
+  3. lxmusic(onrender) —— 实测 503 Service Suspended，已停服
+  4. nxinxz            —— 实测返回可下载音频（但拿到的是 AAC，非其声称的 lossless）
 """
 
+import ast
 import logging
 import re
 import urllib.parse
@@ -14,8 +25,12 @@ logger = logging.getLogger(__name__)
 
 _SEARCH_URL = "http://search.kuwo.cn/r.s"
 _OFFICIAL_DL_URL = "http://mobi.kuwo.cn/mobi.s"
+# 实测可用的官方直链接口（无需鉴权）
+_ANTISERVER_URL = "http://antiserver.kuwo.cn/anti.s"
 _LX_MUSIC_API = "https://lxmusicapi.onrender.com/url/kw/{song_id}/flac"
 _NXINXZ_API = "http://music.nxinxz.com/kw.php?id={song_id}&level=lossless&type=json"
+
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 
 def _encrypt_kuwo_query(query: str) -> str:
@@ -28,15 +43,36 @@ def _encrypt_kuwo_query(query: str) -> str:
 
 
 def _parse_search_result(resp_text: str) -> list[dict] | None:
-    """解析酷我搜索响应（可能是 JSON 也可能是 GB2312 文本）。"""
-    # 先尝试 JSON
+    """解析酷我搜索响应。
+
+    真实响应是单引号伪 JSON（Python 字典字面量），所以优先 ast.literal_eval；
+    合法 JSON 与逐行 `key=value` 作为兜底。
+    """
+    if not resp_text or not resp_text.strip():
+        return []
+
+    # 1) 合法 JSON（未来接口若修正格式）
     try:
         import json
         d = json.loads(resp_text)
-        return d.get("abslist") or []
+        if isinstance(d, dict) and "abslist" in d:
+            return d.get("abslist") or []
     except Exception:
         pass
-    # 尝试从 text/plain 格式解析
+
+    # 2) 单引号伪 JSON —— 实测的真实格式
+    #    用 ast.literal_eval 而不是 replace("'", '"')：后者会把内容里的
+    #    撇号（如 "Don't"）也换成双引号，直接破坏 JSON。
+    try:
+        d = ast.literal_eval(resp_text)
+        if isinstance(d, dict):
+            items = d.get("abslist") or []
+            if items:
+                return items
+    except Exception as e:
+        logger.debug(f"[kuwo] literal_eval 失败，退回逐行解析: {type(e).__name__}: {e}")
+
+    # 3) 逐行 key=value 兜底（老式 text/plain 响应）
     items = []
     current: dict = {}
     for line in resp_text.strip().split("\n"):
@@ -73,8 +109,32 @@ def _find_song_id(items: list[dict], title: str, artist: str) -> str | None:
     return None
 
 
+async def _try_antiserver_dl(song_id: str) -> str | None:
+    """官方 antiserver anti.s 接口：返回纯文本直链，实测可用。"""
+    url = (
+        f"{_ANTISERVER_URL}?type=convert_url&format=mp3"
+        f"&response=url&rid=MUSIC_{song_id}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True, trust_env=False) as c:
+            r = await c.get(url, headers={"User-Agent": _UA})
+            if r.status_code != 200:
+                logger.warning(f"[kuwo] antiserver 返回 {r.status_code}")
+                return None
+            text = r.text.strip()
+            if text.startswith("http"):
+                return text.split()[0]
+            logger.warning(f"[kuwo] antiserver 响应不是直链: {text[:80]!r}")
+    except Exception as e:
+        logger.warning(f"[kuwo] antiserver 失败: {type(e).__name__}: {e}")
+    return None
+
+
 async def _try_official_dl(song_id: str) -> str | None:
-    """尝试酷我官方 convert_url2 接口。"""
+    """尝试酷我官方 convert_url2 接口（mobi.s）。
+
+    2026-10-17 实测该接口恒 404，已失效；保留探测以免将来恢复。
+    """
     query = (
         "user=0&corp=kuwo&source=kwplayer_ar_5.1.0.0_B_jiakong_vh.apk"
         "&p2p=1&type=convert_url2&sig=0&format=mp3&rid=" + str(song_id)
@@ -90,16 +150,16 @@ async def _try_official_dl(song_id: str) -> str | None:
             if m:
                 dl_url = m.group(0)
                 # 验证链接可达
-                r2 = await c.head(dl_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+                r2 = await c.head(dl_url, headers={"User-Agent": _UA}, timeout=8)
                 if r2.status_code in (200, 206):
                     return dl_url
     except Exception as e:
-        logger.debug(f"[kuwo] official dl failed: {e}")
+        logger.warning(f"[kuwo] 官方 mobi.s 失败: {type(e).__name__}: {e}")
     return None
 
 
 async def _try_lxmusic_dl(song_id: str) -> str | None:
-    """尝试 lxmusic API（第三方）。"""
+    """尝试 lxmusic API（第三方）。2026-10-17 实测 503 已停服。"""
     url = _LX_MUSIC_API.format(song_id=song_id)
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True, trust_env=False) as c:
@@ -116,24 +176,30 @@ async def _try_lxmusic_dl(song_id: str) -> str | None:
                 dl_url = data.get("url") or ""
                 if dl_url and dl_url.startswith("http"):
                     return dl_url
+            else:
+                logger.warning(f"[kuwo] lxmusic 返回 {r.status_code}（该源可能已停服）")
     except Exception as e:
-        logger.debug(f"[kuwo] lxmusic failed: {e}")
+        logger.warning(f"[kuwo] lxmusic 失败: {type(e).__name__}: {e}")
     return None
 
 
 async def _try_nxinxz_dl(song_id: str) -> str | None:
-    """尝试 nxinxz API（第三方）。"""
+    """尝试 nxinxz API（第三方）。
+
+    实测能下到音频，但即使传 level=lossless 拿到的也是 AAC（魔数 fff1），
+    质量与宣称不符，故排在最后。
+    """
     url = _NXINXZ_API.format(song_id=song_id)
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True, trust_env=False) as c:
-            r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            r = await c.get(url, headers={"User-Agent": _UA})
             if r.status_code == 200:
                 data = r.json()
                 dl_url = (data.get("data") or {}).get("url") or ""
                 if dl_url and dl_url.startswith("http"):
                     return dl_url
     except Exception as e:
-        logger.debug(f"[kuwo] nxinxz failed: {e}")
+        logger.warning(f"[kuwo] nxinxz 失败: {type(e).__name__}: {e}")
     return None
 
 
@@ -151,27 +217,29 @@ async def search_and_get_url(title: str, artist: str) -> str | None:
                     "client": "kt", "ft": "music", "rformat": "json",
                     "encoding": "utf8",
                 },
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                headers={"User-Agent": _UA},
             )
             if r.status_code != 200:
+                logger.warning(f"[kuwo] 搜索返回 {r.status_code}")
                 return None
             items = _parse_search_result(r.text)
         except Exception as e:
-            logger.info(f"[kuwo] 搜索失败: {e}")
+            logger.warning(f"[kuwo] 搜索失败: {type(e).__name__}: {e}")
             return None
 
         song_id = _find_song_id(items, title, artist)
         if not song_id:
-            logger.info(f"[kuwo] 未找到匹配歌曲: {keyword}")
+            logger.warning(f"[kuwo] 未找到匹配歌曲: {keyword}（解析出 {len(items or [])} 条）")
             return None
 
         logger.info(f"[kuwo] 找到歌曲 DC_TARGETID={song_id}")
 
-        # Step 2: 依次尝试各下载源
-        for try_fn in [_try_official_dl, _try_lxmusic_dl, _try_nxinxz_dl]:
+        # Step 2: 依次尝试各下载源（antiserver 实测可用，放第一位）
+        for try_fn in [_try_antiserver_dl, _try_official_dl,
+                       _try_lxmusic_dl, _try_nxinxz_dl]:
             url = await try_fn(song_id)
             if url:
                 return url
 
-        logger.info(f"[kuwo] 所有下载源均不可用，跳过")
+        logger.warning(f"[kuwo] 所有下载源均不可用，跳过: {keyword}")
         return None

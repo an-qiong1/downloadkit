@@ -357,6 +357,36 @@ class TestKuwoParsing:
         assert len(result) == 1
         assert result[0]["DC_TARGETID"] == "12345"
 
+    def test_parse_search_result_single_quoted_pseudo_json(self):
+        """真实响应是单引号伪 JSON —— json.loads 必然失败（2026-10-17 回归）
+
+        实测响应：4110 个单引号、0 个双引号，形如
+            {'HIT':'3849','abslist':[{'SONGNAME':'晴天',...}]}
+        此前只走 json + 逐行 key=value 兜底，而响应里没有 '='，
+        于是恒返回 0 条 → kuwo 搜索级永远 miss。
+        """
+        from downloadkit.platforms.kuwo import _parse_search_result
+        raw = ("{'HIT':'3849','abslist':[{'AARTIST':'Jay Chou',"
+               "'ARTIST':'周杰伦','DC_TARGETID':'51685512',"
+               "'SONGNAME':'晴天'}]}")
+        result = _parse_search_result(raw)
+        assert len(result) == 1, "单引号伪 JSON 没被解析（kuwo 搜索会恒 miss）"
+        assert result[0]["DC_TARGETID"] == "51685512"
+        assert result[0]["SONGNAME"] == "晴天"
+
+    def test_parse_search_result_preserves_apostrophes(self):
+        """内容里的撇号不能被破坏
+
+        不能用 replace("'", '"') 这种粗暴替换：把 "Don't" 的撇号也换成
+        双引号会让解析直接崩。
+        """
+        from downloadkit.platforms.kuwo import _parse_search_result
+        raw = ('{\'abslist\':[{"SONGNAME":"Don\'t Stop",'
+               "'DC_TARGETID':'999'}]}")
+        result = _parse_search_result(raw)
+        assert len(result) == 1
+        assert result[0]["SONGNAME"] == "Don't Stop"
+
     def test_parse_search_result_empty(self):
         from downloadkit.platforms.kuwo import _parse_search_result
         result = _parse_search_result("")
@@ -427,6 +457,62 @@ class TestKugouParsing:
         ]
         result = _find_hash(items, "晴天", "周杰伦")
         assert result == "HASH1"
+
+    def test_find_hash_prefers_free_over_paid(self):
+        """必须优先挑免费曲（2026-10-17 核心回归）
+
+        酷狗搜索结果里 VIP 曲 Privilege=10/PayType=3，官方接口对它们返回
+        status:2（无 url）。原实现直接取 items[0]，命中的往往正是 VIP 曲，
+        于是"每首歌都拿不到直链"。免费曲哪怕排在后面也要优先选中。
+        """
+        from downloadkit.platforms.kugou import _find_hash
+        items = [
+            # 排第一的精确匹配，但是付费曲
+            {"FileName": "晴天", "SingerName": "周杰伦", "FileHash": "PAID",
+             "Privilege": 10, "PayType": 3},
+            # 免费曲排在后面
+            {"FileName": "晴天", "SingerName": "周杰伦", "FileHash": "FREE",
+             "Privilege": 0, "PayType": 0},
+        ]
+        assert _find_hash(items, "晴天", "周杰伦") == "FREE", \
+            "挑中了付费曲 → 官方接口必然拿不到直链"
+
+    def test_find_hash_falls_back_to_paid_with_warning(self, caplog):
+        """只有付费曲时仍要能选（并留下可见 warning，不伪装成源全挂）"""
+        import logging
+        from downloadkit.platforms.kugou import _find_hash
+        items = [
+            {"FileName": "晴天", "SingerName": "周杰伦", "FileHash": "PAID",
+             "Privilege": 10, "PayType": 3},
+        ]
+        with caplog.at_level(logging.WARNING):
+            result = _find_hash(items, "晴天", "周杰伦")
+        assert result == "PAID"
+        assert any("付费" in r.message for r in caplog.records), \
+            "只有付费曲时必须留 warning，否则用户看不到真实原因"
+
+    def test_free_detection_variants(self):
+        """Privilege/PayType 的免费判定（字段缺失不算免费）"""
+        from downloadkit.platforms.kugou import _is_free
+        assert _is_free({"Privilege": 0, "PayType": 0}) is True
+        assert _is_free({"Privilege": 10, "PayType": 3}) is False
+        assert _is_free({"Privilege": "0"}) is True, "字段可能是字符串"
+        assert _is_free({}) is False, "字段缺失时宁可漏选不可错选"
+
+    def test_official_sources_in_fallback_chain(self):
+        """官方源必须接进兜底链，且排在第三方前面
+
+        原实现三个源全是第三方（baka/lzmhhh/gdstudio）且全部失效，而官方
+        trackercdn 一直是好的、却从没被调用；getSongInfo 的常量甚至定义了
+        却没接进来。
+        """
+        import inspect
+        from downloadkit.platforms import kugou
+        src = inspect.getsource(kugou.search_and_get_url)
+        assert "_try_trackercdn_dl" in src, "官方 trackercdn 没接进兜底链"
+        assert "_try_official_song_info" in src, "官方 getSongInfo 没接进兜底链"
+        assert src.index("_try_trackercdn_dl") < src.index("_try_baka_api"), \
+            "官方源应排在已失效的第三方前面"
 
 
 # ============================ soda 解析函数 ============================
