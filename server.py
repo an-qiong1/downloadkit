@@ -834,6 +834,32 @@ async def api_playlist_batch_download(req: PlaylistBatchDownloadRequest):
         "songs": {},  # index -> {"status": ..., "filename": ..., "error": ...}
     }
 
+    # 本批次的独立并发额度名。用独立额度而不是全局额度：UI 传的
+    # batch_size 才能真正决定这一批的并发，且不挤占其他任务（视频等）
+    # 的全局额度，反之亦然。
+    lane_name = f"batch:{task_id}"
+
+    def _finalize_batch(batch_tid: str):
+        """全部曲目到达终态后收尾。
+
+        没有这一步的话 status 永远停在 "downloading"，前端
+        pollBatchProgress 只在 done/cancelled/failed 时停止 → 进度条
+        永远转下去，大歌单跑完也看不出结束。
+        """
+        info = _downloads.get(batch_tid)
+        if not info:
+            return
+        songs = info.get("songs", {})
+        if len(songs) < info.get("total", 0):
+            return
+        statuses = [s.get("status") for s in songs.values()]
+        if any(s == "paused" for s in statuses):
+            info["status"] = "paused"
+            return
+        info["status"] = "done"
+        _downloads[batch_tid]["finished_at"] = time.time()
+        download_queue.release_lane(f"batch:{batch_tid}")
+
     # Step 3: 逐首入队
     async def _make_download_func(song: SongInfo, idx: int, batch_tid: str):
         song_task_id = f"{batch_tid}_s{idx}"
@@ -878,6 +904,8 @@ async def api_playlist_batch_download(req: PlaylistBatchDownloadRequest):
                 task.error = str(e)
                 _downloads[song_task_id] = {"status": "failed", "error": str(e)}
                 raise
+            finally:
+                _finalize_batch(batch_tid)
 
         return _download_func
 
@@ -890,9 +918,14 @@ async def api_playlist_batch_download(req: PlaylistBatchDownloadRequest):
             platform=song.platform or "soda",
             title=f"{idx + 1}. {song.title} - {song.artist}",
             download_func=dl_func,
+            lane=lane_name,
+            lane_size=batch_size,
         )
 
-    logger.info(f"[Playlist Batch] {pl.name}: {total} 首, 并发={batch_size}, task_id={task_id}")
+    logger.info(
+        f"[Playlist Batch] {pl.name}: {total} 首, 并发={batch_size}, "
+        f"lane={lane_name}, task_id={task_id}"
+    )
     return {
         "task_id": task_id,
         "playlist_name": pl.name,
@@ -2712,6 +2745,16 @@ async def api_settings_update(req: SettingsUpdateRequest):
         history_max = req.general.get("history_max_records")
         if history_max is not None:
             download_history.update_max_records(int(history_max))
+        # 并发上限热生效（与启动时同一套 1~10 裁剪），否则改了要重启才动
+        max_concurrent = req.general.get("max_concurrent")
+        if max_concurrent is not None:
+            try:
+                applied = download_queue.set_max_concurrent(
+                    max(1, min(int(max_concurrent), 10))
+                )
+                logger.info(f"下载并发上限已更新：{applied}")
+            except (TypeError, ValueError):
+                logger.warning(f"忽略非法 max_concurrent: {max_concurrent!r}")
     return {"status": "ok", "settings": load_config()}
 
 
@@ -2726,6 +2769,16 @@ async def startup_event():
     cfg = load_config()
     history_max = cfg.get("general", {}).get("history_max_records", 1000)
     download_history.update_max_records(history_max)
+
+    # 从配置同步全局并发上限。此前这个设置项（设置页 + CLI 均可改，1~10）
+    # 从来没被读回过：队列永远用写死的 3，用户改了显示改了、实际无效。
+    try:
+        configured = int(cfg.get("general", {}).get("max_concurrent", 3))
+    except (TypeError, ValueError):
+        configured = 3
+    applied = download_queue.set_max_concurrent(max(1, min(configured, 10)))
+    if applied != 3:
+        logger.info(f"下载并发上限按配置生效：{applied}")
 
     # 下载目录归位：老版本把 music/、videos/ 直接生成在系统下载目录下，
     # 现在默认根目录是 ~/Downloads/DownloadKit，启动时把旧分类目录搬进来。
