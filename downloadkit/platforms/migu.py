@@ -23,6 +23,7 @@ pd.musicapp / app.c.nf / music.migu / m.music，外加 channel/toneFlag 组合�
 """
 
 import logging
+import time
 
 import httpx
 
@@ -32,6 +33,23 @@ MIGU_SEARCH = "https://m.music.migu.cn/migu/remoting/scr_search_tag"
 # 2026-10-17 复测：搜索可用的新接口（直链仍拿不到，暂未接入，见模块 docstring）
 MIGU_SEARCH_PD = "https://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/search_all.do"
 
+# 源失效短路：接口返回非 JSON（改版成 SPA 壳）后，同一进程里没必要
+# 每首歌都再烧一次 15s 请求 —— 实测 368 首全数撞同一堵墙。
+# 冷却窗口过去后自动重试一次，源恢复即自愈。
+_DEAD_COOLDOWN = 600.0
+_source_dead_until: float = 0.0
+
+
+def _source_cooling(now: float | None = None) -> bool:
+    t = time.time() if now is None else now
+    return _source_dead_until > t
+
+
+def _mark_source_dead(now: float | None = None) -> None:
+    global _source_dead_until
+    _source_dead_until = (time.time() if now is None else now) + _DEAD_COOLDOWN
+    logger.warning(f"[migu] 接口失效，进入 {int(_DEAD_COOLDOWN)}s 冷却")
+
 
 def _clean_artist(artist: str) -> str:
     """提取第一个歌手名。"""
@@ -40,6 +58,10 @@ def _clean_artist(artist: str) -> str:
 
 async def search_and_get_url(title: str, artist: str) -> str | None:
     """搜索咪咕音乐并返回最佳匹配下载 URL。取不到时返回 None。"""
+    if _source_cooling():
+        logger.debug("[migu] 源失效冷却中，跳过")
+        return None
+
     keyword = f"{title} {_clean_artist(artist)}"
     params = {
         "keyword": keyword,
@@ -61,10 +83,11 @@ async def search_and_get_url(title: str, artist: str) -> str | None:
 
     # 改版后这里会 301 到 /v5 并返回 SPA 壳，不是 JSON
     if "json" not in resp.headers.get("content-type", "").lower() and not resp.text.lstrip()[:1] in "{[":
-        logger.info(
+        logger.warning(
             f"[migu] 搜索接口返回非 JSON (status={resp.status_code}, "
             f"ct={resp.headers.get('content-type', '-')})，该源已失效，跳过"
         )
+        _mark_source_dead()
         return None
 
     try:

@@ -231,6 +231,59 @@ class TestMiguHelpers:
         assert _clean_artist("") == ""
 
 
+# ============================ 死源短路（T3 全量跑暴露） ============================
+
+class TestDeadSourceShortCircuit:
+    """itzo/migu 源失效后的冷却短路（2026-10-17 T3）。
+
+    368 首歌单里 itzo（DNS 已挂）与 migu（返回 SPA 壳）每首都要白烧
+    一次完整超时。约定：连接级失败/非 JSON 响应 → 记时间戳进冷却，
+    窗口内直接跳过；窗口过后自动重试一次，源恢复即自愈。
+    """
+
+    def test_migu_cooling_gate(self, monkeypatch):
+        from downloadkit.platforms import migu
+        monkeypatch.setattr(migu, "_source_dead_until", 0.0)
+        assert migu._source_cooling() is False
+        migu._mark_source_dead(now=1000.0)
+        assert migu._source_cooling(now=1000.0 + migu._DEAD_COOLDOWN - 1) is True
+        assert migu._source_cooling(now=1000.0 + migu._DEAD_COOLDOWN + 1) is False, \
+            "冷却窗口过后必须放行重试（源恢复自愈）"
+
+    @pytest.mark.asyncio
+    async def test_migu_cooled_returns_none_without_request(self, monkeypatch):
+        """冷却期内连 httpx 都不许碰（这才是不白等的证明）"""
+        import httpx
+        from downloadkit.platforms import migu
+        monkeypatch.setattr(migu, "_source_dead_until", migu.time.time() + 60)
+
+        def _boom(*a, **k):
+            raise AssertionError("冷却期内不应发起网络请求")
+        monkeypatch.setattr(httpx, "AsyncClient", _boom)
+
+        assert await migu.search_and_get_url("晴天", "周杰伦") is None
+
+    def test_itzo_cooling_gate(self, monkeypatch):
+        from downloadkit.platforms import itzo
+        monkeypatch.setattr(itzo, "_last_conn_fail", 0.0)
+        assert itzo._source_cooling() is False
+        itzo._mark_conn_fail(now=1000.0)
+        assert itzo._source_cooling(now=1000.0 + itzo._DEAD_COOLDOWN - 1) is True
+        assert itzo._source_cooling(now=1000.0 + itzo._DEAD_COOLDOWN + 1) is False
+
+    @pytest.mark.asyncio
+    async def test_itzo_cooled_returns_none_without_request(self, monkeypatch):
+        import httpx
+        from downloadkit.platforms import itzo
+        monkeypatch.setattr(itzo, "_last_conn_fail", itzo.time.time())
+
+        def _boom(*a, **k):
+            raise AssertionError("冷却期内不应发起网络请求")
+        monkeypatch.setattr(httpx, "AsyncClient", _boom)
+
+        assert await itzo.search_and_get_url("晴天", "周杰伦") is None
+
+
 # ============================ gequbao 辅助函数 ============================
 
 class TestGequbaoHelpers:
