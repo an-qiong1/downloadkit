@@ -49,10 +49,12 @@
   
   // 检测是否为歌单链接
   function isPlaylistUrl(text) {
-    return text.includes('music.163.com/playlist') || 
+    return text.includes('music.163.com/playlist') ||
            text.includes('y.qq.com/n/ryqq/playlist') ||
            text.includes('music.163.com/#/playlist') ||
-           text.includes('c6.y.qq.com/base/fcgi-bin');
+           text.includes('c6.y.qq.com/base/fcgi-bin') ||
+           text.includes('qishui.douyin.com/s/') ||
+           text.includes('douyin.com/qishui/');
   }
   
   // 检测是否为单曲链接
@@ -135,6 +137,7 @@
   
   // 解析歌单
   function parsePlaylist(url) {
+    state.lastPlaylistUrl = url;
     var btn = $('#music-btn');
     btn.disabled = true;
     
@@ -194,7 +197,7 @@
       return;
     }
     
-    var icons = { netease: 'music', qq: 'music', kugou: 'music', migu: 'music' };
+    var icons = { netease: 'music', qq: 'music', kugou: 'music', migu: 'music', kuwo: 'music', soda: 'music' };
     
     container.innerHTML = state.songs.map(function(s) {
       var icon = icons[s.platform] || 'music';
@@ -365,10 +368,10 @@
   function showPlaylistPreview(data) {
     var preview = $('#playlist-preview');
     preview.classList.add('show');
-    
+
     $('#pl-name').textContent = data.name;
     $('#pl-meta').textContent = data.song_count + ' 首 · ' + data.platform;
-    
+
     var list = $('#pl-songs');
     list.innerHTML = data.songs.map(function(s, i) {
       return '<div class="pl-song">' +
@@ -377,8 +380,14 @@
         '<span class="pl-song-artist">' + escHtml(s.artist) + '</span>' +
       '</div>';
     }).join('');
-    
+
+    // 全部下载：逐个入队（串行，适合小歌单）
     $('#pl-download-all').onclick = function() { downloadPlaylistSongs(data.songs); };
+
+    // 后台下载：走批量 API，并发控制，适合大歌单
+    $('#pl-download-batch').onclick = function() {
+      downloadPlaylistBatch(data.songs, data.platform);
+    };
   }
   
   function downloadPlaylistSongs(songs) {
@@ -386,7 +395,7 @@
     state.playlistSongs = null;
     state.songs = songs;
     renderResults();
-    
+
     songs.forEach(function(s, i) {
       setTimeout(function() {
         var btn = document.querySelector('.dl-btn[data-id="' + s.song_id + '"]');
@@ -395,4 +404,72 @@
         }
       }, i * 300);
     });
+  }
+
+  // ========== 歌单后台批量下载 ==========
+  function downloadPlaylistBatch(songs, platform) {
+    var preview = $('#playlist-preview');
+    preview.classList.remove('show');
+    state.playlistSongs = null;
+
+    // 找原始 URL（从 state 里取，或者让用户粘贴）
+    var url = state.lastPlaylistUrl || '';
+    if (!url) {
+      toast('请先粘贴歌单链接再点后台下载', 'error');
+      return;
+    }
+
+    var total = songs.length;
+    state.batchTask = { task_id: null, total: total, completed: 0, failed: 0 };
+
+    // 显示进度条
+    $('#pl-batch-progress').classList.add('show');
+    updateBatchProgress(0, total, '提交中…');
+
+    api('/api/playlist/batch-download', {
+      method: 'POST',
+      body: { url: url, batch_size: 5 },
+    }).then(function(data) {
+      state.batchTask.task_id = data.task_id;
+      updateBatchProgress(0, total, '等待中…');
+      pollBatchProgress(data.task_id, total);
+    }).catch(function(err) {
+      $('#pl-batch-progress').classList.remove('show');
+      toast('批量下载启动失败：' + err.message, 'error');
+    });
+  }
+
+  function pollBatchProgress(task_id, total) {
+    if (!task_id) return;
+    api('/api/playlist/batch/' + task_id).then(function(info) {
+      var completed = info.completed || 0;
+      var failed = info.failed || 0;
+      var remaining = total - completed - failed;
+      var pct = total > 0 ? Math.round(completed / total * 100) : 0;
+      var label = '完成 ' + completed + '/' + total + (failed > 0 ? '  失败 ' + failed : '');
+      updateBatchProgress(pct, total, label);
+
+      if (info.status === 'done' || info.status === 'cancelled' || info.status === 'failed') {
+        $('#pl-batch-progress').classList.remove('show');
+        if (info.status === 'done') {
+          toast('歌单下载完成：' + completed + ' 首', 'success');
+        } else if (info.status === 'cancelled') {
+          toast('批量下载已取消', 'info');
+        } else {
+          toast('批量下载失败：' + (info.error || '未知错误'), 'error');
+        }
+        state.batchTask = null;
+        return;
+      }
+      // 继续轮询
+      setTimeout(function() { pollBatchProgress(task_id, total); }, 2000);
+    }).catch(function() {
+      // 静默重试
+      setTimeout(function() { pollBatchProgress(task_id, total); }, 3000);
+    });
+  }
+
+  function updateBatchProgress(pct, total, label) {
+    $('#pl-batch-bar-fill').style.width = pct + '%';
+    $('#pl-batch-label').textContent = label;
   }

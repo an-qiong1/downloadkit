@@ -1112,6 +1112,8 @@ details[open] #dir-advanced-arrow {
 .song-cover.qq { background: linear-gradient(135deg, #34C75920, #34C75910); }
 .song-cover.kugou { background: linear-gradient(135deg, #007AFF20, #007AFF10); }
 .song-cover.migu { background: linear-gradient(135deg, #5856D620, #5856D610); }
+.song-cover.kuwo { background: linear-gradient(135deg, #FF950020, #FF950010); }
+.song-cover.soda { background: linear-gradient(135deg, #FE2C5520, #FE2C5510); }
 
 .song-info {
   flex: 1;
@@ -1150,6 +1152,8 @@ details[open] #dir-advanced-arrow {
 .platform-tag.qq { background: #34C75910; color: #34C759; }
 .platform-tag.kugou { background: #007AFF10; color: #007AFF; }
 .platform-tag.migu { background: #5856D610; color: #5856D6; }
+.platform-tag.kuwo { background: #FF950010; color: #FF9500; }
+.platform-tag.soda { background: #FE2C5510; color: #FE2C55; }
 
 .dl-btn {
   width: 32px;
@@ -1313,6 +1317,40 @@ details[open] #dir-advanced-arrow {
   gap: 8px;
   padding: 16px;
   border-top: 1px solid var(--border);
+}
+
+/* 批量下载进度条 */
+.pl-batch-progress {
+  display: none;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-hover);
+}
+.pl-batch-progress.show { display: block; }
+.pl-batch-progress-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pl-batch-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.pl-batch-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.pl-batch-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 80px;
+  text-align: right;
 }
 
 /* ========== 资源解析模块 ========== */

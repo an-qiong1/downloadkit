@@ -97,7 +97,8 @@ var state = {
   selectedSongs: {},
   playlistSongs: null,
   downloading: {},
-  files: []
+  files: [],
+  batchTask: null,
 };
 
 // ========== 页面标题映射 ==========

@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from downloadkit.searcher import search_all
 from downloadkit.playlist import parse_playlist
 from downloadkit.downloader import download_song
-from downloadkit.utils import get_download_dir, get_download_subdir, sanitize_filename, load_config, save_config, validate_download_dir, read_cookie_from_file
+from downloadkit.utils import get_download_dir, get_download_subdir, sanitize_filename, load_config, save_config, validate_download_dir, read_cookie_from_file, CREATE_NO_WINDOW
 from downloadkit.file_manager import (
     safe_download_path,
     safe_delete_path,
@@ -744,6 +744,8 @@ async def api_pick_directory(req: PickDirectoryRequest):
             text=True,
             encoding="utf-8",
             errors="replace",
+            # 对话框本身是 GUI 窗口，照常弹出；这里只压掉 powershell 自己的控制台黑框
+            creationflags=CREATE_NO_WINDOW,
         )
     except FileNotFoundError:
         return {"ok": False, "error": "找不到 powershell.exe，请确认系统已安装"}
@@ -789,6 +791,127 @@ async def api_playlist(req: PlaylistRequest):
         }
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# --- 歌单批量下载 endpoints ---
+
+class PlaylistBatchDownloadRequest(BaseModel):
+    url: str
+    batch_size: int = 5  # 同时下载的歌曲数（对应 download_queue 的并发数）
+
+
+@app.post("/api/playlist/batch-download")
+async def api_playlist_batch_download(req: PlaylistBatchDownloadRequest):
+    """解析歌单并批量加入下载队列，支持大歌单分批并发。"""
+    from downloadkit.platforms.base import SongInfo
+    from downloadkit.exceptions import CancelException, PauseException
+
+    # Step 1: 解析歌单
+    try:
+        pl = await parse_playlist(req.url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"歌单解析失败: {str(e)}")
+
+    if not pl.songs:
+        raise HTTPException(400, "歌单为空")
+
+    total = len(pl.songs)
+    batch_size = max(1, min(req.batch_size, total))
+
+    # Step 2: 创建批任务记录
+    task_id = f"playlist_batch_{int(time.time())}"
+    _downloads[task_id] = {
+        "status": "downloading",
+        "type": "playlist_batch",
+        "total": total,
+        "completed": 0,
+        "failed": 0,
+        "batch_size": batch_size,
+        "playlist_name": pl.name,
+        "platform": pl.platform,
+        "songs": {},  # index -> {"status": ..., "filename": ..., "error": ...}
+    }
+
+    # Step 3: 逐首入队
+    async def _make_download_func(song: SongInfo, idx: int, batch_tid: str):
+        song_task_id = f"{batch_tid}_s{idx}"
+
+        async def _download_func(task: DownloadTask):
+            try:
+                result = await download_song(song, task_id=song_task_id)
+                if result:
+                    _downloads[batch_tid]["songs"][idx] = {
+                        "status": "completed",
+                        "filename": result.name,
+                    }
+                    _downloads[batch_tid]["completed"] += 1
+                    task.status = TaskStatus.COMPLETED
+                    task.progress = 1.0
+                    task.filename = result.name
+                    _downloads[song_task_id] = {"status": "done", "filename": result.name}
+                else:
+                    _downloads[batch_tid]["songs"][idx] = {
+                        "status": "failed",
+                        "error": "下载失败（无直链）",
+                    }
+                    _downloads[batch_tid]["failed"] += 1
+                    task.status = TaskStatus.FAILED
+                    task.error = "Download failed"
+                    _downloads[song_task_id] = {"status": "failed", "error": "Download failed"}
+            except CancelException:
+                _downloads[batch_tid]["songs"][idx] = {"status": "cancelled"}
+                _downloads[song_task_id] = {"status": "cancelled"}
+                raise
+            except PauseException:
+                _downloads[batch_tid]["songs"][idx] = {"status": "paused"}
+                _downloads[song_task_id] = {"status": "paused"}
+                raise
+            except Exception as e:
+                _downloads[batch_tid]["songs"][idx] = {
+                    "status": "failed",
+                    "error": str(e),
+                }
+                _downloads[batch_tid]["failed"] += 1
+                task.status = TaskStatus.FAILED
+                task.error = str(e)
+                _downloads[song_task_id] = {"status": "failed", "error": str(e)}
+                raise
+
+        return _download_func
+
+    for idx, song in enumerate(pl.songs):
+        dl_func = await _make_download_func(song, idx, task_id)
+        song_task_id = f"{task_id}_s{idx}"
+        await download_queue.add_task(
+            task_id=song_task_id,
+            url=str(song.song_id or ""),
+            platform=song.platform or "soda",
+            title=f"{idx + 1}. {song.title} - {song.artist}",
+            download_func=dl_func,
+        )
+
+    logger.info(f"[Playlist Batch] {pl.name}: {total} 首, 并发={batch_size}, task_id={task_id}")
+    return {
+        "task_id": task_id,
+        "playlist_name": pl.name,
+        "platform": pl.platform,
+        "total": total,
+        "batch_size": batch_size,
+    }
+
+
+@app.get("/api/playlist/batch/{task_id}")
+async def api_playlist_batch_status(task_id: str):
+    """查询歌单批量下载进度。"""
+    info = _downloads.get(task_id)
+    if not info:
+        raise HTTPException(404, "Task not found")
+    if info.get("type") != "playlist_batch":
+        raise HTTPException(400, "Not a playlist batch task")
+    return info
+
 
 # --- 歌单收藏 endpoints ---
 from downloadkit.collection import (

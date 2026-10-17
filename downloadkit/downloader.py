@@ -1,4 +1,4 @@
-﻿"""Download engine -- tries itzo.cn, then gequbao, then migu, then yt-dlp."""
+﻿"""Download engine -- tries itzo.cn, gequbao, migu, kuwo, kugou, soda, then yt-dlp."""
 
 import asyncio
 import logging
@@ -10,7 +10,10 @@ from .platforms.base import SongInfo
 from .platforms.itzo import search_and_get_url as itzo_search
 from .platforms.gequbao import search_and_get_url as gequbao_search
 from .platforms.migu import search_and_get_url as migu_search
-from .utils import sanitize_filename, get_download_dir, get_download_subdir
+from .platforms.kuwo import search_and_get_url as kuwo_search
+from .platforms.kugou import search_and_get_url as kugou_search
+from .platforms.soda import search_and_get_url as soda_search
+from .utils import sanitize_filename, get_download_dir, get_download_subdir, CREATE_NO_WINDOW
 from .download_queue import download_queue
 from .exceptions import PauseException, CancelException
 from .utils import check_download_status
@@ -82,7 +85,37 @@ async def download_song(song: SongInfo, progress=None, task_id: str = None, outp
         except Exception as e:
             logger.error(f"[migu] Error: {e}")
 
-    # Step 5: yt-dlp
+    # Step 5: Try kuwo
+    if not result:
+        logger.info("[kuwo] Searching...")
+        try:
+            u = await kuwo_search(song.title, song.artist)
+            if u and await _stream_download(u, filepath, task_id):
+                result = filepath
+        except Exception as e:
+            logger.error(f"[kuwo] Error: {e}")
+
+    # Step 6: Try kugou
+    if not result:
+        logger.info("[kugou] Searching...")
+        try:
+            u = await kugou_search(song.title, song.artist)
+            if u and await _stream_download(u, filepath, task_id):
+                result = filepath
+        except Exception as e:
+            logger.error(f"[kugou] Error: {e}")
+
+    # Step 7: Try soda (汽水音乐)
+    if not result:
+        logger.info("[soda] Searching...")
+        try:
+            u = await soda_search(song.title, song.artist)
+            if u and await _stream_download(u, filepath, task_id):
+                result = filepath
+        except Exception as e:
+            logger.error(f"[soda] Error: {e}")
+
+    # Step 8: yt-dlp
     if not result:
         logger.info("[yt-dlp] Searching...")
         try:
@@ -215,7 +248,8 @@ async def _transcode_to_mp3(path: Path) -> bool:
            "-codec:a", "libmp3lame", "-q:a", "0", str(tmp)]
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            creationflags=CREATE_NO_WINDOW)
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
     except Exception as e:
         logger.warning(f"[DL] 转码失败: {type(e).__name__}: {e}")
@@ -256,7 +290,9 @@ async def _download_via_ytdlp(song: SongInfo, filepath: Path) -> Path:
                "--audio-quality", "0", "-o", output_template, "--no-playlist",
                "--max-downloads", "1", "--socket-timeout", "15",
                f"{search_prefix}:{query}"]
-        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            creationflags=CREATE_NO_WINDOW)
         stdout, stderr = await proc.communicate()
 
         # 成功与否只看产物，不看退出码：--max-downloads 1 命中后 yt-dlp 以

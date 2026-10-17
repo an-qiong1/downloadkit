@@ -16,7 +16,13 @@ import httpx
 
 from .browser_cookie import get_bilibili_cookie_string
 from .download_queue import download_queue
-from .utils import download_file, sanitize_filename, read_cookie_from_file, get_config_value
+from .utils import (
+    download_file,
+    sanitize_filename,
+    read_cookie_from_file,
+    get_config_value,
+    CREATE_NO_WINDOW,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -371,7 +377,8 @@ async def _merge_video_audio(video_path: Path, audio_path: Path, output_path: Pa
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=CREATE_NO_WINDOW,
     )
     
     stdout, stderr = await proc.communicate()

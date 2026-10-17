@@ -336,3 +336,178 @@ class TestItzoSearch:
         if not items:
             result = None
         assert result is None
+
+
+# ============================ kuwo 解析函数 ============================
+
+class TestKuwoParsing:
+    """酷我解析辅助函数测试。"""
+
+    def test_encrypt_kuwo_query_basic(self):
+        from downloadkit.platforms.kuwo import _encrypt_kuwo_query
+        result = _encrypt_kuwo_query("test")
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_parse_search_result_json(self):
+        from downloadkit.platforms.kuwo import _parse_search_result
+        import json
+        data = {"abslist": [{"SONGNAME": "晴天", "DC_TARGETID": "12345"}]}
+        result = _parse_search_result(json.dumps(data))
+        assert len(result) == 1
+        assert result[0]["DC_TARGETID"] == "12345"
+
+    def test_parse_search_result_empty(self):
+        from downloadkit.platforms.kuwo import _parse_search_result
+        result = _parse_search_result("")
+        assert result == []
+
+    def test_find_song_id_exact_match(self):
+        from downloadkit.platforms.kuwo import _find_song_id
+        items = [
+            {"SONGNAME": "晴天", "AARTIST": "周杰伦", "DC_TARGETID": "111"},
+            {"SONGNAME": "晴天", "AARTIST": "其他歌手", "DC_TARGETID": "222"},
+        ]
+        result = _find_song_id(items, "晴天", "周杰伦")
+        assert result == "111"
+
+    def test_find_song_id_fallback_title_only(self):
+        from downloadkit.platforms.kuwo import _find_song_id
+        items = [
+            {"SONGNAME": "晴天", "AARTIST": "周杰伦", "DC_TARGETID": "111"},
+        ]
+        result = _find_song_id(items, "晴天", "未知歌手")
+        assert result == "111"
+
+    def test_find_song_id_no_match_returns_first(self):
+        from downloadkit.platforms.kuwo import _find_song_id
+        items = [
+            {"SONGNAME": "晴天", "AARTIST": "周杰伦", "DC_TARGETID": "111"},
+        ]
+        result = _find_song_id(items, "稻香", "周杰伦")
+        assert result == "111"
+
+    def test_find_song_id_empty_items(self):
+        from downloadkit.platforms.kuwo import _find_song_id
+        result = _find_song_id([], "晴天", "周杰伦")
+        assert result is None
+
+
+# ============================ kugou 解析函数 ============================
+
+class TestKugouParsing:
+    """酷狗解析辅助函数测试。"""
+
+    def test_find_hash_exact_match(self):
+        from downloadkit.platforms.kugou import _find_hash
+        items = [
+            {"FileName": "晴天", "SingerName": "周杰伦", "FileHash": "AAAA"},
+            {"FileName": "晴天", "SingerName": "其他", "FileHash": "BBBB"},
+        ]
+        result = _find_hash(items, "晴天", "周杰伦")
+        assert result == "AAAA"
+
+    def test_find_hash_title_only(self):
+        from downloadkit.platforms.kugou import _find_hash
+        items = [
+            {"FileName": "晴天", "SingerName": "周杰伦", "FileHash": "AAAA"},
+        ]
+        result = _find_hash(items, "晴天", "未知")
+        assert result == "AAAA"
+
+    def test_find_hash_empty_items(self):
+        from downloadkit.platforms.kugou import _find_hash
+        result = _find_hash([], "晴天", "周杰伦")
+        assert result is None
+
+    def test_find_hash_lowercase_match(self):
+        from downloadkit.platforms.kugou import _find_hash
+        items = [
+            {"FileName": "QINGTIAN", "SingerName": "ZHOUJIELUN", "FileHash": "HASH1"},
+        ]
+        result = _find_hash(items, "晴天", "周杰伦")
+        assert result == "HASH1"
+
+
+# ============================ soda 解析函数 ============================
+
+class TestSodaParsing:
+    """汽水音乐解析辅助函数测试。"""
+
+    def test_find_track_id_exact_match(self):
+        from downloadkit.platforms.soda import _find_track_id
+        items = [
+            {
+                "entity": {
+                    "track": {
+                        "id": "12345",
+                        "name": "晴天",
+                        "artists": [{"name": "周杰伦"}],
+                    }
+                }
+            },
+            {
+                "entity": {
+                    "track": {
+                        "id": "67890",
+                        "name": "晴天",
+                        "artists": [{"name": "其他歌手"}],
+                    }
+                }
+            },
+        ]
+        result = _find_track_id(items, "晴天", "周杰伦")
+        assert result == "12345"
+
+    def test_find_track_id_title_only(self):
+        from downloadkit.platforms.soda import _find_track_id
+        items = [
+            {
+                "entity": {
+                    "track": {
+                        "id": "12345",
+                        "name": "晴天",
+                        "artists": [{"name": "周杰伦"}],
+                    }
+                }
+            },
+        ]
+        result = _find_track_id(items, "晴天", "未知")
+        assert result == "12345"
+
+    def test_find_track_id_empty_items(self):
+        from downloadkit.platforms.soda import _find_track_id
+        result = _find_track_id([], "晴天", "周杰伦")
+        assert result is None
+
+    def test_find_track_id_multi_artist(self):
+        from downloadkit.platforms.soda import _find_track_id
+        items = [
+            {
+                "entity": {
+                    "track": {
+                        "id": "ABC",
+                        "name": "稻香",
+                        "artists": [{"name": "周杰伦"}, {"name": "洪敬尧"}],
+                    }
+                }
+            },
+        ]
+        result = _find_track_id(items, "稻香", "周杰伦")
+        assert result == "ABC"
+
+    def test_find_track_id_fallback_first(self):
+        from downloadkit.platforms.soda import _find_track_id
+        items = [
+            {
+                "entity": {
+                    "track": {
+                        "id": "FIRST",
+                        "name": "无关歌曲",
+                        "artists": [{"name": "某人"}],
+                    }
+                }
+            },
+        ]
+        result = _find_track_id(items, "晴天", "周杰伦")
+        assert result == "FIRST"

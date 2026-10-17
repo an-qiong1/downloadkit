@@ -13,6 +13,11 @@ from .logger import get_logger
 
 _log = get_logger("utils")
 
+# Windows：GUI 进程（PyInstaller console=False）启动控制台子程序（yt-dlp / ffmpeg /
+# powershell）时，若不显式隐藏，系统会为子进程新开一个可见的命令行窗口 —— 批量
+# 下载时表现为"连续弹出黑框"。所有 create_subprocess_exec / Popen 都该带上它。
+CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
 
 def sanitize_filename(filename: str) -> str:
     sanitized = re.sub(r'[\\/:*?"<>|]', "_", filename)

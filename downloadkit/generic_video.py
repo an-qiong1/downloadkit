@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from .utils import CREATE_NO_WINDOW
+
 logger = logging.getLogger(__name__)
 
 # ---- L0 直链判定 ----
@@ -212,6 +214,7 @@ async def _ytdlp_dump_json(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        creationflags=CREATE_NO_WINDOW,
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
