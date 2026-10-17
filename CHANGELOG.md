@@ -5,12 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased] - 2026-10-17
+## [0.8.0] - 2026-10-17
 
 > 本次围绕音乐源下载链做了根因级修复，并让歌单批量下载的 `batch_size`
 > 真正生效。全量 **1307 passed / 6 skipped**，`dist\downloadkit.exe` 已
 > 重新打包并做打包版端到端实测。提交：T1 `6611461`、T2 `a21803e`、
-> T3/T4 `6769770`、no_proxy 加固 `d27fcd6`、0 字节空壳 `1484710`。
+> T3/T4 `6769770`、no_proxy 加固 `d27fcd6`、0 字节空壳 `1484710`、
+> 交接文档收口 `b82e51c`、motion_photo 补漏 `5808517`。
 
 ### 新增
 - **下载队列按批独立并发额度（lane）**：歌单批量下载的 `batch_size`
@@ -25,6 +26,10 @@
   重试一次（域名/接口恢复即自愈）。
 
 ### 修复
+- **motion_photo.py 3 处漏网 CREATE_NO_WINDOW**（`5808517`）：ffmpeg 转码 /
+  ffprobe 取尺寸 / ffmpeg 缩放挂在抖音实况照片合并主路径（默认开启），打包版
+  下载实况照片会弹黑框。补标志并新增 `tests/test_no_window_coverage.py`
+  全仓静态扫描（实测 15 个调用点，漏即红）防再犯。
 - **kuwo 搜索恒 0 条**：`search.kuwo.cn/r.s` 返回的是**单引号伪 JSON**
   （实测 4110 个单引号、0 个双引号），原实现 `json.loads` 必然失败、
   逐行兜底又匹配不到，导致 kuwo 搜索级从未真正命中过。改用
@@ -53,10 +58,13 @@
   §3.4 约定提为 `logger.warning` 并带 `type(e).__name__`。
 
 ### 测试
-- 全量 **1307 passed / 6 skipped**（较 v0.7.0 基线 1278 净增 29 例）：
+- 全量 **1309 passed / 6 skipped**（较 v0.7.0 基线 1278 净增 31 例）：
   新增 `tests/test_batch_concurrency.py`（11）、`test_platforms.py` kuwo/kugou
   回归 + 死源短路（若干）、`test_no_proxy_sanitize.py`（4）、
-  `test_downloader.py` 空壳清理（4）。
+  `test_downloader.py` 空壳清理（4）、`test_no_window_coverage.py`（2）。
+  注：`test_douyin_browser*` / `test_douyin_e2e` 3 个文件需要独占 browser
+  profile，**打包 exe 在运行时它们会挂起**——exe 关闭时跑全量 1309/6，
+  exe 运行中排除后 1281/3（本批发版前实测口径）。
 - 打包版端到端实测（毒化 no_proxy 环境启动 + 单曲 + 5 路批量 + 取消）全部通过。
 
 ### 文档
