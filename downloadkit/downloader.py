@@ -1,4 +1,4 @@
-﻿"""Download engine -- tries itzo.cn, gequbao, migu, kuwo, kugou, soda, then yt-dlp."""
+"""Download engine -- tries itzo.cn, gequbao, migu, kuwo, kugou, soda, then yt-dlp."""
 
 import asyncio
 import logging
@@ -47,6 +47,46 @@ async def download_song(song: SongInfo, progress=None, task_id: str = None, outp
             if download_queue.is_cancelled(task_id):
                 raise CancelException("下载已取消")
 
+    result: Path | None = None
+
+    try:
+        result = await _run_download_chain(song, filepath, task_id)
+    except (PauseException, CancelException):
+        _drop_empty_artifact(filepath)
+        raise
+    if not result:
+        _drop_empty_artifact(filepath)
+
+    # ── 后处理：元数据补全 + ID3 打标签 ──────────────────────────
+    if result and result.exists():
+        try:
+            enriched = await enrich_metadata(song)
+            write_tags(result, enriched)
+        except Exception as e:
+            logger.warning(f"[post] 打标签失败（不影响下载）: {e}")
+
+    return result
+
+
+def _drop_empty_artifact(filepath: Path) -> None:
+    """删掉 0 字节的产物空壳。
+
+    _stream_download 先 open(wb) 再流式写入：若在第一个字节写出前
+    失败/被取消，磁盘上就留下一个 0 字节的 .mp3 —— 文件列表里显示成
+    一首"能看见、播不了"的假歌（2026-10-17 打包版取消测试实测）。
+    空壳对断点续传也没有任何价值（续传看的是已有字节数，0 即从头下），
+    一律删掉。非 0 的半截文件**必须保留**：那是同源重试续传的依据。
+    """
+    try:
+        if filepath.exists() and filepath.stat().st_size == 0:
+            filepath.unlink()
+            logger.info(f"[DL] 清理 0 字节产物空壳: {filepath.name}")
+    except OSError as e:
+        logger.warning(f"[DL] 清理空壳失败: {type(e).__name__}: {e}")
+
+
+async def _run_download_chain(song: SongInfo, filepath: Path,
+                              task_id: str | None) -> Path | None:
     result: Path | None = None
 
     # Step 1: Try platform direct URL
@@ -122,14 +162,6 @@ async def download_song(song: SongInfo, progress=None, task_id: str = None, outp
             result = await _download_via_ytdlp(song, filepath)
         except Exception as e:
             logger.error(f"[yt-dlp] Failed: {e}")
-
-    # ── 后处理：元数据补全 + ID3 打标签 ──────────────────────────
-    if result and result.exists():
-        try:
-            enriched = await enrich_metadata(song)
-            write_tags(result, enriched)
-        except Exception as e:
-            logger.warning(f"[post] 打标签失败（不影响下载）: {e}")
 
     return result
 
