@@ -5,6 +5,64 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased] - 2026-10-17
+
+> 本次围绕音乐源下载链做了根因级修复，并让歌单批量下载的 `batch_size`
+> 真正生效。全量 **1307 passed / 6 skipped**，`dist\downloadkit.exe` 已
+> 重新打包并做打包版端到端实测。提交：T1 `6611461`、T2 `a21803e`、
+> T3/T4 `6769770`、no_proxy 加固 `d27fcd6`、0 字节空壳 `1484710`。
+
+### 新增
+- **下载队列按批独立并发额度（lane）**：歌单批量下载的 `batch_size`
+  此前只被记进任务信息，真实并发恒为全局 `max_concurrent=3`。现在批任务
+  走自己的独立额度（`DownloadTask.lane`），batch_size=5 就是 5 路并发，
+  且与全局额度互不挤占。368 首歌单全量实测：全程稳定 5 路、368/368 成功、
+  0 失败、28.1 分钟。取额度从派发循环移入 `_process_task`，避免某批占满
+  时队首阻塞拖垮其他任务。
+- **死源短路（冷却窗口）**：itzo（`music.itzo.cn` DNS 已不解析）与 migu
+  （接口返回 SPA 壳）此前每首歌都白烧一次完整超时，368 首要等约 2 小时。
+  连接级失败/非 JSON 响应后进入 600s 冷却，窗口内直接跳过，窗口过后自动
+  重试一次（域名/接口恢复即自愈）。
+
+### 修复
+- **kuwo 搜索恒 0 条**：`search.kuwo.cn/r.s` 返回的是**单引号伪 JSON**
+  （实测 4110 个单引号、0 个双引号），原实现 `json.loads` 必然失败、
+  逐行兜底又匹配不到，导致 kuwo 搜索级从未真正命中过。改用
+  `ast.literal_eval` 解析（不能用 replace 引号——会破坏内容里的撇号）；
+  直链兜底新增官方 `antiserver.kuwo.cn/anti.s`（实测可用，置于链首）。
+- **kugou 全链路失效**：真正的病根不是"第三方源全挂"，而是 `_find_hash`
+  恒取 `items[0]`，命中的往往是 VIP 曲（`Privilege=10`），官方接口对它们
+  返回"需要付费"。改为**优先挑免费曲**，并把两个一直可用、却从没被接进
+  兜底链的官方接口（`trackercdn.kugou.com/i/v2`、`m.kugou getSongInfo`）
+  补上。实测 5/5 拿到真 MP3（修复前 0/6）。
+- **general.max_concurrent 死配置**：设置页与 CLI 都能改（1~10），但
+  server 从不读回，队列恒用硬编码 3。现在启动时读取并应用、设置更新时
+  热生效。
+- **歌单批任务永不终结**：批状态一直停在 `downloading`，前端进度条永远
+  转。现在全部曲目到终态后置 `done` 并释放 lane。
+- **打包版启动崩溃**：环境里带方括号的 `no_proxy`（如 Windows 约定的
+  `[::1]`）会让 httpx 0.28 在解析时抛 `InvalidURL: Invalid port ':1]'`，
+  而 `netease.py` 在**模块级**构造 AsyncClient —— 导入包即失败，表现为
+  双击 exe 弹「启动失败」。`downloadkit/__init__.py` 在包导入最前面剥掉
+  方括号条目（语义等价），兼容任何注入方。
+- **取消/失败留下 0 字节假歌**：`_stream_download` 先建文件再流式写入，
+  写出首字节前被取消/失败就留下 0 字节 `.mp3`（文件列表里显示成"能看见、
+  播不了"的假歌）。`download_song` 失败/取消时清掉空壳，非 0 半截文件
+  保留（断点续传依据）。
+- **异常不再静默**：kuwo/kugou/migu 降级分支的 `logger.debug/info` 按
+  §3.4 约定提为 `logger.warning` 并带 `type(e).__name__`。
+
+### 测试
+- 全量 **1307 passed / 6 skipped**（较 v0.7.0 基线 1278 净增 29 例）：
+  新增 `tests/test_batch_concurrency.py`（11）、`test_platforms.py` kuwo/kugou
+  回归 + 死源短路（若干）、`test_no_proxy_sanitize.py`（4）、
+  `test_downloader.py` 空壳清理（4）。
+- 打包版端到端实测（毒化 no_proxy 环境启动 + 单曲 + 5 路批量 + 取消）全部通过。
+
+### 文档
+- `docs/T3-368首歌单全量实测记录-2026-10-17.md`：全量跑的并发曲线、源命中
+  分布、数据质量点（3 首源侧仅 5-6s 试听、2 次 kuwo CDN 410）。
+
 ## [0.7.0] - 2026-10-16
 
 ### 新增
