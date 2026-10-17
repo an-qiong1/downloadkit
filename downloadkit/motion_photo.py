@@ -1,4 +1,4 @@
-﻿"""
+"""
 Google Motion Photo 格式生成模块
 将 JPEG + MP4 合并为单个 Motion Photo 文件
 
@@ -19,6 +19,8 @@ import tempfile
 import logging
 from pathlib import Path
 from typing import Optional
+
+from .utils import CREATE_NO_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +205,8 @@ def _transcode_to_hevc(mp4_path: Path) -> bytes:
             cmd,
             capture_output=True,
             text=True,
-            timeout=300  # 5 分钟超时
+            timeout=300,  # 5 分钟超时
+            creationflags=CREATE_NO_WINDOW,
         )
         
         if result.returncode != 0:
@@ -240,7 +243,8 @@ def _get_video_dimensions(mp4_path: Path) -> tuple[int, int]:
             '-of', 'csv=p=0',
             str(mp4_path)
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                creationflags=CREATE_NO_WINDOW)
         if result.returncode == 0 and result.stdout.strip():
             parts = result.stdout.strip().split(',')
             if len(parts) == 2:
@@ -284,7 +288,8 @@ def _resize_video_to_match(mp4_path: Path, target_width: int, target_height: int
         ]
         
         logger.info(f"缩放视频到 {target_width}x{target_height}...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                                creationflags=CREATE_NO_WINDOW)
         
         if result.returncode != 0:
             raise RuntimeError(f"视频缩放失败: {result.stderr}")
