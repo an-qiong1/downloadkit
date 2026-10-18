@@ -135,6 +135,8 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
             u = await itzo_search(song.title, song.artist)
             if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
+        except (PauseException, CancelException):
+            raise
         except Exception as e:
             logger.error(f"[itzo] Error: {e}")
 
@@ -145,6 +147,8 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
             u = await gequbao_search(song.title, song.artist)
             if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
+        except (PauseException, CancelException):
+            raise
         except Exception as e:
             logger.error(f"[gequbao] Error: {e}")
 
@@ -155,6 +159,8 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
             u = await migu_search(song.title, song.artist)
             if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
+        except (PauseException, CancelException):
+            raise
         except Exception as e:
             logger.error(f"[migu] Error: {e}")
 
@@ -165,6 +171,8 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
             u = await kuwo_search(song.title, song.artist)
             if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
+        except (PauseException, CancelException):
+            raise
         except Exception as e:
             logger.error(f"[kuwo] Error: {e}")
 
@@ -175,6 +183,8 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
             u = await kugou_search(song.title, song.artist)
             if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
+        except (PauseException, CancelException):
+            raise
         except Exception as e:
             logger.error(f"[kugou] Error: {e}")
 
@@ -185,6 +195,8 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
             u = await soda_search(song.title, song.artist)
             if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
+        except (PauseException, CancelException):
+            raise
         except Exception as e:
             logger.error(f"[soda] Error: {e}")
 
@@ -193,6 +205,8 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
         logger.info("[yt-dlp] Searching...")
         try:
             result = await _download_via_ytdlp(song, filepath)
+        except (PauseException, CancelException):
+            raise
         except Exception as e:
             logger.error(f"[yt-dlp] Failed: {e}")
 

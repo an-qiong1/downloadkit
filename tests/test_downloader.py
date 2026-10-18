@@ -222,6 +222,218 @@ class TestPreviewInterception:
         assert ok is False, "试听必须判为本级失败"
         assert not target.exists(), "试听产物必须删除，不许伪装成下载成功落盘"
 
+    @pytest.mark.asyncio
+    async def test_chain_rejects_preview_then_accepts_full_song(self, tmp_path,
+                                                                monkeypatch):
+        """整链行为：第一级给试听 → 判失败让位 → 第二级完整歌成功落盘
+
+        这是拦截的设计目的本身（旧逻辑第一级 83KB 就直接"下载成功"）。
+        体量按 T3 实测：试听 ≈83KB、完整歌平均 3.3MB；时长 269s 的比例
+        判据下限 ≈862KB，所以"完整歌"给 3.2MB 不会被误伤。
+        """
+        from downloadkit import downloader
+        from downloadkit.platforms.base import SongInfo
+
+        async def _preview_url(song):
+            return "https://s1/preview.mp3"
+
+        async def _full_search(*a, **k):
+            return "https://s2/full.mp3"
+
+        async def _none_search(*a, **k):
+            return None
+
+        async def _no_ytdlp(song, filepath):
+            return None
+
+        async def _no_enrich(song):
+            return None
+
+        def _no_tags(*a, **k):
+            return None
+
+        class _Resp:
+            status_code = 200
+            headers = {"content-type": "audio/mpeg"}
+
+            def __init__(self, url):
+                self.payload = (b"ID3" + b"\0" * (83_000 - 3)
+                                if "preview" in url
+                                else b"ID3" + b"\0" * (3_200_000 - 3))
+
+            def raise_for_status(self):
+                pass
+
+            async def aiter_bytes(self, chunk_size=None):
+                for i in range(0, len(self.payload), 65536):
+                    yield self.payload[i:i + 65536]
+
+        class _Ctx:
+            def __init__(self, resp):
+                self._r = resp
+
+            async def __aenter__(self):
+                return self._r
+
+            async def __aexit__(self, *a):
+                return False
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, method, url):
+                return _Ctx(_Resp(url))
+
+        monkeypatch.setattr(downloader, "_get_download_url", _preview_url)
+        monkeypatch.setattr(downloader, "itzo_search", _full_search)
+        for name in ("gequbao_search", "migu_search", "kuwo_search",
+                     "kugou_search", "soda_search"):
+            monkeypatch.setattr(downloader, name, _none_search)
+        monkeypatch.setattr(downloader, "_download_via_ytdlp", _no_ytdlp)
+        monkeypatch.setattr(downloader, "enrich_metadata", _no_enrich)
+        monkeypatch.setattr(downloader, "write_tags", _no_tags)
+        monkeypatch.setattr(downloader.httpx, "AsyncClient", _Client)
+
+        song = SongInfo(title="给你一瓶魔法药水", artist="告五人",
+                        platform="soda", song_id="x", duration=269)
+        r = await downloader.download_song(song, output_dir=str(tmp_path))
+
+        assert r is not None, "第二级完整歌应成功（试听被拒后链要继续往下走）"
+        assert r.exists() and r.stat().st_size == 3_200_000, \
+            "落盘的必须是完整歌产物，不是被删剩的试听"
+
+
+class TestCancelSignalPropagation:
+    """取消/暂停信号不许被兜底链逐级 except 吞掉（2026-10-18 P0-1 验收暴露）
+
+    验收日志实锤的缺陷：取消后任务不立即停，而是走完剩余所有级——
+      10:44:47 [soda] Error: 下载已取消      ← 本级 CancelException 被吞
+      10:44:47 [yt-dlp] Searching...         ← 已取消的任务还去起 yt-dlp！
+    每级 `_stream_download` 抛的 CancelException/PauseException 被下一步的
+    `except Exception` 当"本级源失败"继续往下走，最终整链耗尽记成 failed。
+    后果：取消响应慢 20-40s/首（yt-dlp 子进程）、批统计里 cancelled 被
+    错记成 failed、白烧 API 调用。
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancel_stops_chain_at_first_stream(self, tmp_path, monkeypatch):
+        from downloadkit import downloader
+        from downloadkit.exceptions import CancelException
+        from downloadkit.platforms.base import SongInfo
+
+        later_calls = []
+
+        async def _no_direct(song):
+            return None  # Step 1 无直链，从 Step 2 起链
+
+        async def _cancel_stream(url, filepath, task_id=None, duration_sec=0):
+            raise CancelException("下载已取消")
+
+        async def _itzo_hit(*a, **k):
+            return "https://x/itzo.mp3"  # Step 2 命中，_stream 抛取消
+
+        def _mk_search(name):
+            async def _s(*a, **k):
+                later_calls.append(name)
+                return None
+            return _s
+
+        async def _ytdlp(*a, **k):
+            later_calls.append("yt-dlp")
+            return None
+
+        class _Q:
+            def is_cancelled(self, t):
+                return False
+
+            def is_paused(self, t):
+                return False
+
+            def update_progress(self, *a, **k):
+                pass
+
+        monkeypatch.setattr(downloader, "download_queue", _Q())
+        monkeypatch.setattr(downloader, "_get_download_url", _no_direct)
+        monkeypatch.setattr(downloader, "_stream_download", _cancel_stream)
+        monkeypatch.setattr(downloader, "itzo_search", _itzo_hit)
+        for name in ("gequbao", "migu", "kuwo", "kugou", "soda"):
+            monkeypatch.setattr(downloader, f"{name}_search",
+                                _mk_search(name))
+        monkeypatch.setattr(downloader, "_download_via_ytdlp", _ytdlp)
+
+        song = SongInfo(title="歌", artist="手", platform="soda", song_id="1")
+        import pytest as _pt
+        with _pt.raises(CancelException):
+            await downloader.download_song(song, task_id="t1",
+                                           output_dir=str(tmp_path))
+
+        assert later_calls == [], (
+            f"取消信号被吞，链还继续走了 {later_calls} —— 应第一处取消即中止"
+        )
+
+    @pytest.mark.asyncio
+    async def test_pause_stops_chain_at_first_stream(self, tmp_path, monkeypatch):
+        """暂停同理：不能被当本级失败继续往下烧下一级"""
+        from downloadkit import downloader
+        from downloadkit.exceptions import PauseException
+        from downloadkit.platforms.base import SongInfo
+
+        later_calls = []
+
+        async def _no_direct(song):
+            return None
+
+        async def _pause_stream(url, filepath, task_id=None, duration_sec=0):
+            raise PauseException("下载已暂停")
+
+        async def _itzo_hit(*a, **k):
+            return "https://x/itzo.mp3"
+
+        def _mk_search(name):
+            async def _s(*a, **k):
+                later_calls.append(name)
+                return None
+            return _s
+
+        class _Q:
+            def is_cancelled(self, t):
+                return False
+
+            def is_paused(self, t):
+                return False
+
+            def update_progress(self, *a, **k):
+                pass
+
+        monkeypatch.setattr(downloader, "download_queue", _Q())
+        monkeypatch.setattr(downloader, "_get_download_url", _no_direct)
+        monkeypatch.setattr(downloader, "_stream_download", _pause_stream)
+        monkeypatch.setattr(downloader, "itzo_search", _itzo_hit)
+        for name in ("gequbao", "migu", "kuwo", "kugou", "soda"):
+            monkeypatch.setattr(downloader, f"{name}_search",
+                                _mk_search(name))
+
+        async def _ytdlp(*a, **k):
+            later_calls.append("yt-dlp")
+            return None
+
+        monkeypatch.setattr(downloader, "_download_via_ytdlp", _ytdlp)
+
+        song = SongInfo(title="歌", artist="手", platform="soda", song_id="1")
+        import pytest as _pt
+        with _pt.raises(PauseException):
+            await downloader.download_song(song, task_id="t2",
+                                           output_dir=str(tmp_path))
+        assert later_calls == []
+
+
 
 
 if __name__ == '__main__':
