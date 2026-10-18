@@ -128,5 +128,101 @@ class TestEmptyArtifactCleanup:
         assert leftover == [], f"失败仍留产物: {[p.name for p in leftover]}"
 
 
+class TestPreviewInterception:
+    """P0-2 试听片段拦截（2026-10-18，基于 T3 实测数据设计）
+
+    T3 368 首里有 3 首版权曲源侧只给 5-6 秒试听（≈83 KB，合法 MP3 魔数），
+    旧逻辑"是 MP3 就接受"让它们伪装成下载成功落盘。现在 _stream_download
+    收尾时按体积启发式判试听：命中则删除产物、本级算失败、链继续试下一级。
+    """
+
+    def test_preview_83kb_without_duration(self, tmp_path):
+        """无时长信息：83 KB（T3 实测试听体量）判试听"""
+        from downloadkit.downloader import _looks_like_preview
+        f = tmp_path / "x.mp3"
+        f.write_bytes(b"ID3" + b"\0" * 80_000)
+        assert _looks_like_preview(f) is True
+
+    def test_full_song_not_preview(self, tmp_path):
+        """完整歌（3.3 MB，T3 平均体量）不误杀"""
+        from downloadkit.downloader import _looks_like_preview
+        f = tmp_path / "x.mp3"
+        f.write_bytes(b"ID3" + b"\0" * 3_300_000)
+        assert _looks_like_preview(f) is False
+        assert _looks_like_preview(f, duration_sec=269) is False
+
+    def test_duration_ratio_catches_bigger_preview(self, tmp_path):
+        """时长判据抓得住超过 300KB 的试听：30s 片段 vs 269s 全曲
+
+        期望 ≈ 269×16KB ≈ 4.3MB，实际 30s×16KB ≈ 480KB < 20% → 试听。
+        没有时长信息时 480KB > 300KB 兜底线，会放行——两条判据互补。
+        """
+        from downloadkit.downloader import _looks_like_preview
+        f = tmp_path / "x.mp3"
+        f.write_bytes(b"ID3" + b"\0" * 480_000)
+        assert _looks_like_preview(f, duration_sec=269) is True
+        assert _looks_like_preview(f) is False, "无时长时不该误杀"
+
+    def test_unknown_duration_uses_absolute_floor(self, tmp_path):
+        """duration=0（歌单没给时长）只走绝对阈值，不拿比例误杀短歌"""
+        from downloadkit.downloader import _looks_like_preview
+        f = tmp_path / "x.mp3"
+        f.write_bytes(b"ID3" + b"\0" * 500_000)  # 500KB
+        assert _looks_like_preview(f, duration_sec=0) is False
+
+    def test_zero_byte_is_preview(self, tmp_path):
+        from downloadkit.downloader import _looks_like_preview
+        f = tmp_path / "x.mp3"
+        f.write_bytes(b"")
+        assert _looks_like_preview(f, duration_sec=200) is True
+
+    def test_missing_file_not_preview(self, tmp_path):
+        from downloadkit.downloader import _looks_like_preview
+        assert _looks_like_preview(tmp_path / "nope.mp3") is False
+
+    @pytest.mark.asyncio
+    async def test_stream_download_rejects_preview_and_deletes(self, tmp_path, monkeypatch):
+        """_stream_download 命中试听判据 → 删产物、返回 False（链继续下一级）"""
+        import httpx
+        from downloadkit import downloader
+
+        target = tmp_path / "歌 - 歌手.mp3"
+
+        class _FakeResp:
+            status_code = 200
+            headers = {"content-type": "audio/mpeg"}
+
+            def raise_for_status(self):  # 真实 httpx 里就是同步方法
+                pass
+
+            async def aiter_bytes(self, chunk_size=None):
+                # 合法 MP3 头 + 试听体量（83KB）
+                yield b"ID3" + b"\0" * (83_000 - 3)
+
+        class _Ctx:
+            async def __aenter__(self):
+                return _FakeResp()
+            async def __aexit__(self, *a):
+                return False
+
+        class _FakeClient:
+            def __init__(self, *a, **k):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            def stream(self, method, url):
+                return _Ctx()
+
+        monkeypatch.setattr(downloader.httpx, "AsyncClient", _FakeClient)
+
+        ok = await downloader._stream_download("https://x/y.mp3", target,
+                                               duration_sec=269)
+        assert ok is False, "试听必须判为本级失败"
+        assert not target.exists(), "试听产物必须删除，不许伪装成下载成功落盘"
+
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

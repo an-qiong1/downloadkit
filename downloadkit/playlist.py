@@ -49,6 +49,9 @@ async def _parse_soda_playlist(url: str) -> PlaylistInfo:
             album=s.get("album") or "",
             platform="soda",
             song_id=s.get("track_id") or "",
+            # 歌单元数据里的时长（秒）。P0-2 试听拦截靠它做字节启发式的
+            # 期望值；汽水歌单接口给的是 duration_ms。0 = 未知，拦截跳过。
+            duration=int(s.get("duration_ms") or 0) // 1000,
         ))
 
     return PlaylistInfo(

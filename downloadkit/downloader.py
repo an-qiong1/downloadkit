@@ -68,6 +68,39 @@ async def download_song(song: SongInfo, progress=None, task_id: str = None, outp
     return result
 
 
+# P0-2 试听片段拦截的字节阈值：128kbps ≈ 16 KB/秒，5 秒试听 ≈ 80 KB，
+# 完整歌（≥30 秒）≥ 480 KB。取 300 KB 留余量：低于它的几乎必然是
+# 试听/预览片段（2026-10-17 T3 实测：3 首 5-6 秒试听均 ≈ 83 KB，
+# 完整歌曲平均 3.3 MB）。只升不降的场景不做精确解码（不依赖 ffprobe，
+# 音乐链里它只用于转码、可能不在 PATH）。
+_PREVIEW_MAX_BYTES = 300 * 1024
+# 歌单解析出了真实时长时用的比例判据：实际字节 < 期望的 20% 判试听
+# （128k 假设下期望字节 = duration × 16KB；30% 容差已足够宽容低码率源）
+_PREVIEW_RATIO = 0.20
+
+
+def _looks_like_preview(path: Path, duration_sec: int = 0) -> bool:
+    """判定产物是否为试听片段（版权曲源侧给的就是几秒预览）。
+
+    两层判据，命中其一即判试听：
+      1. 绝对体积 < 300 KB（无时长信息时的兜底）；
+      2. 歌单带了时长（duration_sec > 0）时，体积 < 期望值的 20%。
+    时长未知（0）只用判据 1，避免把正常短音频误杀成失败。
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size == 0:
+        return True  # 空壳当然不是完整歌
+    if duration_sec > 0:
+        expected = duration_sec * 16_000  # 128kbps ≈ 16 KB/s
+        if size < expected * _PREVIEW_RATIO:
+            return True
+        return False
+    return size < _PREVIEW_MAX_BYTES
+
+
 def _drop_empty_artifact(filepath: Path) -> None:
     """删掉 0 字节的产物空壳。
 
@@ -92,7 +125,7 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
     # Step 1: Try platform direct URL
     if not result:
         url = await _get_download_url(song)
-        if url and await _stream_download(url, filepath, task_id):
+        if url and await _stream_download(url, filepath, task_id, song.duration):
             result = filepath
 
     # Step 2: Try itzo.cn
@@ -100,7 +133,7 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
         logger.info(f"[itzo] Searching: {song.title} - {song.artist.split(chr(47))[0]}")
         try:
             u = await itzo_search(song.title, song.artist)
-            if u and await _stream_download(u, filepath, task_id):
+            if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
         except Exception as e:
             logger.error(f"[itzo] Error: {e}")
@@ -110,7 +143,7 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
         logger.info("[gequbao] Searching...")
         try:
             u = await gequbao_search(song.title, song.artist)
-            if u and await _stream_download(u, filepath, task_id):
+            if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
         except Exception as e:
             logger.error(f"[gequbao] Error: {e}")
@@ -120,7 +153,7 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
         logger.info("[migu] Searching...")
         try:
             u = await migu_search(song.title, song.artist)
-            if u and await _stream_download(u, filepath, task_id):
+            if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
         except Exception as e:
             logger.error(f"[migu] Error: {e}")
@@ -130,7 +163,7 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
         logger.info("[kuwo] Searching...")
         try:
             u = await kuwo_search(song.title, song.artist)
-            if u and await _stream_download(u, filepath, task_id):
+            if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
         except Exception as e:
             logger.error(f"[kuwo] Error: {e}")
@@ -140,7 +173,7 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
         logger.info("[kugou] Searching...")
         try:
             u = await kugou_search(song.title, song.artist)
-            if u and await _stream_download(u, filepath, task_id):
+            if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
         except Exception as e:
             logger.error(f"[kugou] Error: {e}")
@@ -150,7 +183,7 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
         logger.info("[soda] Searching...")
         try:
             u = await soda_search(song.title, song.artist)
-            if u and await _stream_download(u, filepath, task_id):
+            if u and await _stream_download(u, filepath, task_id, song.duration):
                 result = filepath
         except Exception as e:
             logger.error(f"[soda] Error: {e}")
@@ -166,7 +199,8 @@ async def _run_download_chain(song: SongInfo, filepath: Path,
     return result
 
 
-async def _stream_download(url: str, filepath: Path, task_id: str = None) -> bool:
+async def _stream_download(url: str, filepath: Path, task_id: str = None,
+                           duration_sec: int = 0) -> bool:
     try:
         headers = {}
         if "music.163.com" in url or "163.com" in url:
@@ -233,6 +267,20 @@ async def _stream_download(url: str, filepath: Path, task_id: str = None) -> boo
         # m4a，这里转一道，避免"文件名写 mp3、里面装 AAC"（tagger 也打不进去）
         if not await _ensure_mp3(filepath):
             logger.warning("[DL error] 产物不是可接受的 MP3，丢弃")
+            filepath.unlink(missing_ok=True)
+            _partial_source.pop(str(filepath), None)
+            return False
+        # P0-2：试听片段拦截。版权曲的源给的就是几秒预览（T3 实测 3 首
+        # 5-6s / ≈83KB，判据见 _looks_like_preview），魔数是合法 MP3、
+        # 下载也"成功"，落盘却是一首假歌。判为试听则删除并返回 False，
+        # 让下载链把这一级当失败、继续试下一级源。
+        if _looks_like_preview(filepath, duration_sec):
+            logger.warning(
+                f"[DL] 疑似试听片段（{filepath.stat().st_size} B"
+                + (f"，期望≈{duration_sec}s" if duration_sec else "")
+                + "），丢弃并让位下一级源: "
+                + filepath.name
+            )
             filepath.unlink(missing_ok=True)
             _partial_source.pop(str(filepath), None)
             return False
