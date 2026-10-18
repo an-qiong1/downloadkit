@@ -364,6 +364,31 @@
     $('#playlist-preview').classList.remove('show');
     state.playlistSongs = null;
   });
+
+  // P0-1：一键停止当前批任务（未起跑的直接取消，在跑的下个数据块边界收尾）
+  $('#pl-batch-cancel').onclick = function() {
+    var bt = state.batchTask;
+    if (!bt || !bt.task_id || bt.cancelling) return;
+    uiConfirm('停止本批下载？未起跑的曲目将直接取消，正在下载的会在当前数据块后收尾。已完成的不受影响。',
+              { title: '停止批量下载', okText: '停止', danger: true })
+      .then(function(ok) {
+        if (!ok) return;
+        bt.cancelling = true;
+        var btn = $('#pl-batch-cancel');
+        btn.disabled = true;
+        btn.textContent = '停止中…';
+        api('/api/playlist/batch/' + bt.task_id + '/cancel', { method: 'POST' })
+          .then(function(r) {
+            toast('已停止：取消 ' + (r.cancelled || 0) + ' 首，剩余完成后自动收尾', 'info');
+          })
+          .catch(function(err) {
+            bt.cancelling = false;
+            btn.disabled = false;
+            btn.textContent = '停止下载';
+            toast('停止失败：' + (err && err.message || '未知错误'), 'error');
+          });
+      });
+  };
   
   function showPlaylistPreview(data) {
     var preview = $('#playlist-preview');
@@ -420,9 +445,12 @@
     }
 
     var total = songs.length;
-    state.batchTask = { task_id: null, total: total, completed: 0, failed: 0 };
+    state.batchTask = { task_id: null, total: total, completed: 0, failed: 0, cancelling: false };
 
-    // 显示进度条
+    // 显示进度条；重置停止按钮（上一批可能停在「停止中…」）
+    var cancelBtn = $('#pl-batch-cancel');
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = '停止下载';
     $('#pl-batch-progress').classList.add('show');
     updateBatchProgress(0, total, '提交中…');
 
@@ -463,8 +491,18 @@
       }
       // 继续轮询
       setTimeout(function() { pollBatchProgress(task_id, total); }, 2000);
-    }).catch(function() {
-      // 静默重试
+    }).catch(function(err) {
+      // P0-3：404（任务记录被清理/服务重启后内存态丢失）与 400（task_id
+      // 不是批任务）是确定性失败，重试一万次也不会变好——止损并说清楚，
+      // 否则进度条对着不存在的任务永远转（此前实测：服务重启后无限空转）。
+      // 其余错误（网络抖动/5xx）保持静默重试。
+      if (err && (err.status === 404 || err.status === 400)) {
+        $('#pl-batch-progress').classList.remove('show');
+        state.batchTask = null;
+        toast('批量下载任务记录已丢失（服务可能重启过），进度不再刷新', 'error');
+        return;
+      }
+      // 继续轮询
       setTimeout(function() { pollBatchProgress(task_id, total); }, 3000);
     });
   }

@@ -852,12 +852,21 @@ async def api_playlist_batch_download(req: PlaylistBatchDownloadRequest):
         songs = info.get("songs", {})
         if len(songs) < info.get("total", 0):
             return
+        if info.get("status") == "cancelled":
+            # 用户已点「停止下载」：保持 cancelled 终态（别让收尾把它
+            # 覆盖成 done），但 lane 归还照常做（release 幂等）。
+            info["finished_at"] = time.time()
+            download_queue.release_lane(f"batch:{batch_tid}")
+            return
         statuses = [s.get("status") for s in songs.values()]
         if any(s == "paused" for s in statuses):
             info["status"] = "paused"
             return
-        info["status"] = "done"
-        _downloads[batch_tid]["finished_at"] = time.time()
+        if all(s in ("completed", "failed", "cancelled") for s in statuses):
+            # 全部终态才终结。cancelled 必须算终态：否则一键停止后
+            # 剩余在跑的曲收尾时会把批状态从 cancelled 覆盖回 done。
+            info["status"] = "done"
+            _downloads[batch_tid]["finished_at"] = time.time()
         download_queue.release_lane(f"batch:{batch_tid}")
 
     # Step 3: 逐首入队
@@ -944,6 +953,59 @@ async def api_playlist_batch_status(task_id: str):
     if info.get("type") != "playlist_batch":
         raise HTTPException(400, "Not a playlist batch task")
     return info
+
+
+@app.post("/api/playlist/batch/{task_id}/cancel")
+async def api_playlist_batch_cancel(task_id: str):
+    """一键停止歌单批量下载（P0-1）。
+
+    没有这个端点时，取消一批 368 首要逐首 POST 几百次
+    /api/queue/{id}/cancel，GUI 上根本没有可操作的入口。
+
+    语义（对齐 T3 实测踩到的坑）：
+      - 尚未起跑的曲：置 cancelled 标志后**不消耗下载资源**——任务被
+        _process_task 取出时 download_song 第一行就命中取消抛
+        CancelException，直接记账终态；
+      - 已在跑的曲：下个数据块边界命中取消（_stream_download 逐块检查），
+        自然收尾；
+      - 批状态立即置 cancelled、songs 里缺失条目补记 cancelled，前端
+        pollBatchProgress 下一轮（≤2s）识别终态收起进度条；
+      - lane 额度：收尾交给各曲 download_func 的 finally 归还，
+        _finalize_batch 会因状态已是 cancelled 而不覆盖终态。
+    """
+    info = _downloads.get(task_id)
+    if not info:
+        raise HTTPException(404, "Task not found")
+    if info.get("type") != "playlist_batch":
+        raise HTTPException(400, "Not a playlist batch task")
+    if info.get("status") in ("done", "cancelled", "failed"):
+        # 幂等：已终结的批不重复操作
+        return {"status": info["status"], "cancelled": 0,
+                "already_final": True}
+
+    total = info.get("total", 0)
+    n_cancelled = 0
+    for idx in range(total):
+        song_task_id = f"{task_id}_s{idx}"
+        # 到达终态的条目（已完成/已失败）跳过，其余全部置取消标志
+        recorded = info.get("songs", {}).get(idx)
+        if recorded and recorded.get("status") in ("completed", "failed",
+                                                   "cancelled"):
+            continue
+        download_queue.cancel_task(song_task_id)
+        if recorded is None:
+            # 还没在 songs 里记账的（未起跑/在跑）：预先补一条 cancelled，
+            # 若该曲实际在跑，其 download_func 会用真实终态覆盖它。
+            info["songs"][idx] = {"status": "cancelled"}
+            n_cancelled += 1
+        else:
+            n_cancelled += 1
+
+    info["status"] = "cancelled"
+    info["finished_at"] = time.time()
+    logger.info(f"[Playlist Batch] 停止 {task_id}: 取消 {n_cancelled} 首"
+                f"（已完成 {info.get('completed', 0)}，失败 {info.get('failed', 0)}）")
+    return {"status": "cancelled", "cancelled": n_cancelled}
 
 
 # --- 歌单收藏 endpoints ---

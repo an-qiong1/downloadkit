@@ -41,9 +41,16 @@ function api(path, opts) {
   }
   var p = fetch(window.location.origin + path, opts).then(function(r) {
     if (!r.ok) return r.json().then(function(e) {
-      throw new Error(_extractErr(e) || r.statusText || '请求失败');
+      // 把 HTTP 状态码挂到 Error 上（err.status）：调用方要区分
+      // 「资源不存在(404)该止损」还是「瞬时故障可重试」——只有 message
+      // 分不出来。批任务轮询靠它停止对已被清理任务的无限重试（P0-3）。
+      var err = new Error(_extractErr(e) || r.statusText || '请求失败');
+      err.status = r.status;
+      throw err;
     }, function() {
-      throw new Error(r.statusText || '请求失败');
+      var err = new Error(r.statusText || '请求失败');
+      err.status = r.status;
+      throw err;
     });
     return r.json();
   });

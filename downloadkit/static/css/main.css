@@ -1,4 +1,4 @@
-﻿
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
@@ -1322,15 +1322,29 @@ details[open] #dir-advanced-arrow {
 /* 批量下载进度条 */
 .pl-batch-progress {
   display: none;
+  position: relative;
   padding: 12px 16px;
   border-top: 1px solid var(--border);
   background: var(--surface-hover);
 }
 .pl-batch-progress.show { display: block; }
+/* P0-1：一键停止按钮，挂在进度条右上角 */
+#pl-batch-cancel {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  color: #fff;
+  background: #d9534f;
+  border: none;
+}
+#pl-batch-cancel:hover { background: #c9302c; }
+#pl-batch-cancel:disabled { opacity: 0.6; cursor: default; }
 .pl-batch-progress-inner {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* 给右上角按钮留位，标签再长也不叠上去 */
+  padding-right: 96px;
 }
 .pl-batch-bar {
   flex: 1;

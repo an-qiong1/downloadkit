@@ -336,3 +336,163 @@ async def test_batch_status_not_done_while_pending(batch_env, monkeypatch):
     assert d[tid]["status"] == "downloading", (
         "3 首只完成 2 首就标 done，前端会漏报最后一首"
     )
+
+
+# ---------------- P0-1：一键停止批任务 ----------------
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_marks_pending_and_finalizes(batch_env, monkeypatch):
+    """停止端点：已完成的保留，未起跑/在跑的一律置取消并终结批状态"""
+    server, q, d, use_playlist = batch_env
+    use_playlist(5)
+
+    class _FakePath:
+        name = "歌.mp3"
+
+    async def _ok(song, task_id=None):
+        return _FakePath()
+
+    monkeypatch.setattr(server, "download_song", _ok)
+
+    r = await server.api_playlist_batch_download(
+        server.PlaylistBatchDownloadRequest(url="u", batch_size=5)
+    )
+    tid = r["task_id"]
+
+    # 先正常跑完 2 首
+    for idx in range(2):
+        t = q.active_tasks[f"{tid}_s{idx}"]
+        await t.download_func(t)
+
+    res = await server.api_playlist_batch_cancel(tid)
+
+    assert res["status"] == "cancelled"
+    assert res["cancelled"] == 3, "剩余 3 首都应被计入取消"
+    assert d[tid]["status"] == "cancelled"
+    # 已完成条目不受影响
+    assert d[tid]["completed"] == 2
+    assert d[tid]["songs"][0]["status"] == "completed"
+    # 未起跑的：记账 cancelled + 队列取消标志都置上（download_song
+    # 第一行靠后者真实中断）
+    for idx in range(2, 5):
+        assert d[tid]["songs"][idx]["status"] == "cancelled"
+        assert q.is_cancelled(f"{tid}_s{idx}"), "队列取消标志没置上"
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_final_after_cancel_keeps_cancelled(batch_env, monkeypatch):
+    """停止后剩余曲收尾（finally 触发 _finalize_batch）不许把批状态覆盖回 done
+
+    这是"一键停止"与收尾的竞态防护：cancel 端点立即置 cancelled，但
+    在跑的曲稍后才在数据块边界抛 CancelException，其 finally 会调
+    _finalize_batch —— 若那里无条件标 done，前端就会看到"已取消"闪回
+    "已完成"。
+    """
+    server, q, d, use_playlist = batch_env
+    use_playlist(2)
+
+    async def _boom(song, task_id=None):
+        from downloadkit.exceptions import CancelException
+        raise CancelException("下载已取消")
+
+    monkeypatch.setattr(server, "download_song", _boom)
+
+    r = await server.api_playlist_batch_download(
+        server.PlaylistBatchDownloadRequest(url="u", batch_size=2)
+    )
+    tid = r["task_id"]
+
+    await server.api_playlist_batch_cancel(tid)
+    assert d[tid]["status"] == "cancelled"
+
+    # 模拟"在跑的曲稍后收尾"：download_func 抛 CancelException 走 finally
+    t = q.active_tasks[f"{tid}_s0"]
+    with pytest.raises(Exception):
+        await t.download_func(t)
+
+    assert d[tid]["status"] == "cancelled", \
+        "收尾把 cancelled 覆盖掉了——前端进度会在两个终态间闪跳"
+    # lane 必须已释放（cancel 端点或收尾各做一次，幂等）
+    assert f"batch:{tid}" not in q.lane_sizes
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_unknown_404(batch_env):
+    from fastapi import HTTPException
+    server, _q, _d, _u = batch_env
+    with pytest.raises(HTTPException) as ei:
+        await server.api_playlist_batch_cancel("nope")
+    assert ei.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_wrong_type_400(batch_env):
+    from fastapi import HTTPException
+    server, _q, d, _u = batch_env
+    d["other"] = {"type": "video_batch"}
+    with pytest.raises(HTTPException) as ei:
+        await server.api_playlist_batch_cancel("other")
+    assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_idempotent(batch_env, monkeypatch):
+    """已终结的批再点停止：不重复取消，如实返回当前状态"""
+    server, q, d, use_playlist = batch_env
+    use_playlist(1)
+
+    async def _none(song, task_id=None):
+        return None
+
+    monkeypatch.setattr(server, "download_song", _none)
+    r = await server.api_playlist_batch_download(
+        server.PlaylistBatchDownloadRequest(url="u", batch_size=1)
+    )
+    tid = r["task_id"]
+    t = q.active_tasks[f"{tid}_s0"]
+    await t.download_func(t)
+    assert d[tid]["status"] == "done"
+
+    res = await server.api_playlist_batch_cancel(tid)
+    assert res["already_final"] is True
+    assert res["status"] == "done"
+    assert d[tid]["status"] == "done", "对已终结批的取消请求不许改状态"
+
+
+# ---------------- P0-1 / P0-3 前端接线（静态钉死） ----------------
+
+from pathlib import Path  # noqa: E402
+
+_STATIC = Path(__file__).resolve().parent.parent / "downloadkit" / "static"
+_MUSIC_JS = (_STATIC / "js" / "music.js").read_text(encoding="utf-8")
+_UTILS_JS = (_STATIC / "js" / "utils.js").read_text(encoding="utf-8")
+_HTML = (_STATIC / "index.html").read_text(encoding="utf-8")
+
+
+def test_ui_has_batch_cancel_button():
+    """P0-1：进度条区块必须有「停止下载」按钮，且接了取消端点"""
+    assert 'id="pl-batch-cancel"' in _HTML, "缺停止下载按钮"
+    assert "/api/playlist/batch/' + bt.task_id + '/cancel'" in _MUSIC_JS, \
+        "music.js 没调批取消端点"
+    assert "pl-batch-cancel" in _MUSIC_JS, "按钮没接线"
+
+
+def test_ui_batch_cancel_wired_with_guard():
+    """停止按钮要防重复点击（cancelling 标志）+ 走 uiConfirm 二次确认"""
+    assert "bt.cancelling" in _MUSIC_JS, "缺防重复点击标志"
+    assert "uiConfirm(" in _MUSIC_JS, "停止前没有确认弹窗"
+
+
+def test_api_carries_http_status_on_error():
+    """P0-3：api() 失败要把 HTTP 状态码挂到 err.status 上"""
+    assert "err.status = r.status" in _UTILS_JS, "api() 没携带状态码"
+
+
+def test_poll_stops_on_missing_task():
+    """P0-3：轮询对 404/400 必须止损（不再无限重试）"""
+    assert "err.status === 404" in _MUSIC_JS or "(err.status === 404" in _MUSIC_JS, \
+        "pollBatchProgress 没对 404 止损"
+    assert "err.status === 400" in _MUSIC_JS, "pollBatchProgress 没对 400 止损"
+
+
